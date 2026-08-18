@@ -201,6 +201,36 @@ main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100
   background: #fdecea;
 }
 
+.area-card {
+  border: 1px solid #e0ddd8;
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+
+.area-card-encabezado {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.area-card-encabezado .input-area-nombre {
+  flex: 1;
+  font-weight: 600;
+}
+
+.puesto-fila {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.puesto-fila .input-puesto-nombre {
+  flex: 1;
+}
+
 .modal-acciones {
   display: flex;
   justify-content: flex-end;

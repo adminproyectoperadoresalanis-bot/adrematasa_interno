@@ -3,6 +3,7 @@ import {
   collection, onSnapshot, doc, updateDoc, query, orderBy, runTransaction
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { calcularAniosAntiguedad, diasSegunAntiguedad, suscribirUmbrales, UMBRALES_DEFAULT } from "./vacacionesCalculo.js";
+import { suscribirEstructura, esPuestoDeCoordinacion, AREAS_DEFAULT } from "./estructuraOrganizacional.js";
 
 const ROLES = ["empleado", "supervisor", "admin"];
 
@@ -73,6 +74,7 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
 
   let listaUsuarios = [];
   let umbralesActuales = UMBRALES_DEFAULT;
+  let areasActuales = AREAS_DEFAULT;
   const aplicandoIds = new Set();
 
   const q = query(collection(db, "usuarios"), orderBy("nombre"));
@@ -90,6 +92,10 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
     umbralesActuales = umbrales;
     aplicarCalculoAutomatico();
     renderTabla();
+  });
+
+  suscribirEstructura((areas) => {
+    areasActuales = areas;
   });
 
   // Cuando alguien cumple un nuevo año de antigüedad, reemplaza su saldo de
@@ -226,6 +232,24 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
     });
   }
 
+  function opcionesArea(areaActual) {
+    return [`<option value="">— Selecciona —</option>`]
+      .concat(areasActuales.map(a =>
+        `<option value="${escapeHtml(a.nombre)}" ${areaActual === a.nombre ? "selected" : ""}>${escapeHtml(a.nombre)}</option>`
+      )).join("");
+  }
+
+  function opcionesPuesto(nombreArea, puestoActual) {
+    if (!nombreArea) return `<option value="">Elige un área primero</option>`;
+    const areaObj = areasActuales.find(a => a.nombre === nombreArea);
+    const puestos = areaObj ? areaObj.puestos : [];
+    if (puestos.length === 0) return `<option value="">Agrega puestos a esta área en Configuración</option>`;
+    return [`<option value="">— Selecciona —</option>`]
+      .concat(puestos.map(p =>
+        `<option value="${escapeHtml(p)}" ${puestoActual === p ? "selected" : ""}>${escapeHtml(p)}</option>`
+      )).join("");
+  }
+
   function abrirModalEditar(u) {
     cerrarModal();
 
@@ -290,6 +314,15 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
           </label>
         </div>
 
+        <div class="modal-fila">
+          <label>Área
+            <select id="modal-area">${opcionesArea(u.area)}</select>
+          </label>
+          <label>Puesto
+            <select id="modal-puesto">${opcionesPuesto(u.area, u.puesto)}</select>
+          </label>
+        </div>
+
         <div class="modal-acciones">
           <button type="button" class="secundario" id="modal-btn-cancelar">Cancelar</button>
           <button type="button" id="modal-btn-guardar">Guardar</button>
@@ -308,6 +341,9 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
     const inputDias = overlay.querySelector("#modal-dias-vacaciones");
     const notaVacacionesSpan = overlay.querySelector("#modal-nota-vacaciones");
     const selSupervisorModal = overlay.querySelector("#modal-supervisor");
+    const selArea = overlay.querySelector("#modal-area");
+    const selPuesto = overlay.querySelector("#modal-puesto");
+    const selRolModal = overlay.querySelector("#modal-rol");
 
     function marcarSiVacio(el) {
       if (!el) return;
@@ -318,6 +354,8 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
       marcarSiVacio(inputNumero);
       marcarSiVacio(inputFecha);
       marcarSiVacio(selSupervisorModal);
+      marcarSiVacio(selArea);
+      marcarSiVacio(selPuesto);
     }
 
     inputNumero?.addEventListener("input", () => marcarSiVacio(inputNumero));
@@ -332,6 +370,31 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
       notaVacacionesSpan.textContent = notaLftTexto(inputFecha.value, umbralesActuales);
     });
 
+    // Puesto depende del área elegida (cascada); si el área no tiene puestos
+    // capturados, el combobox queda deshabilitado con el aviso.
+    function actualizarDisponibilidadPuesto() {
+      const areaObj = areasActuales.find(a => a.nombre === selArea.value);
+      selPuesto.disabled = !selArea.value || !areaObj || areaObj.puestos.length === 0;
+    }
+
+    selArea.addEventListener("change", () => {
+      selPuesto.innerHTML = opcionesPuesto(selArea.value, "");
+      actualizarDisponibilidadPuesto();
+      marcarSiVacio(selArea);
+      marcarSiVacio(selPuesto);
+    });
+
+    // Un puesto de "Coordinador..." casi siempre implica aprobar solicitudes
+    // de su equipo, así que se sugiere el rol de supervisor (el admin lo
+    // puede corregir si no aplica).
+    selPuesto.addEventListener("change", () => {
+      marcarSiVacio(selPuesto);
+      if (selRolModal && esPuestoDeCoordinacion(selPuesto.value)) {
+        selRolModal.value = "supervisor";
+      }
+    });
+
+    actualizarDisponibilidadPuesto();
     revisarCamposRequeridos();
 
     overlay.addEventListener("click", (e) => {
@@ -348,7 +411,13 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
       const diasVacacionesDisponibles = Math.max(0, Math.round(Number(overlay.querySelector("#modal-dias-vacaciones").value) || 0));
       const diaDescanso = Number(overlay.querySelector("#modal-dia-descanso").value);
 
-      const cambios = { fechaIngreso, diasVacacionesDisponibles, diaDescanso, numeroEmpleado: numeroEmpleado || null };
+      const area = overlay.querySelector("#modal-area").value || null;
+      const puesto = overlay.querySelector("#modal-puesto").value || null;
+
+      const cambios = {
+        fechaIngreso, diasVacacionesDisponibles, diaDescanso,
+        numeroEmpleado: numeroEmpleado || null, area, puesto
+      };
 
       if (!esUnoMismo) {
         cambios.rol = overlay.querySelector("#modal-rol").value;
