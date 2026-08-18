@@ -196,6 +196,11 @@ main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100
   width: 100px;
 }
 
+.campo-vacio {
+  border-color: #c0392b !important;
+  background: #fdecea;
+}
+
 .modal-acciones {
   display: flex;
   justify-content: flex-end;

@@ -190,13 +190,13 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
     return `<span class="badge ${clase}">${ETIQUETAS_ESTATUS[estatus] || estatus}</span>`;
   }
 
-  function notaLft(u, umbrales) {
-    if (!u.fechaIngreso) return `<div class="nota-lft">Sin fecha de ingreso</div>`;
-    const anios = calcularAniosAntiguedad(u.fechaIngreso);
+  function notaLftTexto(fechaIngreso, umbrales) {
+    if (!fechaIngreso) return "Sin fecha de ingreso";
+    const anios = calcularAniosAntiguedad(fechaIngreso);
     if (anios === null) return "";
-    if (anios < 1) return `<div class="nota-lft">Aún no cumple su primer año</div>`;
+    if (anios < 1) return "Aún no cumple su primer año";
     const dias = diasSegunAntiguedad(anios, umbrales);
-    return `<div class="nota-lft">LFT: ${dias} días (${anios} ${anios === 1 ? "año" : "años"})</div>`;
+    return `LFT: ${dias} días (${anios} ${anios === 1 ? "año" : "años"})`;
   }
 
   function renderTabla() {
@@ -283,7 +283,7 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
           </label>
           <label>Días vacaciones
             <input type="number" min="0" step="1" id="modal-dias-vacaciones" value="${u.diasVacacionesDisponibles ?? 0}">
-            ${notaLft(u, umbralesActuales)}
+            <span class="nota-lft" id="modal-nota-vacaciones">${notaLftTexto(u.fechaIngreso, umbralesActuales)}</span>
           </label>
           <label>Día de descanso
             <select id="modal-dia-descanso">${opcionesDiaDescanso}</select>
@@ -298,6 +298,41 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
     `;
 
     document.body.appendChild(overlay);
+
+    // Número de empleado, fecha de ingreso y supervisor son los únicos campos
+    // que de verdad pueden quedar "vacíos" (rol, estatus y día de descanso
+    // siempre traen un valor por default). Se marcan en rojo mientras falten,
+    // y se revisan de nuevo cada vez que el admin los toca.
+    const inputNumero = overlay.querySelector("#modal-numero-empleado");
+    const inputFecha = overlay.querySelector("#modal-fecha-ingreso");
+    const inputDias = overlay.querySelector("#modal-dias-vacaciones");
+    const notaVacacionesSpan = overlay.querySelector("#modal-nota-vacaciones");
+    const selSupervisorModal = overlay.querySelector("#modal-supervisor");
+
+    function marcarSiVacio(el) {
+      if (!el) return;
+      el.classList.toggle("campo-vacio", (el.value ?? "").toString().trim() === "");
+    }
+
+    function revisarCamposRequeridos() {
+      marcarSiVacio(inputNumero);
+      marcarSiVacio(inputFecha);
+      marcarSiVacio(selSupervisorModal);
+    }
+
+    inputNumero?.addEventListener("input", () => marcarSiVacio(inputNumero));
+    selSupervisorModal?.addEventListener("change", () => marcarSiVacio(selSupervisorModal));
+    inputFecha.addEventListener("change", () => {
+      marcarSiVacio(inputFecha);
+
+      const anios = calcularAniosAntiguedad(inputFecha.value);
+      if (anios === null) return;
+      const dias = diasSegunAntiguedad(anios, umbralesActuales);
+      inputDias.value = dias;
+      notaVacacionesSpan.textContent = notaLftTexto(inputFecha.value, umbralesActuales);
+    });
+
+    revisarCamposRequeridos();
 
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) cerrarModal();
