@@ -42,6 +42,22 @@ function construirVista(contenedor, { esAdmin, uid }) {
     </section>
 
     <section class="panel" style="margin-top:20px;">
+      <h2>Resumen del periodo</h2>
+      <p class="nota">Horas extra, vacaciones y faltas juntas por empleado, para el rango de fechas de arriba. Es un preliminar — en cuanto definamos los formatos exactos que necesitas para nómina, lo ajustamos.</p>
+      <div class="acciones-form">
+        <button type="button" class="secundario" id="btn-exportar-resumen">Exportar CSV</button>
+      </div>
+      <div class="tabla-wrap">
+        <table class="tabla" id="tabla-rep-resumen">
+          <thead>
+            <tr><th>Empleado</th><th>Horas extra</th><th>Días de vacaciones</th><th>Faltas</th></tr>
+          </thead>
+          <tbody id="tbody-rep-resumen"><tr><td colspan="4">Cargando...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-top:20px;">
       <h2>Horas extra</h2>
       <div class="acciones-form">
         <button type="button" class="secundario" id="btn-exportar-horas">Exportar CSV</button>
@@ -91,6 +107,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
   const inputHasta = contenedor.querySelector("#rep-hasta");
   const chkIncluirTodo = contenedor.querySelector("#rep-incluir-todo");
 
+  const tbodyResumen = contenedor.querySelector("#tbody-rep-resumen");
   const tbodyHoras = contenedor.querySelector("#tbody-rep-horas");
   const tbodyVacaciones = contenedor.querySelector("#tbody-rep-vacaciones");
   const tbodyFaltas = contenedor.querySelector("#tbody-rep-faltas");
@@ -101,6 +118,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
   let filtradasHoras = [];
   let filtradasVacaciones = [];
   let filtradasFaltas = [];
+  let resumen = [];
 
   const baseHoras = esAdmin
     ? collection(db, "solicitudes")
@@ -145,9 +163,58 @@ function construirVista(contenedor, { esAdmin, uid }) {
     filtradasHoras = filtrar(listaHoras, "fecha");
     filtradasVacaciones = filtrar(listaVacaciones, "fechaInicio");
     filtradasFaltas = filtrar(listaFaltas, "fecha");
+    resumen = construirResumen();
+    renderResumen();
     renderHoras();
     renderVacaciones();
     renderFaltas();
+  }
+
+  // Junta horas extra, vacaciones y faltas del mismo rango en una fila por
+  // empleado. Preliminar: en cuanto se definan los 2 formatos exactos para
+  // nómina, esto se ajusta a lo que realmente hace falta.
+  function construirResumen() {
+    const porEmpleado = new Map();
+
+    function obtener(id, nombre) {
+      if (!id) return null;
+      if (!porEmpleado.has(id)) {
+        porEmpleado.set(id, { nombre: nombre || "", horas: 0, vacaciones: 0, faltas: 0 });
+      }
+      const e = porEmpleado.get(id);
+      if (nombre && !e.nombre) e.nombre = nombre;
+      return e;
+    }
+
+    filtradasHoras.forEach(s => {
+      const e = obtener(s.empleadoId, s.empleadoNombre);
+      if (e) e.horas += Number(s.horas) || 0;
+    });
+    filtradasVacaciones.forEach(s => {
+      const e = obtener(s.empleadoId, s.empleadoNombre);
+      if (e) e.vacaciones += Number(s.diasHabiles) || 0;
+    });
+    filtradasFaltas.forEach(f => {
+      const e = obtener(f.empleadoId, f.empleadoNombre);
+      if (e) e.faltas += 1;
+    });
+
+    return [...porEmpleado.values()].sort((a, b) => (a.nombre || "").localeCompare(b.nombre || ""));
+  }
+
+  function renderResumen() {
+    if (resumen.length === 0) {
+      tbodyResumen.innerHTML = `<tr><td colspan="4">Sin registros para este filtro.</td></tr>`;
+      return;
+    }
+    tbodyResumen.innerHTML = resumen.map(e => `
+      <tr>
+        <td>${escapeHtml(e.nombre)}</td>
+        <td>${e.horas}</td>
+        <td>${e.vacaciones}</td>
+        <td>${e.faltas}</td>
+      </tr>
+    `).join("");
   }
 
   function renderHoras() {
@@ -201,6 +268,13 @@ function construirVista(contenedor, { esAdmin, uid }) {
       </tr>
     `).join("");
   }
+
+  contenedor.querySelector("#btn-exportar-resumen").addEventListener("click", () => {
+    exportarCSV(`resumen_${sufijoFecha()}.csv`,
+      ["Empleado", "Horas extra", "Días de vacaciones", "Faltas"],
+      resumen.map(e => [e.nombre, e.horas, e.vacaciones, e.faltas])
+    );
+  });
 
   contenedor.querySelector("#btn-exportar-horas").addEventListener("click", () => {
     exportarCSV(`horas_extra_${sufijoFecha()}.csv`,
