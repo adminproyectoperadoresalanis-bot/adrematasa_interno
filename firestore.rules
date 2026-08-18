@@ -127,5 +127,12 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow write: if esAdmin();
     }
+
+    // "Candado" de unicidad para el número de empleado: cada documento
+    // representa un número ya tomado (id = número, dato = quién lo tiene).
+    // Solo el admin lo usa, desde una transacción en Catálogo de empleados.
+    match /numerosEmpleado/{numero} {
+      allow read, write: if esAdmin();
+    }
   }
 }

@@ -1,6 +1,6 @@
 import { db } from "./firebase-config.js";
 import {
-  collection, onSnapshot, doc, updateDoc, query, orderBy
+  collection, onSnapshot, doc, updateDoc, query, orderBy, runTransaction
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { calcularAniosAntiguedad, diasSegunAntiguedad, suscribirUmbrales, UMBRALES_DEFAULT } from "./vacacionesCalculo.js";
 
@@ -46,7 +46,7 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
 
     <section class="panel" style="margin-top:20px;">
       <h2>Usuarios</h2>
-      <p class="nota">Por seguridad, no puedes cambiar tu propio rol ni tu propio supervisor desde aquí — solo los de los demás. Los días de vacaciones se actualizan solos según la antigüedad (Ley Federal del Trabajo) en cuanto alguien cumple un nuevo aniversario; los umbrales se ajustan en Configuración.</p>
+      <p class="nota">Por seguridad, no puedes cambiar tu propio rol ni tu propio supervisor. Da clic en "Editar" para ver y cambiar el resto de los datos de cada quien. Los días de vacaciones se actualizan solos según la antigüedad (Ley Federal del Trabajo) en cuanto alguien cumple un nuevo aniversario; los umbrales se ajustan en Configuración.</p>
       <div id="admin-error" class="error"></div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-usuarios">
@@ -54,16 +54,12 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
             <tr>
               <th>Nombre</th>
               <th>Correo</th>
-              <th>Rol</th>
-              <th>Supervisor asignado</th>
-              <th>Fecha de ingreso</th>
-              <th>Días vacaciones</th>
-              <th>Día de descanso</th>
               <th>Estatus</th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="tbody-usuarios">
-            <tr><td colspan="8">Cargando...</td></tr>
+            <tr><td colspan="4">Cargando...</td></tr>
           </tbody>
         </table>
       </div>
@@ -194,108 +190,176 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
     return `<span class="badge ${clase}">${ETIQUETAS_ESTATUS[estatus] || estatus}</span>`;
   }
 
-  function notaLft(u) {
+  function notaLft(u, umbrales) {
     if (!u.fechaIngreso) return `<div class="nota-lft">Sin fecha de ingreso</div>`;
     const anios = calcularAniosAntiguedad(u.fechaIngreso);
     if (anios === null) return "";
     if (anios < 1) return `<div class="nota-lft">Aún no cumple su primer año</div>`;
-    const dias = diasSegunAntiguedad(anios, umbralesActuales);
+    const dias = diasSegunAntiguedad(anios, umbrales);
     return `<div class="nota-lft">LFT: ${dias} días (${anios} ${anios === 1 ? "año" : "años"})</div>`;
   }
 
   function renderTabla() {
     if (listaUsuarios.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="8">Aún no hay usuarios registrados.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="4">Aún no hay usuarios registrados.</td></tr>`;
       return;
     }
 
-    const posiblesSupervisores = listaUsuarios.filter(
-      u => u.rol === "supervisor" || u.rol === "admin"
-    );
-
     tbody.innerHTML = listaUsuarios.map(u => {
       const esUnoMismo = u.id === uidActual;
-
-      const celdaRol = esUnoMismo
-        ? `<span class="valor-fijo">${escapeHtml(u.rol)}</span>`
-        : `<select class="sel-rol">${ROLES.map(r =>
-            `<option value="${r}" ${u.rol === r ? "selected" : ""}>${r}</option>`
-          ).join("")}</select>`;
-
-      if (esUnoMismo) {
-        const supervisorActual = listaUsuarios.find(s => s.id === u.supervisorId);
-        const celdaSupervisor = `<span class="valor-fijo">${supervisorActual ? escapeHtml(supervisorActual.nombre) : "— Sin asignar —"}</span>`;
-        return `
-          <tr data-id="${u.id}">
-            <td>${escapeHtml(u.nombre || "")} <span class="etiqueta-tu">(tú)</span></td>
-            <td>${escapeHtml(u.email || "")}</td>
-            <td>${celdaRol}</td>
-            <td>${celdaSupervisor}</td>
-            <td><input type="date" class="input-fecha-ingreso" value="${u.fechaIngreso || ""}"></td>
-            <td><span class="valor-fijo">${u.diasVacacionesDisponibles ?? 0}</span>${notaLft(u)}</td>
-            <td><span class="valor-fijo">${NOMBRES_DIA[u.diaDescanso ?? 0]}</span></td>
-            <td>${celdaEstatus(u)}</td>
-          </tr>
-        `;
-      }
-
-      const opcionesSupervisor = [`<option value="">— Sin asignar —</option>`]
-        .concat(posiblesSupervisores
-          .filter(s => s.id !== u.id)
-          .map(s => `<option value="${s.id}" ${u.supervisorId === s.id ? "selected" : ""}>${escapeHtml(s.nombre)}</option>`)
-        ).join("");
-
-      const diaDescansoActual = u.diaDescanso ?? 0;
-      const opcionesDiaDescanso = NOMBRES_DIA.map((nombreDia, i) =>
-        `<option value="${i}" ${diaDescansoActual === i ? "selected" : ""}>${nombreDia}</option>`
-      ).join("");
-
       return `
         <tr data-id="${u.id}">
-          <td>${escapeHtml(u.nombre || "")}</td>
+          <td>${escapeHtml(u.nombre || "")} ${esUnoMismo ? '<span class="etiqueta-tu">(tú)</span>' : ""}</td>
           <td>${escapeHtml(u.email || "")}</td>
-          <td>${celdaRol}</td>
-          <td><select class="sel-supervisor">${opcionesSupervisor}</select></td>
-          <td><input type="date" class="input-fecha-ingreso" value="${u.fechaIngreso || ""}"></td>
-          <td>
-            <input type="number" min="0" step="1" class="input-dias-vacaciones" value="${u.diasVacacionesDisponibles ?? 0}">
-            ${notaLft(u)}
-          </td>
-          <td><select class="sel-dia-descanso">${opcionesDiaDescanso}</select></td>
           <td>${celdaEstatus(u)}</td>
+          <td><button type="button" class="secundario btn-editar-usuario">Editar</button></td>
         </tr>
       `;
     }).join("");
 
-    tbody.querySelectorAll("tr[data-id]").forEach(fila => {
-      const id = fila.dataset.id;
-      fila.querySelector(".sel-rol")?.addEventListener("change", (e) => {
-        guardarCambio(id, { rol: e.target.value });
-      });
-      fila.querySelector(".sel-supervisor")?.addEventListener("change", (e) => {
-        guardarCambio(id, { supervisorId: e.target.value || null });
-      });
-      fila.querySelector(".input-fecha-ingreso")?.addEventListener("change", (e) => {
-        guardarCambio(id, { fechaIngreso: e.target.value || null });
-      });
-      fila.querySelector(".input-dias-vacaciones")?.addEventListener("change", (e) => {
-        const dias = Math.max(0, Math.round(Number(e.target.value) || 0));
-        e.target.value = dias;
-        guardarCambio(id, { diasVacacionesDisponibles: dias });
-      });
-      fila.querySelector(".sel-dia-descanso")?.addEventListener("change", (e) => {
-        guardarCambio(id, { diaDescanso: Number(e.target.value) });
+    tbody.querySelectorAll(".btn-editar-usuario").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.closest("tr").dataset.id;
+        const u = listaUsuarios.find(x => x.id === id);
+        if (u) abrirModalEditar(u);
       });
     });
   }
 
-  async function guardarCambio(id, cambios) {
-    errorDiv.textContent = "";
-    try {
-      await updateDoc(doc(db, "usuarios", id), cambios);
-    } catch (err) {
-      errorDiv.textContent = "No se pudo guardar el cambio: " + err.message;
+  function abrirModalEditar(u) {
+    cerrarModal();
+
+    const esUnoMismo = u.id === uidActual;
+    const posiblesSupervisores = listaUsuarios.filter(
+      s => (s.rol === "supervisor" || s.rol === "admin") && s.id !== u.id
+    );
+
+    const celdaRol = esUnoMismo
+      ? `<span class="valor-fijo">${escapeHtml(u.rol)}</span>`
+      : `<select id="modal-rol">${ROLES.map(r =>
+          `<option value="${r}" ${u.rol === r ? "selected" : ""}>${r}</option>`
+        ).join("")}</select>`;
+
+    const celdaSupervisor = esUnoMismo
+      ? `<span class="valor-fijo">${(() => {
+          const s = listaUsuarios.find(x => x.id === u.supervisorId);
+          return s ? escapeHtml(s.nombre) : "— Sin asignar —";
+        })()}</span>`
+      : `<select id="modal-supervisor">${[`<option value="">— Sin asignar —</option>`]
+          .concat(posiblesSupervisores.map(s =>
+            `<option value="${s.id}" ${u.supervisorId === s.id ? "selected" : ""}>${escapeHtml(s.nombre)}</option>`
+          )).join("")}</select>`;
+
+    const diaDescansoActual = u.diaDescanso ?? 0;
+    const opcionesDiaDescanso = NOMBRES_DIA.map((nombreDia, i) =>
+      `<option value="${i}" ${diaDescansoActual === i ? "selected" : ""}>${nombreDia}</option>`
+    ).join("");
+
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.id = "modal-editar-usuario";
+    overlay.innerHTML = `
+      <div class="modal-tarjeta">
+        <h2>Editar usuario</h2>
+        <div id="modal-error" class="error"></div>
+
+        <div class="modal-fila">
+          <label>Nombre <span class="valor-fijo">${escapeHtml(u.nombre || "")}</span></label>
+          <label>Correo <span class="valor-fijo">${escapeHtml(u.email || "")}</span></label>
+          <label>Número de empleado
+            <input type="text" id="modal-numero-empleado" maxlength="6" value="${escapeHtml(u.numeroEmpleado || "")}" placeholder="Ej. 045">
+          </label>
+        </div>
+
+        <div class="modal-fila">
+          <label>Rol ${celdaRol}</label>
+          <label>Supervisor asignado ${celdaSupervisor}</label>
+          <label>Estatus ${celdaEstatus(u)}</label>
+        </div>
+
+        <div class="modal-fila">
+          <label>Fecha de ingreso
+            <input type="date" id="modal-fecha-ingreso" value="${u.fechaIngreso || ""}">
+          </label>
+          <label>Días vacaciones
+            <input type="number" min="0" step="1" id="modal-dias-vacaciones" value="${u.diasVacacionesDisponibles ?? 0}">
+            ${notaLft(u, umbralesActuales)}
+          </label>
+          <label>Día de descanso
+            <select id="modal-dia-descanso">${opcionesDiaDescanso}</select>
+          </label>
+        </div>
+
+        <div class="modal-acciones">
+          <button type="button" class="secundario" id="modal-btn-cancelar">Cancelar</button>
+          <button type="button" id="modal-btn-guardar">Guardar</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) cerrarModal();
+    });
+    overlay.querySelector("#modal-btn-cancelar").addEventListener("click", cerrarModal);
+
+    overlay.querySelector("#modal-btn-guardar").addEventListener("click", async () => {
+      const modalErrorDiv = overlay.querySelector("#modal-error");
+      modalErrorDiv.textContent = "";
+
+      const numeroEmpleado = overlay.querySelector("#modal-numero-empleado").value.trim();
+      const fechaIngreso = overlay.querySelector("#modal-fecha-ingreso").value || null;
+      const diasVacacionesDisponibles = Math.max(0, Math.round(Number(overlay.querySelector("#modal-dias-vacaciones").value) || 0));
+      const diaDescanso = Number(overlay.querySelector("#modal-dia-descanso").value);
+
+      const cambios = { fechaIngreso, diasVacacionesDisponibles, diaDescanso, numeroEmpleado: numeroEmpleado || null };
+
+      if (!esUnoMismo) {
+        cambios.rol = overlay.querySelector("#modal-rol").value;
+        cambios.supervisorId = overlay.querySelector("#modal-supervisor").value || null;
+      }
+
+      try {
+        await guardarUsuario(u, cambios);
+        cerrarModal();
+      } catch (err) {
+        modalErrorDiv.textContent = "No se pudo guardar: " + err.message;
+      }
+    });
+  }
+
+  function cerrarModal() {
+    document.getElementById("modal-editar-usuario")?.remove();
+  }
+
+  // Si cambia el número de empleado, usamos una transacción contra
+  // "numerosEmpleado/{numero}" como candado para que dos personas no queden
+  // con el mismo número aunque se editen casi al mismo tiempo.
+  async function guardarUsuario(u, cambios) {
+    const usuarioRef = doc(db, "usuarios", u.id);
+    const numeroNuevo = cambios.numeroEmpleado;
+    const numeroAnterior = u.numeroEmpleado || null;
+
+    if (numeroNuevo === numeroAnterior) {
+      await updateDoc(usuarioRef, cambios);
+      return;
     }
+
+    await runTransaction(db, async (tx) => {
+      if (numeroNuevo) {
+        const refLock = doc(db, "numerosEmpleado", numeroNuevo);
+        const lockSnap = await tx.get(refLock);
+        if (lockSnap.exists() && lockSnap.data().usuarioId !== u.id) {
+          throw new Error(`El número de empleado "${numeroNuevo}" ya está asignado a otra persona.`);
+        }
+        tx.set(refLock, { usuarioId: u.id });
+      }
+      if (numeroAnterior) {
+        tx.delete(doc(db, "numerosEmpleado", numeroAnterior));
+      }
+      tx.update(usuarioRef, cambios);
+    });
   }
 }
 
