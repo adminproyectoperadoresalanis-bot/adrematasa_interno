@@ -19,6 +19,7 @@ import { iniciarPanelResumenAdmin, iniciarPanelResumenSupervisor } from "./panel
 import { iniciarGestionFaltas, iniciarVistaSupervisorFaltas, iniciarVistaEmpleadoFaltas } from "./faltas.js";
 import { iniciarMiEquipo } from "./equipo.js";
 import { iniciarConfiguracion } from "./configuracion.js";
+import { iniciarReportesAdmin, iniciarReportesSupervisor } from "./reportes.js";
 
 const DOMINIO_ALANIS = "@alanis.com.mx";
 
@@ -204,7 +205,7 @@ onAuthStateChanged(auth, async (user) => {
       vacaciones: (c) => iniciarGestionVacaciones(c, user.uid, datosUsuario.nombre),
       faltas: (c) => iniciarGestionFaltas(c, user.uid, datosUsuario.nombre),
       catalogo: (c) => iniciarPanelAdmin(c, user.uid),
-      reportes: pantallaProximamente,
+      reportes: (c) => iniciarReportesAdmin(c),
       configuracion: (c) => iniciarConfiguracion(c)
     }, "panel");
   } else if (datosUsuario.estatus === "pendiente") {
@@ -236,7 +237,7 @@ onAuthStateChanged(auth, async (user) => {
       vacaciones: (c) => iniciarVistaSupervisorVacaciones(c, user.uid, datosUsuario.nombre),
       faltas: (c) => iniciarVistaSupervisorFaltas(c, user.uid, datosUsuario.nombre),
       equipo: (c) => iniciarMiEquipo(c, user.uid),
-      reportes: pantallaProximamente
+      reportes: (c) => iniciarReportesSupervisor(c, user.uid)
     }, "panel");
   } else {
     ocultarNavegacion();
