@@ -219,14 +219,17 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
 
     if (relevantes.length === 0) {
       resumenAreaPuesto.textContent = "";
+      resumenAreaPuesto.className = "nota";
       return;
     }
 
     if (faltantes.length === 0) {
       resumenAreaPuesto.textContent = `✅ Los ${relevantes.length} usuarios ya tienen área y puesto asignado.`;
+      resumenAreaPuesto.className = "nota nota-ok";
     } else {
       const nombres = faltantes.map(u => u.nombre || u.email).join(", ");
       resumenAreaPuesto.textContent = `⚠ Faltan ${faltantes.length} de ${relevantes.length} por asignar área y/o puesto: ${nombres}.`;
+      resumenAreaPuesto.className = "nota nota-alerta";
     }
   }
 

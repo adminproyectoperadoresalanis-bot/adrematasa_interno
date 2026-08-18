@@ -209,6 +209,16 @@ main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100
   background: #fdecea;
 }
 
+.nota.nota-alerta {
+  color: #a32424;
+  font-weight: 600;
+}
+
+.nota.nota-ok {
+  color: #1c7a41;
+  font-weight: 600;
+}
+
 .area-card {
   border: 1px solid #e0ddd8;
   border-radius: 8px;
