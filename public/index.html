@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Adrematasa Interno</title>
+<link rel="stylesheet" href="css/estilos.css">
+</head>
+<body>
+<div id="vista-cargando" class="pantalla-auth">
+  <p>Cargando...</p>
+</div>
+<div id="vista-login" class="pantalla-auth oculto">
+  <div class="tarjeta">
+    <h1>Adrematasa Interno</h1>
+    <h2>Iniciar sesión</h2>
+    <form id="form-login">
+      <label>Correo Alanis
+        <input type="email" id="login-correo" required placeholder="tuusuario@alanis.com.mx">
+      </label>
+      <label>Contraseña
+        <input type="password" id="login-password" required>
+      </label>
+      <p id="error-login" class="error"></p>
+      <button type="submit">Entrar</button>
+    </form>
+    <p><a href="#" id="link-ir-recuperar">¿Olvidaste tu contraseña?</a></p>
+    <p>¿No tienes cuenta? <a href="#" id="link-ir-registro">Regístrate aquí</a></p>
+  </div>
+</div>
+<div id="vista-recuperar" class="pantalla-auth oculto">
+  <div class="tarjeta">
+    <h1>Adrematasa Interno</h1>
+    <h2>Recuperar contraseña</h2>
+    <p class="nota">Escribe tu correo Alanis y te enviaremos un link para definir una contraseña nueva.</p>
+    <form id="form-recuperar">
+      <label>Correo Alanis
+        <input type="email" id="recuperar-correo" required placeholder="tuusuario@alanis.com.mx">
+      </label>
+      <p id="error-recuperar" class="error"></p>
+      <p id="exito-recuperar" class="nota oculto"></p>
+      <button type="submit">Enviar link de recuperación</button>
+    </form>
+    <p><a href="#" id="link-ir-login-desde-recuperar">Volver a iniciar sesión</a></p>
+  </div>
+</div>
+<div id="vista-registro" class="pantalla-auth oculto">
+  <div class="tarjeta">
+    <h1>Adrematasa Interno</h1>
+    <h2>Crear cuenta</h2>
+    <form id="form-registro">
+      <label>Nombre completo
+        <input type="text" id="registro-nombre" required>
+      </label>
+      <label>Correo Alanis
+        <input type="email" id="registro-correo" required placeholder="tuusuario@alanis.com.mx">
+      </label>
+      <label>Contraseña
+        <input type="password" id="registro-password" required minlength="6">
+      </label>
+      <label>Confirmar contraseña
+        <input type="password" id="registro-password2" required minlength="6">
+      </label>
+      <p id="error-registro" class="error"></p>
+      <button type="submit">Registrarme</button>
+    </form>
+    <p>¿Ya tienes cuenta? <a href="#" id="link-ir-login">Inicia sesión</a></p>
+  </div>
+</div>
+<div id="vista-app" class="app-shell oculto">
+  <header class="encabezado">
+    <span>Adrematasa Interno</span>
+    <span class="usuario-info">
+      <span id="nombre-usuario"></span>
+      (<span id="rol-usuario"></span>)
+      <button id="btn-logout">Cerrar sesión</button>
+    </span>
+  </header>
+  <main id="contenido-app"></main>
+  <nav id="nav-inferior" class="nav-inferior oculto"></nav>
+</div>
+<script type="module" src="js/auth.js"></script>
+</body>
+</html>

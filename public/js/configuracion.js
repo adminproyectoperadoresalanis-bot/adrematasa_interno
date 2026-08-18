@@ -1,0 +1,117 @@
+import { db } from "./firebase-config.js";
+import {
+  doc, setDoc, onSnapshot
+} from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { UMBRALES_DEFAULT } from "./vacacionesCalculo.js";
+
+export function iniciarConfiguracion(contenedor) {
+  contenedor.innerHTML = `
+    <section class="panel">
+      <h2>Días de vacaciones por antigüedad</h2>
+      <p class="nota">
+        Con base en la Ley Federal del Trabajo vigente (reforma de "vacaciones dignas").
+        "Desde" es la cantidad de años cumplidos de antigüedad a partir de los cuales le
+        corresponden esos días a un empleado. El Catálogo de empleados aplica este cálculo
+        automáticamente en cuanto detecta que alguien cumplió un nuevo aniversario, reemplazando
+        su saldo de días. Puedes editar estos valores si Alanis maneja una política distinta.
+      </p>
+      <div id="config-error" class="error"></div>
+      <p id="config-exito" class="nota oculto" style="color:#1c7a41;"></p>
+      <div class="tabla-wrap">
+        <table class="tabla" id="tabla-umbrales">
+          <thead>
+            <tr>
+              <th>Desde (años cumplidos)</th>
+              <th>Días de vacaciones</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tbody-umbrales"></tbody>
+        </table>
+      </div>
+      <div class="acciones-form" style="margin-top:14px;">
+        <button type="button" id="btn-agregar-umbral" class="secundario">+ Agregar rango</button>
+        <button type="button" id="btn-guardar-umbrales">Guardar cambios</button>
+      </div>
+    </section>
+  `;
+
+  const tbody = contenedor.querySelector("#tbody-umbrales");
+  const errorDiv = contenedor.querySelector("#config-error");
+  const exitoP = contenedor.querySelector("#config-exito");
+  const btnAgregar = contenedor.querySelector("#btn-agregar-umbral");
+  const btnGuardar = contenedor.querySelector("#btn-guardar-umbrales");
+
+  const ref = doc(db, "configuracion", "vacaciones");
+  let umbrales = [];
+
+  onSnapshot(ref, (snap) => {
+    const datos = snap.exists() ? snap.data().umbrales : null;
+    umbrales = Array.isArray(datos) && datos.length > 0
+      ? [...datos].sort((a, b) => a.desde - b.desde)
+      : UMBRALES_DEFAULT.map(u => ({ ...u }));
+    render();
+  }, (err) => {
+    errorDiv.textContent = "No se pudo cargar la configuración: " + err.message;
+  });
+
+  function render() {
+    if (umbrales.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="3">No hay rangos definidos. Agrega al menos uno.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = umbrales.map((u, i) => `
+      <tr data-i="${i}">
+        <td><input type="number" min="0" step="1" class="input-umbral-desde" value="${u.desde}"></td>
+        <td><input type="number" min="0" step="1" class="input-umbral-dias" value="${u.dias}"></td>
+        <td class="acciones"><button type="button" class="btn-rechazar btn-quitar-umbral">Quitar</button></td>
+      </tr>
+    `).join("");
+
+    tbody.querySelectorAll("tr[data-i]").forEach(fila => {
+      const i = Number(fila.dataset.i);
+      fila.querySelector(".input-umbral-desde").addEventListener("input", (e) => {
+        umbrales[i].desde = Number(e.target.value) || 0;
+      });
+      fila.querySelector(".input-umbral-dias").addEventListener("input", (e) => {
+        umbrales[i].dias = Number(e.target.value) || 0;
+      });
+      fila.querySelector(".btn-quitar-umbral").addEventListener("click", () => {
+        umbrales.splice(i, 1);
+        render();
+      });
+    });
+  }
+
+  btnAgregar.addEventListener("click", () => {
+    const ultimo = umbrales[umbrales.length - 1];
+    umbrales.push({
+      desde: ultimo ? ultimo.desde + 1 : 1,
+      dias: ultimo ? ultimo.dias + 2 : 12
+    });
+    render();
+  });
+
+  btnGuardar.addEventListener("click", async () => {
+    errorDiv.textContent = "";
+    exitoP.classList.add("oculto");
+
+    const limpios = umbrales
+      .map(u => ({
+        desde: Math.max(0, Math.round(Number(u.desde) || 0)),
+        dias: Math.max(0, Math.round(Number(u.dias) || 0))
+      }))
+      .sort((a, b) => a.desde - b.desde);
+
+    try {
+      await setDoc(ref, { umbrales: limpios, actualizadoEn: new Date().toISOString() });
+      umbrales = limpios;
+      render();
+      exitoP.textContent = "Cambios guardados. Se aplicarán la próxima vez que se cargue el Catálogo de empleados.";
+      exitoP.classList.remove("oculto");
+    } catch (err) {
+      errorDiv.textContent = "No se pudo guardar: " + err.message;
+    }
+  });
+}

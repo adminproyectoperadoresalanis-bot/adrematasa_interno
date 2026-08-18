@@ -1,0 +1,131 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+    function isAlanisEmail() { return isSignedIn() && request.auth.token.email.matches('.*@alanis[.]com[.]mx'); }
+    function usuarioActual() { return get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data; }
+    function esAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) && usuarioActual().rol == 'admin';
+    }
+    function esSupervisorDe(supervisorIdSolicitud) {
+      return isSignedIn() && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
+        && usuarioActual().rol == 'supervisor' && request.auth.uid == supervisorIdSolicitud;
+    }
+
+    match /usuarios/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || esAdmin() || esSupervisorDe(resource.data.supervisorId));
+      allow create: if isSignedIn() && request.auth.uid == userId && isAlanisEmail()
+                    && request.resource.data.rol == 'empleado'
+                    && request.resource.data.estatus == 'pendiente'
+                    && request.resource.data.email == request.auth.token.email;
+      allow update: if isSignedIn() && esAdmin();
+      allow update: if isSignedIn() && request.auth.uid == userId
+                    && request.resource.data.rol == resource.data.rol
+                    && request.resource.data.supervisorId == resource.data.supervisorId
+                    && request.resource.data.estatus == resource.data.estatus;
+      // Un supervisor puede descontar el saldo de vacaciones de alguien de su equipo al aprobar una solicitud,
+      // y también ajustar su día de descanso desde "Mi equipo" — nada más de la cuenta.
+      allow update: if isSignedIn() && esSupervisorDe(resource.data.supervisorId)
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['diasVacacionesDisponibles', 'diaDescanso']);
+      allow delete: if false;
+    }
+
+    match /solicitudes/{solicitudId} {
+      allow read: if isSignedIn() && (
+        resource.data.empleadoId == request.auth.uid ||
+        esSupervisorDe(resource.data.supervisorId) ||
+        esAdmin()
+      );
+      allow create: if isSignedIn()
+        && request.resource.data.empleadoId == request.auth.uid
+        && usuarioActual().estatus == 'activo'
+        && request.resource.data.estatus == 'pendiente'
+        && request.resource.data.horas is number
+        && request.resource.data.horas > 0;
+      allow update: if isSignedIn()
+        && resource.data.empleadoId == request.auth.uid
+        && resource.data.estatus == 'pendiente'
+        && request.resource.data.estatus == 'pendiente'
+        && request.resource.data.empleadoId == resource.data.empleadoId;
+      allow delete: if isSignedIn()
+        && resource.data.empleadoId == request.auth.uid
+        && resource.data.estatus == 'pendiente';
+      allow update: if isSignedIn()
+        && esSupervisorDe(resource.data.supervisorId)
+        && resource.data.estatus == 'pendiente'
+        && request.resource.data.estatus in ['aprobada', 'rechazada']
+        && request.resource.data.empleadoId == resource.data.empleadoId;
+      allow update: if esAdmin();
+      allow delete: if esAdmin();
+    }
+
+    match /solicitudesVacaciones/{solicitudId} {
+      allow read: if isSignedIn() && (
+        resource.data.empleadoId == request.auth.uid ||
+        esSupervisorDe(resource.data.supervisorId) ||
+        esAdmin()
+      );
+      allow create: if isSignedIn()
+        && request.resource.data.empleadoId == request.auth.uid
+        && usuarioActual().estatus == 'activo'
+        && request.resource.data.estatus == 'pendiente'
+        && request.resource.data.diasHabiles is number
+        && request.resource.data.diasHabiles > 0
+        && request.resource.data.diasHabiles <= usuarioActual().get('diasVacacionesDisponibles', 0);
+      allow update: if isSignedIn()
+        && resource.data.empleadoId == request.auth.uid
+        && resource.data.estatus == 'pendiente'
+        && request.resource.data.estatus == 'pendiente'
+        && request.resource.data.empleadoId == resource.data.empleadoId;
+      allow delete: if isSignedIn()
+        && resource.data.empleadoId == request.auth.uid
+        && resource.data.estatus == 'pendiente';
+      allow update: if isSignedIn()
+        && esSupervisorDe(resource.data.supervisorId)
+        && resource.data.estatus == 'pendiente'
+        && request.resource.data.estatus in ['aprobada', 'rechazada']
+        && request.resource.data.empleadoId == resource.data.empleadoId;
+      allow update: if esAdmin();
+      allow delete: if esAdmin();
+    }
+
+    match /faltas/{faltaId} {
+      allow read: if isSignedIn() && (
+        resource.data.empleadoId == request.auth.uid ||
+        esSupervisorDe(resource.data.supervisorId) ||
+        esAdmin()
+      );
+
+      // El admin captura una falta y queda confirmada de inmediato (es la máxima autoridad).
+      allow create: if esAdmin()
+        && request.resource.data.capturadoPor == request.auth.uid
+        && request.resource.data.capturadoPorRol == 'admin'
+        && request.resource.data.estatus == 'aprobada'
+        && request.resource.data.tipo in ['injustificada', 'justificada', 'incapacidad', 'permiso_con_goce', 'permiso_sin_goce'];
+
+      // El supervisor captura una falta de su equipo; queda pendiente de que el admin la confirme.
+      allow create: if isSignedIn()
+        && esSupervisorDe(request.resource.data.supervisorId)
+        && request.resource.data.capturadoPor == request.auth.uid
+        && request.resource.data.capturadoPorRol == 'supervisor'
+        && request.resource.data.estatus == 'pendiente'
+        && request.resource.data.tipo in ['injustificada', 'justificada', 'incapacidad', 'permiso_con_goce', 'permiso_sin_goce'];
+
+      // Quien la capturó puede editarla/borrarla mientras siga pendiente (corregir un error antes de que el admin la revise).
+      allow update, delete: if isSignedIn()
+        && resource.data.capturadoPor == request.auth.uid
+        && resource.data.estatus == 'pendiente';
+
+      // El admin confirma o rechaza las que capturó un supervisor, y puede editar/borrar cualquiera en cualquier momento.
+      allow update, delete: if esAdmin();
+    }
+
+    match /configuracion/{docId} {
+      // Cualquier usuario con sesión puede leer (ej. para calcular días de vacaciones),
+      // pero solo el admin puede definir o cambiar los umbrales.
+      allow read: if isSignedIn();
+      allow write: if esAdmin();
+    }
+  }
+}

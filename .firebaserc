@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "appadrematasainterno"
+  },
+  "targets": {
+    "appadrematasainterno": {
+      "hosting": {
+        "principal": [
+          "adrematasainterno"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}
