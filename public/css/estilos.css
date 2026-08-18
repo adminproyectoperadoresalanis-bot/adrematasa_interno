@@ -201,6 +201,14 @@ main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100
   background: #fdecea;
 }
 
+.btn-editar-alerta {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+.btn-editar-alerta:hover {
+  background: #fdecea;
+}
+
 .area-card {
   border: 1px solid #e0ddd8;
   border-radius: 8px;

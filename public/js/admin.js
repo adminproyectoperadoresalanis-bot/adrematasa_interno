@@ -49,6 +49,7 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
       <h2>Usuarios</h2>
       <p class="nota">Por seguridad, no puedes cambiar tu propio rol ni tu propio supervisor. Da clic en "Editar" para ver y cambiar el resto de los datos de cada quien. Los días de vacaciones se actualizan solos según la antigüedad (Ley Federal del Trabajo) en cuanto alguien cumple un nuevo aniversario; los umbrales se ajustan en Configuración.</p>
       <div id="admin-error" class="error"></div>
+      <div id="resumen-area-puesto" class="nota"></div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-usuarios">
           <thead>
@@ -71,6 +72,7 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
   const errorPendientesDiv = contenedor.querySelector("#pendientes-error");
   const tbody = contenedor.querySelector("#tbody-usuarios");
   const errorDiv = contenedor.querySelector("#admin-error");
+  const resumenAreaPuesto = contenedor.querySelector("#resumen-area-puesto");
 
   let listaUsuarios = [];
   let umbralesActuales = UMBRALES_DEFAULT;
@@ -205,7 +207,32 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
     return `LFT: ${dias} días (${anios} ${anios === 1 ? "año" : "años"})`;
   }
 
+  // Le falta área y/o puesto a alguien que ya está activo o pendiente (a los
+  // rechazados no vale la pena pedírselo).
+  function faltaAreaOPuesto(u) {
+    return u.estatus !== "rechazado" && (!u.area || !u.puesto);
+  }
+
+  function renderResumenAreaPuesto() {
+    const relevantes = listaUsuarios.filter(u => u.estatus !== "rechazado");
+    const faltantes = relevantes.filter(faltaAreaOPuesto);
+
+    if (relevantes.length === 0) {
+      resumenAreaPuesto.textContent = "";
+      return;
+    }
+
+    if (faltantes.length === 0) {
+      resumenAreaPuesto.textContent = `✅ Los ${relevantes.length} usuarios ya tienen área y puesto asignado.`;
+    } else {
+      const nombres = faltantes.map(u => u.nombre || u.email).join(", ");
+      resumenAreaPuesto.textContent = `⚠ Faltan ${faltantes.length} de ${relevantes.length} por asignar área y/o puesto: ${nombres}.`;
+    }
+  }
+
   function renderTabla() {
+    renderResumenAreaPuesto();
+
     if (listaUsuarios.length === 0) {
       tbody.innerHTML = `<tr><td colspan="4">Aún no hay usuarios registrados.</td></tr>`;
       return;
@@ -213,12 +240,13 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
 
     tbody.innerHTML = listaUsuarios.map(u => {
       const esUnoMismo = u.id === uidActual;
+      const falta = faltaAreaOPuesto(u);
       return `
         <tr data-id="${u.id}">
           <td>${escapeHtml(u.nombre || "")} ${esUnoMismo ? '<span class="etiqueta-tu">(tú)</span>' : ""}</td>
           <td>${escapeHtml(u.email || "")}</td>
           <td>${celdaEstatus(u)}</td>
-          <td><button type="button" class="secundario btn-editar-usuario">Editar</button></td>
+          <td><button type="button" class="secundario btn-editar-usuario${falta ? " btn-editar-alerta" : ""}">${falta ? "⚠ Editar" : "Editar"}</button></td>
         </tr>
       `;
     }).join("");
