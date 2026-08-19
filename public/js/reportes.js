@@ -299,7 +299,8 @@ function construirVista(contenedor, { esAdmin, uid }) {
     empleados.sort((a, b) => (a.nombre || "").localeCompare(b.nombre || ""));
 
     const anio = viernes.slice(0, 4);
-    const periodoTexto = `SEMANA ${numeroSemana} — DEL ${formatearFechaLarga(viernes)} AL ${formatearFechaLarga(jueves)}   AÑO ${anio}`;
+    const periodoTexto = `Semana ${numeroSemana} - Del ${formatearFechaLargaCap(viernes)} al ${formatearFechaLargaCap(jueves)} ${anio}`;
+    const tituloCentro = `REPORTE SEMANAL PARA RH - SEMANA ${numeroSemana}`;
     const logoUrl = window.location.origin + "/img/logo-alanis.png";
 
     const segmentosHtml = empleados.length === 0
@@ -339,19 +340,19 @@ function construirVista(contenedor, { esAdmin, uid }) {
       <div class="pagina pagina-rh">
         <div class="encabezado">
           <div class="logo-caja"><img src="${logoUrl}" alt="" onerror="this.style.display='none'"></div>
-          <div class="empresa-area"><span>AUTO TRANSPORTES ALANIS, SA DE CV</span></div>
+          <div class="titulo-centro">${escapeHtml(tituloCentro)}</div>
+          <div class="espaciador"></div>
         </div>
-        <div class="titulo-reporte">REPORTE SEMANAL DE HORAS EXTRAS</div>
         <div class="periodo">${escapeHtml(periodoTexto)}</div>
 
         ${segmentosHtml}
 
         <div class="pie">
+          <div class="pie-empresa">AUTOTRANSPORTES ALANIS, S.A. DE C.V.</div>
           <div class="firmas">
-            <div class="firma"><div class="linea-firma"></div>Firma del Gerente o Jefe del Área<br>Autorización</div>
+            <div class="firma"><div class="linea-firma"></div>Iván Landa<br>Autorización</div>
             <div class="firma"><div class="linea-firma"></div>Firma del Depto. de Nóminas<br>Revisión</div>
           </div>
-          <div class="nota-pie">* Horario de las Extras: Se refiere a indicar entre que horas se dieron las extras, es decir de que hora a que hora.</div>
           <div class="codigo-formato"><span>ATAF082</span><span>Rev. 0&nbsp;&nbsp;&nbsp;05/02/2024</span></div>
         </div>
       </div>
@@ -490,15 +491,15 @@ function construirVista(contenedor, { esAdmin, uid }) {
   .encabezado { display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #1a1a1a; padding-bottom:6px; margin-bottom:6px; }
   .logo-caja { width:110px; height:50px; display:flex; align-items:center; justify-content:center; }
   .logo-caja img { max-width:110px; max-height:50px; }
-  .empresa-area { flex:1; padding-left:12px; font-weight:bold; font-size:12px; }
-  .titulo-reporte { text-align:center; font-weight:bold; font-size:13px; letter-spacing:.5px; margin:8px 0 4px; }
+  .titulo-centro { flex:1; text-align:center; font-weight:bold; font-size:12px; padding:0 10px; }
+  .espaciador { width:110px; }
   .periodo { text-align:center; font-size:11px; margin-bottom:14px; }
   .centrado { text-align:center; }
-  .pie { margin-top:22px; }
+  .pie { margin-top:auto; padding-top:16px; }
   .linea-firma { border-top:1px solid #1a1a1a; margin-bottom:4px; padding-top:20px; }
   .sin-datos { text-align:center; color:#666; margin-top:20px; }
 
-  .pagina-rh { max-width: 190mm; margin: 0 auto; font-size:11px; }
+  .pagina-rh { max-width: 190mm; margin: 0 auto; font-size:11px; display:flex; flex-direction:column; min-height:100vh; }
   .pagina-rh table { width:100%; border-collapse:collapse; }
   .pagina-rh .segmento-empleado { break-inside: avoid; margin-bottom:10px; }
   .pagina-rh .tabla-encabezado-empleado td { border:1px solid #1a1a1a; font-weight:bold; font-size:11px; padding:3px 6px; background:#eef1f4; }
@@ -506,9 +507,9 @@ function construirVista(contenedor, { esAdmin, uid }) {
   .pagina-rh .celda-puesto-empleado { width:35%; }
   .pagina-rh .tabla-horas th, .pagina-rh .tabla-horas td { border:1px solid #1a1a1a; padding:3px 6px; font-size:10.5px; }
   .pagina-rh .tabla-horas th { background:#f7f8fa; font-weight:bold; text-align:center; }
-  .pagina-rh .firmas { display:flex; justify-content:space-between; margin-top:26px; }
+  .pagina-rh .pie-empresa { text-align:center; font-weight:bold; font-size:10px; margin-bottom:8px; }
+  .pagina-rh .firmas { display:flex; justify-content:space-between; margin-top:14px; }
   .pagina-rh .firma { width:45%; text-align:center; font-size:10.5px; }
-  .pagina-rh .nota-pie { font-size:9.5px; margin-top:16px; }
   .pagina-rh .codigo-formato { display:flex; justify-content:space-between; font-size:9.5px; margin-top:6px; border-top:1px solid #999; padding-top:4px; }
 
   .pagina-nomina { font-size:10px; display:flex; flex-direction:column; min-height:100vh; }
@@ -517,8 +518,6 @@ function construirVista(contenedor, { esAdmin, uid }) {
   .pagina-nomina th { background:#f7f8fa; font-weight:bold; text-align:center; }
   .pagina-nomina .celda-total { font-weight:bold; background:#f2f4f7; }
   .pagina-nomina .encabezado { border-bottom:1px solid #1a1a1a; }
-  .pagina-nomina .titulo-centro { flex:1; text-align:center; font-weight:bold; font-size:12px; padding:0 10px; }
-  .pagina-nomina .espaciador { width:110px; }
   .pagina-nomina .periodo { margin-bottom:10px; }
   .pagina-nomina .pie-nomina { margin-top:auto; padding-top:16px; }
   .pagina-nomina .pie-empresa { text-align:center; font-weight:bold; font-size:10px; margin-bottom:8px; }
