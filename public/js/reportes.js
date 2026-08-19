@@ -394,7 +394,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
 
     const anio = viernes.slice(0, 4);
     const periodoTexto = `Del ${formatearFechaLargaCap(viernes)} al ${formatearFechaLargaCap(jueves)} ${anio}`;
-    const tituloCentro = `AUTOTRANSPORTES ALANIS, S.A. DE C.V. | REPORTE SEMANAL PARA NOMINAS - SEMANA ${numeroSemana}`;
+    const tituloCentro = `REPORTE SEMANAL PARA NOMINAS - SEMANA ${numeroSemana}`;
     const logoUrl = window.location.origin + "/img/logo-alanis.png";
     const encabezadosDia = diasSemana.map(f => `<th>${diaSemana(f)}<br>${formatearFechaCorta(f)}</th>`).join("");
 
@@ -444,7 +444,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
         </table>
 
         <div class="pie-nomina">
-          <div class="linea-divisoria"></div>
+          <div class="pie-empresa">AUTOTRANSPORTES ALANIS, S.A. DE C.V.</div>
           <div class="pie-nomina-contenido">
             <div class="autorizo">
               <div class="linea-firma"></div>
@@ -520,8 +520,8 @@ function construirVista(contenedor, { esAdmin, uid }) {
   .pagina-nomina .titulo-centro { flex:1; text-align:center; font-weight:bold; font-size:12px; padding:0 10px; }
   .pagina-nomina .espaciador { width:110px; }
   .pagina-nomina .periodo { margin-bottom:10px; }
-  .pagina-nomina .pie-nomina { margin-top:auto; padding-top:22px; }
-  .pagina-nomina .linea-divisoria { border-top:1px solid #1a1a1a; padding-top:8px; }
+  .pagina-nomina .pie-nomina { margin-top:auto; padding-top:16px; }
+  .pagina-nomina .pie-empresa { text-align:center; font-weight:bold; font-size:10px; margin-bottom:8px; }
   .pagina-nomina .pie-nomina-contenido { display:flex; justify-content:space-between; align-items:flex-end; }
   .pagina-nomina .autorizo { text-align:left; font-size:10.5px; width:220px; }
   .pagina-nomina .meta-impresion { font-size:8.5px; color:#555; text-align:right; line-height:1.4; }
