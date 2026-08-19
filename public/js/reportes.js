@@ -394,7 +394,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
 
     const anio = viernes.slice(0, 4);
     const periodoTexto = `Del ${formatearFechaLargaCap(viernes)} al ${formatearFechaLargaCap(jueves)} ${anio}`;
-    const tituloCentro = `AUTOTRANSPORTES ALANIS, S.A. DE C.V. | REPORTE SEMANAL DE HORAS EXTRAS — SEMANA ${numeroSemana}`;
+    const tituloCentro = `AUTOTRANSPORTES ALANIS, S.A. DE C.V. | REPORTE SEMANAL PARA NOMINAS - SEMANA ${numeroSemana}`;
     const logoUrl = window.location.origin + "/img/logo-alanis.png";
     const encabezadosDia = diasSemana.map(f => `<th>${diaSemana(f)}<br>${formatearFechaCorta(f)}</th>`).join("");
 
@@ -511,7 +511,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
   .pagina-rh .nota-pie { font-size:9.5px; margin-top:16px; }
   .pagina-rh .codigo-formato { display:flex; justify-content:space-between; font-size:9.5px; margin-top:6px; border-top:1px solid #999; padding-top:4px; }
 
-  .pagina-nomina { font-size:10px; }
+  .pagina-nomina { font-size:10px; display:flex; flex-direction:column; min-height:100vh; }
   .pagina-nomina table { width:100%; border-collapse:collapse; }
   .pagina-nomina th, .pagina-nomina td { border:1px solid #1a1a1a; padding:3px 4px; font-size:9px; }
   .pagina-nomina th { background:#f7f8fa; font-weight:bold; text-align:center; }
@@ -520,7 +520,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
   .pagina-nomina .titulo-centro { flex:1; text-align:center; font-weight:bold; font-size:12px; padding:0 10px; }
   .pagina-nomina .espaciador { width:110px; }
   .pagina-nomina .periodo { margin-bottom:10px; }
-  .pagina-nomina .pie-nomina { margin-top:22px; }
+  .pagina-nomina .pie-nomina { margin-top:auto; padding-top:22px; }
   .pagina-nomina .linea-divisoria { border-top:1px solid #1a1a1a; padding-top:8px; }
   .pagina-nomina .pie-nomina-contenido { display:flex; justify-content:space-between; align-items:flex-end; }
   .pagina-nomina .autorizo { text-align:left; font-size:10.5px; width:220px; }
