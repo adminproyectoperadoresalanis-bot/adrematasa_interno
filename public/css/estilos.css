@@ -297,6 +297,17 @@ main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100
 .fila-captura { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
 .fila-captura label { flex: 1 1 140px; margin: 0; }
 
+.horario-semanal { margin: 4px 0 18px; }
+.horario-semanal h3 { margin: 0 0 4px; font-size: 0.95rem; }
+
+.tabla-horario th, .tabla-horario td { padding: 6px 8px; }
+.tabla-horario input[type="time"] { width: 100%; padding: 5px; font-size: 0.85rem; border: 1px solid #ccc; border-radius: 6px; }
+.tabla-horario input[type="time"]:disabled { background: #f2f0ec; color: #999; }
+.tabla-horario .centrado { text-align: center; }
+.tabla-horario tfoot td { border-bottom: none; border-top: 2px solid #2c1e0f; padding-top: 10px; }
+.tabla-horario .total-horas-label { text-align: right; font-weight: bold; }
+.tabla-horario .total-horas-valor { text-align: center; font-weight: bold; }
+
 .resultado-horas { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; flex: 0 0 auto; }
 .resultado-horas .etiqueta-horas { color: #555; }
 .valor-horas {
