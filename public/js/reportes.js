@@ -2,7 +2,6 @@ import { db } from "./firebase-config.js";
 import {
   collection, onSnapshot, query, where
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
-import { suscribirEstructura } from "./estructuraOrganizacional.js";
 
 const MESES_ABREV = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 const MESES_LARGO = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -53,20 +52,60 @@ function diaSemana(fechaStr) {
   return DIAS_ABREV[d.getDay()];
 }
 
+function formatearFechaDDMMYY(fechaStr) {
+  // "2026-08-14" -> "14/08/26"
+  const [a, m, d] = (fechaStr || "").split("-");
+  if (!a || !m || !d) return fechaStr || "";
+  return `${d}/${m}/${a.slice(2)}`;
+}
+
+function numeroSemanaISO(fechaStr) {
+  // Número de semana ISO-8601 (semana que contiene el jueves de esa semana).
+  const d = new Date(fechaStr + "T00:00:00");
+  const diaISO = (d.getDay() + 6) % 7 + 1; // lunes=1 ... domingo=7
+  d.setDate(d.getDate() + 4 - diaISO);
+  const inicioAnio = new Date(d.getFullYear(), 0, 1);
+  return Math.ceil(((d - inicioAnio) / 86400000 + 1) / 7);
+}
+
+function formatearFechaLargaCap(fechaStr) {
+  // "2026-08-14" -> "14 Agosto" (mes con mayúscula inicial)
+  const [, m, d] = (fechaStr || "").split("-").map(Number);
+  if (!m || !d) return fechaStr || "";
+  const mes = MESES_LARGO[m - 1];
+  return `${d} ${mes.charAt(0).toUpperCase()}${mes.slice(1)}`;
+}
+
+function formatearFechaHoraGeneracion() {
+  const d = new Date();
+  const mes = MESES_LARGO[d.getMonth()];
+  const fecha = `${d.getDate()} ${mes.charAt(0).toUpperCase()}${mes.slice(1)} ${d.getFullYear()}`;
+  let horas = d.getHours();
+  const minutos = String(d.getMinutes()).padStart(2, "0");
+  const periodo = horas >= 12 ? "pm" : "am";
+  horas = horas % 12 || 12;
+  return `${fecha}, ${horas}:${minutos} ${periodo}`;
+}
+
+function hoyLocalStr() {
+  // Evita el corrimiento de un día que da toISOString() cerca de medianoche
+  // en zonas horarias al oeste de UTC.
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function construirVista(contenedor, { esAdmin, uid }) {
   contenedor.innerHTML = `
     <section class="panel">
       <h2>Reportes</h2>
       <p class="nota">
-        Filtra por periodo (ej. la quincena o el mes que estás cerrando) y exporta a CSV para nómina.
-        Por default solo se cuenta lo ya aprobado/confirmado — actívalo abajo si necesitas incluir pendientes y rechazados también.
+        Elige la semana laboral (viernes a jueves) que quieres reportar — el resumen y los formatos de abajo usan esa
+        semana. Por default solo se cuenta lo ya aprobado/confirmado — actívalo abajo si necesitas incluir pendientes
+        y rechazados también.
       </p>
       <div class="fila-captura">
-        <label>Desde
-          <input type="date" id="rep-desde">
-        </label>
-        <label>Hasta
-          <input type="date" id="rep-hasta">
+        <label>Semana
+          <select id="rep-semana"></select>
         </label>
         <label class="campo-checkbox">
           <input type="checkbox" id="rep-incluir-todo">
@@ -77,7 +116,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
 
     <section class="panel" style="margin-top:20px;">
       <h2>Resumen del periodo</h2>
-      <p class="nota">Horas extra, vacaciones y faltas juntas por empleado, para el rango de fechas de arriba. Es un preliminar — en cuanto definamos los formatos exactos que necesitas para nómina, lo ajustamos.</p>
+      <p class="nota">Horas extra, vacaciones y faltas juntas por empleado, para la semana elegida arriba. Es un preliminar — en cuanto definamos los formatos exactos que necesitas para nómina, lo ajustamos.</p>
       <div class="acciones-form">
         <button type="button" class="secundario" id="btn-exportar-resumen">Exportar CSV</button>
       </div>
@@ -92,53 +131,32 @@ function construirVista(contenedor, { esAdmin, uid }) {
     </section>
 
     <section class="panel" style="margin-top:20px;">
-      <h2>Reporte de horas extra (detalle)</h2>
+      <h2>Formatos para imprimir</h2>
       <p class="nota">
-        Formato imprimible para nómina, con un bloque por empleado (fecha, cantidad de horas, horario y motivo de cada extra).
-        Solo incluye horas extra ya aprobadas del rango de fechas de arriba.
+        Usa la semana elegida arriba para generar un solo PDF con 2 páginas: REPORTE RH y REPORTE NOMINA de esa
+        semana. Solo cuenta lo ya aprobado.
       </p>
-      <div class="fila-captura">
-        <label>Área
-          <select id="rep-area"><option value="todas">Todas las áreas</option></select>
-        </label>
-      </div>
       <div class="acciones-form">
-        <button type="button" class="secundario" id="btn-imprimir-detalle">Vista previa / Imprimir</button>
-      </div>
-    </section>
-
-    <section class="panel" style="margin-top:20px;">
-      <h2>Reporte semanal de horas extra (cuadrícula)</h2>
-      <p class="nota">
-        Formato imprimible por semana laboral (viernes a jueves): una fila por empleado con No. de empleado, nombre,
-        puesto, horas extra de cada día de la semana, el total semanal y las faltas de esa semana.
-        Solo cuenta lo ya aprobado.
-      </p>
-      <div class="fila-captura">
-        <label>Semana (elige cualquier día de esa semana)
-          <input type="date" id="rep-semana">
-        </label>
-        <label>Área
-          <select id="rep-area-grid"><option value="todas">Todas las áreas</option></select>
-        </label>
-        <span class="nota" id="rep-semana-rango"></span>
-      </div>
-      <div class="acciones-form">
-        <button type="button" class="secundario" id="btn-imprimir-grid">Vista previa / Imprimir</button>
+        <button type="button" class="secundario" id="btn-vista-previa">VISTA PREVIA / IMPRIMIR</button>
       </div>
     </section>
   `;
 
-  const inputDesde = contenedor.querySelector("#rep-desde");
-  const inputHasta = contenedor.querySelector("#rep-hasta");
+  const selectSemana = contenedor.querySelector("#rep-semana");
   const chkIncluirTodo = contenedor.querySelector("#rep-incluir-todo");
   const tbodyResumen = contenedor.querySelector("#tbody-rep-resumen");
-  const selectArea = contenedor.querySelector("#rep-area");
-  const btnImprimirDetalle = contenedor.querySelector("#btn-imprimir-detalle");
-  const inputSemana = contenedor.querySelector("#rep-semana");
-  const selectAreaGrid = contenedor.querySelector("#rep-area-grid");
-  const spanSemanaRango = contenedor.querySelector("#rep-semana-rango");
-  const btnImprimirGrid = contenedor.querySelector("#btn-imprimir-grid");
+  const btnVistaPrevia = contenedor.querySelector("#btn-vista-previa");
+
+  // Últimas 5 semanas laborales (viernes a jueves) hasta la actual, la más
+  // reciente primero. El admin/supervisor casi siempre reporta la semana en
+  // curso, pero a veces hay que ponerse al día con una semana anterior.
+  const viernesSemanaActual = calcularSemanaLaboral(hoyLocalStr());
+  const semanasDisponibles = Array.from({ length: 5 }, (_, i) => sumarDias(viernesSemanaActual, -7 * i));
+  selectSemana.innerHTML = semanasDisponibles.map(viernes => {
+    const jueves = sumarDias(viernes, 6);
+    const numero = numeroSemanaISO(jueves);
+    return `<option value="${viernes}">Semana ${numero} — De vie ${formatearFechaDDMMYY(viernes)} a jue ${formatearFechaDDMMYY(jueves)}</option>`;
+  }).join("");
 
   let listaHoras = [];
   let listaVacaciones = [];
@@ -175,35 +193,14 @@ function construirVista(contenedor, { esAdmin, uid }) {
     mapUsuarios.clear();
     snap.docs.forEach(d => mapUsuarios.set(d.id, d.data()));
   });
-  suscribirEstructura((areas) => {
-    [selectArea, selectAreaGrid].forEach(sel => {
-      const areaElegida = sel.value;
-      sel.innerHTML = `<option value="todas">Todas las áreas</option>` +
-        areas.map(a => `<option value="${escapeHtml(a.nombre)}">${escapeHtml(a.nombre)}</option>`).join("");
-      if ([...sel.options].some(o => o.value === areaElegida)) sel.value = areaElegida;
-    });
-  });
 
-  [inputDesde, inputHasta, chkIncluirTodo].forEach(el => el.addEventListener("change", renderTodo));
-
-  inputSemana.addEventListener("change", actualizarRangoSemana);
-
-  function actualizarRangoSemana() {
-    if (!inputSemana.value) {
-      spanSemanaRango.textContent = "";
-      return null;
-    }
-    const viernes = calcularSemanaLaboral(inputSemana.value);
-    const jueves = sumarDias(viernes, 6);
-    spanSemanaRango.textContent = `Semana del ${formatearFechaLarga(viernes)} al ${formatearFechaLarga(jueves)}`;
-    return viernes;
-  }
+  [selectSemana, chkIncluirTodo].forEach(el => el.addEventListener("change", renderTodo));
 
   function dentroDeRango(fechaStr) {
-    if (!fechaStr) return false;
-    if (inputDesde.value && fechaStr < inputDesde.value) return false;
-    if (inputHasta.value && fechaStr > inputHasta.value) return false;
-    return true;
+    if (!fechaStr || !selectSemana.value) return false;
+    const viernes = selectSemana.value;
+    const jueves = sumarDias(viernes, 6);
+    return fechaStr >= viernes && fechaStr <= jueves;
   }
 
   function filtrar(lista, campoFecha) {
@@ -268,34 +265,21 @@ function construirVista(contenedor, { esAdmin, uid }) {
   }
 
   contenedor.querySelector("#btn-exportar-resumen").addEventListener("click", () => {
-    exportarCSV(`resumen_${sufijoFecha()}.csv`,
+    const numero = selectSemana.value ? numeroSemanaISO(sumarDias(selectSemana.value, 6)) : sufijoFecha();
+    exportarCSV(`resumen_semana_${numero}.csv`,
       ["Empleado", "Horas extra", "Días de vacaciones", "Faltas"],
       resumen.map(e => [e.nombre, e.horas, e.vacaciones, e.faltas])
     );
   });
 
-  btnImprimirDetalle.addEventListener("click", abrirVistaImpresionDetalle);
+  btnVistaPrevia.addEventListener("click", abrirVistaPreviaImprimir);
 
-  // Reporte imprimible "Reporte semanal de horas extras" — un bloque por
-  // empleado, solo horas extra ya aprobadas (sin importar el checkbox de
-  // "incluir pendientes y rechazados": este es un documento formal).
-  function abrirVistaImpresionDetalle() {
-    if (!inputDesde.value || !inputHasta.value) {
-      alert("Elige la fecha Desde y Hasta para generar el reporte.");
-      return;
-    }
-
-    const areaSeleccionada = selectArea.value;
+  // Construye la página 1 (REPORTE RH: un bloque por empleado con el
+  // detalle de cada hora extra) de la semana elegida arriba.
+  function construirPaginaRH(viernes, jueves, numeroSemana) {
     const filtradas = listaHoras
       .filter(s => s.estatus === "aprobada")
-      .filter(s => dentroDeRango(s.fecha))
-      .filter(s => areaSeleccionada === "todas" || (mapUsuarios.get(s.empleadoId)?.area || "") === areaSeleccionada);
-
-    if (filtradas.length === 0) {
-      alert("No hay horas extra aprobadas para ese rango de fechas" +
-        (areaSeleccionada === "todas" ? "." : ` en el área "${areaSeleccionada}".`));
-      return;
-    }
+      .filter(s => s.fecha >= viernes && s.fecha <= jueves);
 
     const porEmpleado = new Map();
     filtradas.forEach(s => {
@@ -314,143 +298,74 @@ function construirVista(contenedor, { esAdmin, uid }) {
     empleados.forEach(e => e.filas.sort((a, b) => (a.fecha || "").localeCompare(b.fecha || "")));
     empleados.sort((a, b) => (a.nombre || "").localeCompare(b.nombre || ""));
 
-    const anio = (inputHasta.value || inputDesde.value || "").slice(0, 4);
-    const periodoTexto = `PERIODO DEL ${formatearFechaLarga(inputDesde.value)} AL ${formatearFechaLarga(inputHasta.value)}   AÑO ${anio}`;
-    const areaTexto = areaSeleccionada === "todas" ? "Todas" : areaSeleccionada;
+    const anio = viernes.slice(0, 4);
+    const periodoTexto = `SEMANA ${numeroSemana} — DEL ${formatearFechaLarga(viernes)} AL ${formatearFechaLarga(jueves)}   AÑO ${anio}`;
     const logoUrl = window.location.origin + "/img/logo-alanis.png";
 
-    const segmentosHtml = empleados.map(e => `
-      <div class="segmento-empleado">
-        <table class="tabla-encabezado-empleado">
-          <tr>
-            <td class="celda-nombre-empleado">NOMBRE DEL EMPLEADO: ${escapeHtml(e.nombre)}</td>
-            <td class="celda-puesto-empleado">Puesto: ${escapeHtml(e.puesto)}</td>
-          </tr>
-        </table>
-        <table class="tabla-horas">
-          <thead>
+    const segmentosHtml = empleados.length === 0
+      ? `<p class="sin-datos">Sin horas extra aprobadas para este periodo.</p>`
+      : empleados.map(e => `
+        <div class="segmento-empleado">
+          <table class="tabla-encabezado-empleado">
             <tr>
-              <th style="width:12%;">Fecha</th>
-              <th style="width:14%;">Cantidad de Horas</th>
-              <th style="width:22%;">Horario de las Extras *</th>
-              <th>Motivo de la Hora(s) Extra(s)</th>
+              <td class="celda-nombre-empleado">NOMBRE DEL EMPLEADO: ${escapeHtml(e.nombre)}</td>
+              <td class="celda-puesto-empleado">Puesto: ${escapeHtml(e.puesto)}</td>
             </tr>
-          </thead>
-          <tbody>
-            ${e.filas.map(s => `
+          </table>
+          <table class="tabla-horas">
+            <thead>
               <tr>
-                <td class="centrado">${formatearFechaCorta(s.fecha)}</td>
-                <td class="centrado">${s.horas}</td>
-                <td class="centrado">${formatearHora12(s.horaInicio)} - ${formatearHora12(s.horaFin)}</td>
-                <td>${escapeHtml(s.motivo || "")}</td>
+                <th style="width:12%;">Fecha</th>
+                <th style="width:14%;">Cantidad de Horas</th>
+                <th style="width:22%;">Horario de las Extras *</th>
+                <th>Motivo de la Hora(s) Extra(s)</th>
               </tr>
-            `).join("")}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              ${e.filas.map(s => `
+                <tr>
+                  <td class="centrado">${formatearFechaCorta(s.fecha)}</td>
+                  <td class="centrado">${s.horas}</td>
+                  <td class="centrado">${formatearHora12(s.horaInicio)} - ${formatearHora12(s.horaFin)}</td>
+                  <td>${escapeHtml(s.motivo || "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `).join("");
+
+    return `
+      <div class="pagina pagina-rh">
+        <div class="encabezado">
+          <div class="logo-caja"><img src="${logoUrl}" alt="" onerror="this.style.display='none'"></div>
+          <div class="empresa-area"><span>AUTO TRANSPORTES ALANIS, SA DE CV</span></div>
+        </div>
+        <div class="titulo-reporte">REPORTE SEMANAL DE HORAS EXTRAS</div>
+        <div class="periodo">${escapeHtml(periodoTexto)}</div>
+
+        ${segmentosHtml}
+
+        <div class="pie">
+          <div class="firmas">
+            <div class="firma"><div class="linea-firma"></div>Firma del Gerente o Jefe del Área<br>Autorización</div>
+            <div class="firma"><div class="linea-firma"></div>Firma del Depto. de Nóminas<br>Revisión</div>
+          </div>
+          <div class="nota-pie">* Horario de las Extras: Se refiere a indicar entre que horas se dieron las extras, es decir de que hora a que hora.</div>
+          <div class="codigo-formato"><span>ATAF082</span><span>Rev. 0&nbsp;&nbsp;&nbsp;05/02/2024</span></div>
+        </div>
       </div>
-    `).join("");
-
-    const html = `<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<title>Reporte semanal de horas extra</title>
-<style>
-  @page { size: letter portrait; margin: 14mm 12mm; }
-  * { box-sizing: border-box; }
-  body { font-family: Arial, Helvetica, sans-serif; color:#1a1a1a; font-size:11px; margin:0; padding:0; }
-  .hoja { max-width: 190mm; margin: 0 auto; padding: 6mm; }
-  .encabezado { display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #1a1a1a; padding-bottom:6px; margin-bottom:6px; }
-  .logo-caja { width:120px; height:55px; display:flex; align-items:center; justify-content:center; }
-  .logo-caja img { max-width:120px; max-height:55px; }
-  .empresa-area { flex:1; display:flex; justify-content:space-between; align-items:center; padding-left:12px; font-weight:bold; font-size:12px; }
-  .titulo-reporte { text-align:center; font-weight:bold; font-size:14px; letter-spacing:.5px; margin:8px 0 4px; }
-  .periodo { text-align:center; font-size:11px; margin-bottom:14px; }
-  .segmento-empleado { break-inside: avoid; margin-bottom:10px; }
-  table { width:100%; border-collapse:collapse; }
-  .tabla-encabezado-empleado td { border:1px solid #1a1a1a; font-weight:bold; font-size:11px; padding:3px 6px; background:#eef1f4; }
-  .celda-nombre-empleado { width:65%; }
-  .celda-puesto-empleado { width:35%; }
-  .tabla-horas th, .tabla-horas td { border:1px solid #1a1a1a; padding:3px 6px; font-size:10.5px; }
-  .tabla-horas th { background:#f7f8fa; font-weight:bold; text-align:center; }
-  .centrado { text-align:center; }
-  .pie { margin-top:22px; }
-  .firmas { display:flex; justify-content:space-between; margin-top:26px; }
-  .firma { width:45%; text-align:center; font-size:10.5px; }
-  .linea-firma { border-top:1px solid #1a1a1a; margin-bottom:4px; padding-top:20px; }
-  .nota-pie { font-size:9.5px; margin-top:16px; }
-  .codigo-formato { display:flex; justify-content:space-between; font-size:9.5px; margin-top:6px; border-top:1px solid #999; padding-top:4px; }
-  .barra-imprimir { text-align:center; margin:14px 0; }
-  .barra-imprimir button { padding:8px 18px; font-size:13px; cursor:pointer; }
-  @media print { .barra-imprimir { display:none; } }
-</style>
-</head>
-<body>
-  <div class="barra-imprimir"><button onclick="window.print()">Imprimir / Guardar como PDF</button></div>
-  <div class="hoja">
-    <div class="encabezado">
-      <div class="logo-caja"><img src="${logoUrl}" alt="" onerror="this.style.display='none'"></div>
-      <div class="empresa-area">
-        <span>AUTO TRANSPORTES ALANIS, SA DE CV</span>
-        <span>AREA&nbsp;&nbsp;${escapeHtml(areaTexto)}</span>
-      </div>
-    </div>
-    <div class="titulo-reporte">REPORTE SEMANAL DE HORAS EXTRAS</div>
-    <div class="periodo">${escapeHtml(periodoTexto)}</div>
-
-    ${segmentosHtml}
-
-    <div class="pie">
-      <div class="firmas">
-        <div class="firma"><div class="linea-firma"></div>Firma del Gerente o Jefe del Área<br>Autorización</div>
-        <div class="firma"><div class="linea-firma"></div>Firma del Depto. de Nóminas<br>Revisión</div>
-      </div>
-      <div class="nota-pie">* Horario de las Extras: Se refiere a indicar entre que horas se dieron las extras, es decir de que hora a que hora.</div>
-      <div class="codigo-formato"><span>ATAF082</span><span>Rev. 0&nbsp;&nbsp;&nbsp;05/02/2024</span></div>
-    </div>
-  </div>
-</body>
-</html>`;
-
-    const ventana = window.open("", "_blank");
-    if (!ventana) {
-      alert("El navegador bloqueó la ventana emergente. Habilita ventanas emergentes para este sitio e intenta de nuevo.");
-      return;
-    }
-    ventana.document.write(html);
-    ventana.document.close();
+    `;
   }
 
-  btnImprimirGrid.addEventListener("click", abrirVistaImpresionGrid);
-
-  // Reporte imprimible "Reporte semanal de horas extras" en cuadrícula — una
-  // fila por empleado con No. de empleado, nombre, puesto, horas extra de
-  // cada día de la semana laboral (viernes a jueves), total semanal y
-  // faltas. Solo cuenta lo ya aprobado (documento formal, no depende del
-  // checkbox de "incluir pendientes y rechazados").
-  function abrirVistaImpresionGrid() {
-    if (!inputSemana.value) {
-      alert("Elige un día dentro de la semana que quieres reportar.");
-      return;
-    }
-
-    const viernes = actualizarRangoSemana();
+  // Construye la página 2 (REPORTE NOMINA: cuadrícula semanal, viernes a
+  // jueves) de la semana elegida arriba.
+  function construirPaginaNomina(viernes, jueves, numeroSemana) {
     const diasSemana = Array.from({ length: 7 }, (_, i) => sumarDias(viernes, i));
-    const finSemana = diasSemana[6];
+    const dentroDeSemana = (fechaStr) => fechaStr >= viernes && fechaStr <= jueves;
 
-    const areaSeleccionada = selectAreaGrid.value;
-    const dentroDeSemana = (fechaStr) => fechaStr >= viernes && fechaStr <= finSemana;
-    const perteneceArea = (empleadoId) =>
-      areaSeleccionada === "todas" || (mapUsuarios.get(empleadoId)?.area || "") === areaSeleccionada;
-
-    const horasSemana = listaHoras.filter(s => s.estatus === "aprobada" && dentroDeSemana(s.fecha) && perteneceArea(s.empleadoId));
-    const faltasSemana = listaFaltas.filter(f => f.estatus === "aprobada" && dentroDeSemana(f.fecha) && perteneceArea(f.empleadoId));
-
-    if (horasSemana.length === 0 && faltasSemana.length === 0) {
-      alert("No hay horas extra ni faltas aprobadas para esa semana" +
-        (areaSeleccionada === "todas" ? "." : ` en el área "${areaSeleccionada}".`));
-      return;
-    }
+    const horasSemana = listaHoras.filter(s => s.estatus === "aprobada" && dentroDeSemana(s.fecha));
+    const faltasSemana = listaFaltas.filter(f => f.estatus === "aprobada" && dentroDeSemana(f.fecha));
 
     const porEmpleado = new Map();
     function fila(empleadoId, nombreFallback) {
@@ -478,54 +393,139 @@ function construirVista(contenedor, { esAdmin, uid }) {
     const empleados = [...porEmpleado.values()].sort((a, b) => (a.nombre || "").localeCompare(b.nombre || ""));
 
     const anio = viernes.slice(0, 4);
-    const periodoTexto = `SEMANA DEL ${formatearFechaLarga(viernes)} AL ${formatearFechaLarga(finSemana)}   AÑO ${anio}`;
-    const areaTexto = areaSeleccionada === "todas" ? "Todas" : areaSeleccionada;
+    const periodoTexto = `Del ${formatearFechaLargaCap(viernes)} al ${formatearFechaLargaCap(jueves)} ${anio}`;
+    const tituloCentro = `AUTOTRANSPORTES ALANIS, S.A. DE C.V. | REPORTE SEMANAL DE HORAS EXTRAS — SEMANA ${numeroSemana}`;
     const logoUrl = window.location.origin + "/img/logo-alanis.png";
-
     const encabezadosDia = diasSemana.map(f => `<th>${diaSemana(f)}<br>${formatearFechaCorta(f)}</th>`).join("");
 
-    const filasHtml = empleados.map(e => {
-      const celdasDias = diasSemana.map(f => {
-        const horas = e.horasPorDia[f];
-        return `<td class="centrado">${horas ? horas : "—"}</td>`;
+    const filasHtml = empleados.length === 0
+      ? `<tr><td colspan="${3 + diasSemana.length + 2}" class="centrado">Sin horas extra ni faltas aprobadas para esta semana.</td></tr>`
+      : empleados.map(e => {
+        const celdasDias = diasSemana.map(f => {
+          const horas = e.horasPorDia[f];
+          return `<td class="centrado">${horas ? horas : "—"}</td>`;
+        }).join("");
+        const totalSemana = Object.values(e.horasPorDia).reduce((acc, h) => acc + h, 0);
+        return `
+          <tr>
+            <td class="centrado">${escapeHtml(e.numeroEmpleado)}</td>
+            <td>${escapeHtml(e.nombre)}</td>
+            <td>${escapeHtml(e.puesto)}</td>
+            ${celdasDias}
+            <td class="centrado celda-total">${totalSemana}</td>
+            <td class="centrado">${e.faltas || "—"}</td>
+          </tr>
+        `;
       }).join("");
-      const totalSemana = Object.values(e.horasPorDia).reduce((acc, h) => acc + h, 0);
-      return `
-        <tr>
-          <td class="centrado">${escapeHtml(e.numeroEmpleado)}</td>
-          <td>${escapeHtml(e.nombre)}</td>
-          <td>${escapeHtml(e.puesto)}</td>
-          ${celdasDias}
-          <td class="centrado celda-total">${totalSemana}</td>
-          <td class="centrado">${e.faltas || "—"}</td>
-        </tr>
-      `;
-    }).join("");
+
+    return `
+      <div class="pagina pagina-nomina">
+        <div class="encabezado">
+          <div class="logo-caja"><img src="${logoUrl}" alt="" onerror="this.style.display='none'"></div>
+          <div class="titulo-centro">${escapeHtml(tituloCentro)}</div>
+          <div class="espaciador"></div>
+        </div>
+        <div class="periodo">${escapeHtml(periodoTexto)}</div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>No.<br>Emp.</th>
+              <th>Nombre</th>
+              <th>Puesto</th>
+              ${encabezadosDia}
+              <th>H Ext</th>
+              <th>Faltas</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filasHtml}
+          </tbody>
+        </table>
+
+        <div class="pie-nomina">
+          <div class="linea-divisoria"></div>
+          <div class="pie-nomina-contenido">
+            <div class="autorizo">
+              <div class="linea-firma"></div>
+              Autorizó: Iván Landa
+            </div>
+            <div class="meta-impresion">
+              Reporte de horas extras de la semana ${numeroSemana}<br>
+              Generado el ${formatearFechaHoraGeneracion()}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // Un solo PDF con 2 páginas: REPORTE RH (detalle por empleado) y
+  // REPORTE NOMINA (cuadrícula semanal). Solo cuenta lo ya aprobado (documento
+  // formal, no depende del checkbox de "incluir pendientes y rechazados").
+  function abrirVistaPreviaImprimir() {
+    if (!selectSemana.value) {
+      alert("Elige la semana en la sección Reportes de arriba.");
+      return;
+    }
+
+    const viernes = selectSemana.value;
+    const jueves = sumarDias(viernes, 6);
+    const numeroSemana = numeroSemanaISO(jueves);
+
+    const paginaRH = construirPaginaRH(viernes, jueves, numeroSemana);
+    const paginaNomina = construirPaginaNomina(viernes, jueves, numeroSemana);
 
     const html = `<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>Reporte semanal de horas extra (cuadrícula)</title>
+<title>Reporte de horas extras de la semana ${numeroSemana}</title>
 <style>
   @page { size: letter portrait; margin: 12mm 10mm; }
   * { box-sizing: border-box; }
-  body { font-family: Arial, Helvetica, sans-serif; color:#1a1a1a; font-size:10px; margin:0; padding:0; }
-  .hoja { margin: 0 auto; padding: 6mm; }
+  body { font-family: Arial, Helvetica, sans-serif; color:#1a1a1a; margin:0; padding:0; }
+  .pagina { padding: 6mm; }
+  .pagina-nomina { break-before: page; page-break-before: always; }
   .encabezado { display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #1a1a1a; padding-bottom:6px; margin-bottom:6px; }
   .logo-caja { width:110px; height:50px; display:flex; align-items:center; justify-content:center; }
   .logo-caja img { max-width:110px; max-height:50px; }
-  .empresa-area { flex:1; display:flex; justify-content:space-between; align-items:center; padding-left:12px; font-weight:bold; font-size:11px; }
+  .empresa-area { flex:1; padding-left:12px; font-weight:bold; font-size:12px; }
   .titulo-reporte { text-align:center; font-weight:bold; font-size:13px; letter-spacing:.5px; margin:8px 0 4px; }
-  .periodo { text-align:center; font-size:10.5px; margin-bottom:12px; }
-  table { width:100%; border-collapse:collapse; }
-  th, td { border:1px solid #1a1a1a; padding:3px 4px; font-size:9px; }
-  th { background:#f7f8fa; font-weight:bold; text-align:center; }
+  .periodo { text-align:center; font-size:11px; margin-bottom:14px; }
   .centrado { text-align:center; }
-  .celda-total { font-weight:bold; background:#f2f4f7; }
-  .pie { margin-top:26px; }
-  .autorizo { text-align:center; font-size:10.5px; margin:0 auto; width:220px; }
-  .linea-firma { border-top:1px solid #1a1a1a; margin-bottom:4px; padding-top:22px; }
+  .pie { margin-top:22px; }
+  .linea-firma { border-top:1px solid #1a1a1a; margin-bottom:4px; padding-top:20px; }
+  .sin-datos { text-align:center; color:#666; margin-top:20px; }
+
+  .pagina-rh { max-width: 190mm; margin: 0 auto; font-size:11px; }
+  .pagina-rh table { width:100%; border-collapse:collapse; }
+  .pagina-rh .segmento-empleado { break-inside: avoid; margin-bottom:10px; }
+  .pagina-rh .tabla-encabezado-empleado td { border:1px solid #1a1a1a; font-weight:bold; font-size:11px; padding:3px 6px; background:#eef1f4; }
+  .pagina-rh .celda-nombre-empleado { width:65%; }
+  .pagina-rh .celda-puesto-empleado { width:35%; }
+  .pagina-rh .tabla-horas th, .pagina-rh .tabla-horas td { border:1px solid #1a1a1a; padding:3px 6px; font-size:10.5px; }
+  .pagina-rh .tabla-horas th { background:#f7f8fa; font-weight:bold; text-align:center; }
+  .pagina-rh .firmas { display:flex; justify-content:space-between; margin-top:26px; }
+  .pagina-rh .firma { width:45%; text-align:center; font-size:10.5px; }
+  .pagina-rh .nota-pie { font-size:9.5px; margin-top:16px; }
+  .pagina-rh .codigo-formato { display:flex; justify-content:space-between; font-size:9.5px; margin-top:6px; border-top:1px solid #999; padding-top:4px; }
+
+  .pagina-nomina { font-size:10px; }
+  .pagina-nomina table { width:100%; border-collapse:collapse; }
+  .pagina-nomina th, .pagina-nomina td { border:1px solid #1a1a1a; padding:3px 4px; font-size:9px; }
+  .pagina-nomina th { background:#f7f8fa; font-weight:bold; text-align:center; }
+  .pagina-nomina .celda-total { font-weight:bold; background:#f2f4f7; }
+  .pagina-nomina .encabezado { border-bottom:1px solid #1a1a1a; }
+  .pagina-nomina .titulo-centro { flex:1; text-align:center; font-weight:bold; font-size:12px; padding:0 10px; }
+  .pagina-nomina .espaciador { width:110px; }
+  .pagina-nomina .periodo { margin-bottom:10px; }
+  .pagina-nomina .pie-nomina { margin-top:22px; }
+  .pagina-nomina .linea-divisoria { border-top:1px solid #1a1a1a; padding-top:8px; }
+  .pagina-nomina .pie-nomina-contenido { display:flex; justify-content:space-between; align-items:flex-end; }
+  .pagina-nomina .autorizo { text-align:left; font-size:10.5px; width:220px; }
+  .pagina-nomina .meta-impresion { font-size:8.5px; color:#555; text-align:right; line-height:1.4; }
+
   .barra-imprimir { text-align:center; margin:14px 0; }
   .barra-imprimir button { padding:8px 18px; font-size:13px; cursor:pointer; }
   @media print { .barra-imprimir { display:none; } }
@@ -533,40 +533,8 @@ function construirVista(contenedor, { esAdmin, uid }) {
 </head>
 <body>
   <div class="barra-imprimir"><button onclick="window.print()">Imprimir / Guardar como PDF</button></div>
-  <div class="hoja">
-    <div class="encabezado">
-      <div class="logo-caja"><img src="${logoUrl}" alt="" onerror="this.style.display='none'"></div>
-      <div class="empresa-area">
-        <span>AUTO TRANSPORTES ALANIS, SA DE CV</span>
-        <span>AREA&nbsp;&nbsp;${escapeHtml(areaTexto)}</span>
-      </div>
-    </div>
-    <div class="titulo-reporte">REPORTE SEMANAL DE HORAS EXTRAS</div>
-    <div class="periodo">${escapeHtml(periodoTexto)}</div>
-
-    <table>
-      <thead>
-        <tr>
-          <th>No.<br>Emp.</th>
-          <th>Nombre</th>
-          <th>Puesto</th>
-          ${encabezadosDia}
-          <th>H Ext</th>
-          <th>Faltas</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${filasHtml}
-      </tbody>
-    </table>
-
-    <div class="pie">
-      <div class="autorizo">
-        <div class="linea-firma"></div>
-        Autorizó: Iván Landa
-      </div>
-    </div>
-  </div>
+  ${paginaRH}
+  ${paginaNomina}
 </body>
 </html>`;
 
