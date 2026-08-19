@@ -348,11 +348,11 @@ function construirVista(contenedor, { esAdmin, uid }) {
         ${segmentosHtml}
 
         <div class="pie">
-          <div class="pie-empresa">AUTOTRANSPORTES ALANIS, S.A. DE C.V.</div>
           <div class="firmas">
-            <div class="firma"><div class="linea-firma"></div>Iván Landa<br>Autorización</div>
-            <div class="firma"><div class="linea-firma"></div>Firma del Depto. de Nóminas<br>Revisión</div>
+            <div class="firma">Iván Landa<br>Autorización</div>
+            <div class="firma">Firma del Depto. de Nóminas<br>Revisión</div>
           </div>
+          <div class="pie-empresa">AUTOTRANSPORTES ALANIS, S.A. DE C.V.</div>
           <div class="codigo-formato"><span>ATAF082</span><span>Rev. 0&nbsp;&nbsp;&nbsp;05/02/2024</span></div>
         </div>
       </div>
@@ -445,17 +445,14 @@ function construirVista(contenedor, { esAdmin, uid }) {
         </table>
 
         <div class="pie-nomina">
-          <div class="pie-empresa">AUTOTRANSPORTES ALANIS, S.A. DE C.V.</div>
           <div class="pie-nomina-contenido">
-            <div class="autorizo">
-              <div class="linea-firma"></div>
-              Autorizó: Iván Landa
-            </div>
+            <div class="autorizo">Autorizó: Iván Landa</div>
             <div class="meta-impresion">
               Reporte de horas extras de la semana ${numeroSemana}<br>
               Generado el ${formatearFechaHoraGeneracion()}
             </div>
           </div>
+          <div class="pie-empresa">AUTOTRANSPORTES ALANIS, S.A. DE C.V.</div>
         </div>
       </div>
     `;
@@ -496,7 +493,6 @@ function construirVista(contenedor, { esAdmin, uid }) {
   .periodo { text-align:center; font-size:11px; margin-bottom:14px; }
   .centrado { text-align:center; }
   .pie { margin-top:auto; padding-top:16px; }
-  .linea-firma { border-top:1px solid #1a1a1a; margin-bottom:4px; padding-top:20px; }
   .sin-datos { text-align:center; color:#666; margin-top:20px; }
 
   .pagina-rh { max-width: 190mm; margin: 0 auto; font-size:11px; display:flex; flex-direction:column; min-height:100vh; }
@@ -507,10 +503,10 @@ function construirVista(contenedor, { esAdmin, uid }) {
   .pagina-rh .celda-puesto-empleado { width:35%; }
   .pagina-rh .tabla-horas th, .pagina-rh .tabla-horas td { border:1px solid #1a1a1a; padding:3px 6px; font-size:10.5px; }
   .pagina-rh .tabla-horas th { background:#f7f8fa; font-weight:bold; text-align:center; }
-  .pagina-rh .pie-empresa { text-align:center; font-weight:bold; font-size:10px; margin-bottom:8px; }
-  .pagina-rh .firmas { display:flex; justify-content:space-between; margin-top:14px; }
+  .pagina-rh .firmas { display:flex; justify-content:space-between; margin-top:20px; }
   .pagina-rh .firma { width:45%; text-align:center; font-size:10.5px; }
-  .pagina-rh .codigo-formato { display:flex; justify-content:space-between; font-size:9.5px; margin-top:6px; border-top:1px solid #999; padding-top:4px; }
+  .pagina-rh .pie-empresa { text-align:center; font-weight:bold; font-size:10px; margin:16px 0 6px; }
+  .pagina-rh .codigo-formato { display:flex; justify-content:space-between; font-size:9.5px; margin-top:6px; padding-top:4px; }
 
   .pagina-nomina { font-size:10px; display:flex; flex-direction:column; min-height:100vh; }
   .pagina-nomina table { width:100%; border-collapse:collapse; }
@@ -520,9 +516,9 @@ function construirVista(contenedor, { esAdmin, uid }) {
   .pagina-nomina .encabezado { border-bottom:1px solid #1a1a1a; }
   .pagina-nomina .periodo { margin-bottom:10px; }
   .pagina-nomina .pie-nomina { margin-top:auto; padding-top:16px; }
-  .pagina-nomina .pie-empresa { text-align:center; font-weight:bold; font-size:10px; margin-bottom:8px; }
+  .pagina-nomina .pie-empresa { text-align:center; font-weight:bold; font-size:10px; margin-top:12px; }
   .pagina-nomina .pie-nomina-contenido { display:flex; justify-content:space-between; align-items:flex-end; }
-  .pagina-nomina .autorizo { text-align:left; font-size:10.5px; width:220px; }
+  .pagina-nomina .autorizo { text-align:left; font-size:10.5px; width:220px; padding-top:6px; }
   .pagina-nomina .meta-impresion { font-size:8.5px; color:#555; text-align:right; line-height:1.4; }
 
   .barra-imprimir { text-align:center; margin:14px 0; }
