@@ -303,6 +303,8 @@ main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100
 .tabla-horario th, .tabla-horario td { padding: 6px 8px; }
 .tabla-horario input[type="time"] { width: 100%; padding: 5px; font-size: 0.85rem; border: 1px solid #ccc; border-radius: 6px; }
 .tabla-horario input[type="time"]:disabled { background: #f2f0ec; color: #999; }
+.tabla-horario input[type="number"].input-comida-dia { width: 64px; padding: 5px; font-size: 0.85rem; border: 1px solid #ccc; border-radius: 6px; text-align: center; }
+.tabla-horario input[type="number"].input-comida-dia:disabled { background: #f2f0ec; color: #999; }
 .tabla-horario .centrado { text-align: center; }
 .tabla-horario tfoot td { border-bottom: none; border-top: 2px solid #2c1e0f; padding-top: 10px; }
 .tabla-horario .total-horas-label { text-align: right; font-weight: bold; }

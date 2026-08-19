@@ -28,8 +28,8 @@ const NOMBRES_DIA = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Vier
 function horarioSemanalPorDefault(diaDescansoActual) {
   return NOMBRES_DIA.map((_, i) => (
     i === diaDescansoActual
-      ? { descanso: true, horaInicio: "", horaFin: "" }
-      : { descanso: false, horaInicio: "08:00", horaFin: "17:00" }
+      ? { descanso: true, horaInicio: "", horaFin: "", comida: 0 }
+      : { descanso: false, horaInicio: "08:00", horaFin: "17:00", comida: 1 }
   ));
 }
 
@@ -41,7 +41,8 @@ function normalizarHorarioSemanal(u) {
     return u.horarioSemanal.map(dia => ({
       descanso: !!(dia && dia.descanso),
       horaInicio: (dia && dia.horaInicio) || "",
-      horaFin: (dia && dia.horaFin) || ""
+      horaFin: (dia && dia.horaFin) || "",
+      comida: Number(dia && dia.comida) || 0
     }));
   }
   return horarioSemanalPorDefault(u.diaDescanso ?? 0);
@@ -57,9 +58,16 @@ function calcularHorasDia(horaInicio, horaFin) {
   return minutos / 60;
 }
 
+// Horas netas del día: el turno completo menos el tiempo de comida (que no
+// se paga/labora). Nunca baja de 0, por si capturan una comida más larga
+// que el propio turno.
+function calcularHorasNetasDia(horaInicio, horaFin, comida) {
+  return Math.max(0, calcularHorasDia(horaInicio, horaFin) - (Number(comida) || 0));
+}
+
 function calcularHorasSemanales(horarioSemanal) {
   return horarioSemanal.reduce(
-    (acc, dia) => acc + (dia.descanso ? 0 : calcularHorasDia(dia.horaInicio, dia.horaFin)),
+    (acc, dia) => acc + (dia.descanso ? 0 : calcularHorasNetasDia(dia.horaInicio, dia.horaFin, dia.comida)),
     0
   );
 }
@@ -71,7 +79,8 @@ function filasHorarioSemanal(horarioSemanal) {
       <td class="centrado"><input type="checkbox" class="chk-descanso-dia" ${dia.descanso ? "checked" : ""}></td>
       <td><input type="time" class="input-hora-inicio-dia" value="${dia.horaInicio || ""}" ${dia.descanso ? "disabled" : ""}></td>
       <td><input type="time" class="input-hora-fin-dia" value="${dia.horaFin || ""}" ${dia.descanso ? "disabled" : ""}></td>
-      <td class="centrado horas-dia-valor">${dia.descanso ? "—" : calcularHorasDia(dia.horaInicio, dia.horaFin).toFixed(2)}</td>
+      <td><input type="number" min="0" step="0.25" class="input-comida-dia" value="${dia.comida || 0}" ${dia.descanso ? "disabled" : ""}></td>
+      <td class="centrado horas-dia-valor">${dia.descanso ? "—" : calcularHorasNetasDia(dia.horaInicio, dia.horaFin, dia.comida).toFixed(2)}</td>
     </tr>
   `).join("");
 }
@@ -385,6 +394,15 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
         </div>
 
         <div class="modal-fila">
+          <label>Área
+            <select id="modal-area">${opcionesArea(u.area)}</select>
+          </label>
+          <label>Puesto
+            <select id="modal-puesto">${opcionesPuesto(u.area, u.puesto)}</select>
+          </label>
+        </div>
+
+        <div class="modal-fila">
           <label>Fecha de ingreso
             <input type="date" id="modal-fecha-ingreso" value="${u.fechaIngreso || ""}">
           </label>
@@ -400,28 +418,19 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
           <div class="tabla-wrap">
             <table class="tabla tabla-horario">
               <thead>
-                <tr><th>Día</th><th>Descanso</th><th>Entrada</th><th>Salida</th><th>Horas</th></tr>
+                <tr><th>Día</th><th>Descanso</th><th>Entrada</th><th>Salida</th><th>Comida (hrs)</th><th>Horas</th></tr>
               </thead>
               <tbody id="tbody-horario-semanal">
                 ${filasHorarioSemanal(horarioSemanal)}
               </tbody>
               <tfoot>
                 <tr>
-                  <td colspan="4" class="total-horas-label">Total horas laboradas / semana</td>
+                  <td colspan="5" class="total-horas-label">Total horas laboradas / semana</td>
                   <td id="total-horas-semana" class="total-horas-valor">${calcularHorasSemanales(horarioSemanal).toFixed(2)}</td>
                 </tr>
               </tfoot>
             </table>
           </div>
-        </div>
-
-        <div class="modal-fila">
-          <label>Área
-            <select id="modal-area">${opcionesArea(u.area)}</select>
-          </label>
-          <label>Puesto
-            <select id="modal-puesto">${opcionesPuesto(u.area, u.puesto)}</select>
-          </label>
         </div>
 
         <div class="modal-acciones">
@@ -449,13 +458,14 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
     const totalHorasSpan = overlay.querySelector("#total-horas-semana");
 
     // Cada fila del horario semanal se recalcula sola: si el día está
-    // marcado como descanso se deshabilitan sus horas, si no, se suman al
-    // total de abajo en cuanto cambie cualquier hora.
+    // marcado como descanso se deshabilitan sus horas y su comida, si no,
+    // se suman al total de abajo (turno menos comida) en cuanto cambie algo.
     function leerFilaHorario(fila) {
       const descanso = fila.querySelector(".chk-descanso-dia").checked;
       const horaInicio = fila.querySelector(".input-hora-inicio-dia").value;
       const horaFin = fila.querySelector(".input-hora-fin-dia").value;
-      return { descanso, horaInicio, horaFin };
+      const comida = Number(fila.querySelector(".input-comida-dia").value) || 0;
+      return { descanso, horaInicio, horaFin, comida };
     }
 
     function leerHorarioSemanalDelForm() {
@@ -465,12 +475,14 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
     function actualizarFilaHorario(fila) {
       const inputInicio = fila.querySelector(".input-hora-inicio-dia");
       const inputFin = fila.querySelector(".input-hora-fin-dia");
+      const inputComida = fila.querySelector(".input-comida-dia");
       const celdaHoras = fila.querySelector(".horas-dia-valor");
-      const { descanso, horaInicio, horaFin } = leerFilaHorario(fila);
+      const { descanso, horaInicio, horaFin, comida } = leerFilaHorario(fila);
 
       inputInicio.disabled = descanso;
       inputFin.disabled = descanso;
-      celdaHoras.textContent = descanso ? "—" : calcularHorasDia(horaInicio, horaFin).toFixed(2);
+      inputComida.disabled = descanso;
+      celdaHoras.textContent = descanso ? "—" : calcularHorasNetasDia(horaInicio, horaFin, comida).toFixed(2);
     }
 
     function actualizarTotalHorasSemana() {
@@ -482,7 +494,7 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
         actualizarFilaHorario(fila);
         actualizarTotalHorasSemana();
       });
-      fila.querySelectorAll("input[type='time']").forEach(input => {
+      fila.querySelectorAll("input[type='time'], .input-comida-dia").forEach(input => {
         input.addEventListener("input", () => {
           actualizarFilaHorario(fila);
           actualizarTotalHorasSemana();
@@ -560,7 +572,7 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
       const filasHorario = [...tbodyHorario.querySelectorAll("tr[data-dia]")];
       let horarioValido = true;
       const horarioSemanalNuevo = filasHorario.map(fila => {
-        const { descanso, horaInicio, horaFin } = leerFilaHorario(fila);
+        const { descanso, horaInicio, horaFin, comida } = leerFilaHorario(fila);
         const inputInicio = fila.querySelector(".input-hora-inicio-dia");
         const inputFin = fila.querySelector(".input-hora-fin-dia");
         const incompleto = !descanso && (!horaInicio || !horaFin);
@@ -568,8 +580,8 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
         inputFin.classList.toggle("campo-vacio", incompleto && !horaFin);
         if (incompleto) horarioValido = false;
         return descanso
-          ? { descanso: true, horaInicio: "", horaFin: "" }
-          : { descanso: false, horaInicio, horaFin };
+          ? { descanso: true, horaInicio: "", horaFin: "", comida: 0 }
+          : { descanso: false, horaInicio, horaFin, comida };
       });
 
       if (!horarioValido) {
