@@ -52,6 +52,22 @@ function mostrarVista(vista) {
   vista.classList.remove("oculto");
 }
 
+// Supervisores y admins también son empleados: además de revisar/aprobar las
+// solicitudes de su equipo, necesitan poder capturar las suyas propias (por
+// ejemplo, sus propias horas extra o vacaciones). Esta función dibuja las dos
+// cosas en la misma pestaña: primero la vista de revisión que ya tenían,
+// después su propio formulario de captura.
+function renderEquipoYPropia(contenedor, dibujarEquipo, dibujarPropia) {
+  const equipoDiv = document.createElement("div");
+  const propiaDiv = document.createElement("div");
+  propiaDiv.style.marginTop = "20px";
+  contenedor.innerHTML = "";
+  contenedor.appendChild(equipoDiv);
+  contenedor.appendChild(propiaDiv);
+  dibujarEquipo(equipoDiv);
+  dibujarPropia(propiaDiv);
+}
+
 linkIrRegistro?.addEventListener("click", (e) => {
   e.preventDefault();
   errorLogin.textContent = "";
@@ -201,8 +217,14 @@ onAuthStateChanged(auth, async (user) => {
   if (datosUsuario.rol === "admin") {
     iniciarNavegacion("admin", {
       panel: (c) => iniciarPanelResumenAdmin(c),
-      solicitudes: (c) => iniciarGestionSolicitudes(c, user.uid, datosUsuario.nombre),
-      vacaciones: (c) => iniciarGestionVacaciones(c, user.uid, datosUsuario.nombre),
+      solicitudes: (c) => renderEquipoYPropia(c,
+        (d) => iniciarGestionSolicitudes(d, user.uid, datosUsuario.nombre),
+        (d) => iniciarVistaEmpleado(d, datosUsuario, user.uid)
+      ),
+      vacaciones: (c) => renderEquipoYPropia(c,
+        (d) => iniciarGestionVacaciones(d, user.uid, datosUsuario.nombre),
+        (d) => iniciarVistaVacacionesEmpleado(d, datosUsuario, user.uid)
+      ),
       faltas: (c) => iniciarGestionFaltas(c, user.uid, datosUsuario.nombre),
       catalogo: (c) => iniciarPanelAdmin(c, user.uid),
       reportes: (c) => iniciarReportesAdmin(c),
@@ -233,8 +255,14 @@ onAuthStateChanged(auth, async (user) => {
   } else if (datosUsuario.rol === "supervisor") {
     iniciarNavegacion("supervisor", {
       panel: (c) => iniciarPanelResumenSupervisor(c, user.uid),
-      solicitudes: (c) => iniciarVistaSupervisor(c, user.uid, datosUsuario.nombre),
-      vacaciones: (c) => iniciarVistaSupervisorVacaciones(c, user.uid, datosUsuario.nombre),
+      solicitudes: (c) => renderEquipoYPropia(c,
+        (d) => iniciarVistaSupervisor(d, user.uid, datosUsuario.nombre),
+        (d) => iniciarVistaEmpleado(d, datosUsuario, user.uid)
+      ),
+      vacaciones: (c) => renderEquipoYPropia(c,
+        (d) => iniciarVistaSupervisorVacaciones(d, user.uid, datosUsuario.nombre),
+        (d) => iniciarVistaVacacionesEmpleado(d, datosUsuario, user.uid)
+      ),
       faltas: (c) => iniciarVistaSupervisorFaltas(c, user.uid, datosUsuario.nombre),
       equipo: (c) => iniciarMiEquipo(c, user.uid),
       reportes: (c) => iniciarReportesSupervisor(c, user.uid)
