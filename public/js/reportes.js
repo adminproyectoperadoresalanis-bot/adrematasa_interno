@@ -31,6 +31,28 @@ function formatearHora12(horaStr) {
   return `${h12}:${String(m || 0).padStart(2, "0")} ${periodo}`;
 }
 
+const DIAS_ABREV = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+
+function calcularSemanaLaboral(fechaStr) {
+  // Semana laboral Alanis: viernes a jueves. Devuelve la fecha (yyyy-mm-dd) del viernes de esa semana.
+  const d = new Date(fechaStr + "T00:00:00");
+  const dow = d.getDay();
+  const diffDias = (dow - 5 + 7) % 7;
+  d.setDate(d.getDate() - diffDias);
+  return d.toISOString().slice(0, 10);
+}
+
+function sumarDias(fechaStr, n) {
+  const d = new Date(fechaStr + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function diaSemana(fechaStr) {
+  const d = new Date(fechaStr + "T00:00:00");
+  return DIAS_ABREV[d.getDay()];
+}
+
 function construirVista(contenedor, { esAdmin, uid }) {
   contenedor.innerHTML = `
     <section class="panel">
@@ -84,6 +106,27 @@ function construirVista(contenedor, { esAdmin, uid }) {
         <button type="button" class="secundario" id="btn-imprimir-detalle">Vista previa / Imprimir</button>
       </div>
     </section>
+
+    <section class="panel" style="margin-top:20px;">
+      <h2>Reporte semanal de horas extra (cuadrícula)</h2>
+      <p class="nota">
+        Formato imprimible por semana laboral (viernes a jueves): una fila por empleado con No. de empleado, nombre,
+        puesto, horas extra de cada día de la semana, el total semanal y las faltas de esa semana.
+        Solo cuenta lo ya aprobado.
+      </p>
+      <div class="fila-captura">
+        <label>Semana (elige cualquier día de esa semana)
+          <input type="date" id="rep-semana">
+        </label>
+        <label>Área
+          <select id="rep-area-grid"><option value="todas">Todas las áreas</option></select>
+        </label>
+        <span class="nota" id="rep-semana-rango"></span>
+      </div>
+      <div class="acciones-form">
+        <button type="button" class="secundario" id="btn-imprimir-grid">Vista previa / Imprimir</button>
+      </div>
+    </section>
   `;
 
   const inputDesde = contenedor.querySelector("#rep-desde");
@@ -92,6 +135,10 @@ function construirVista(contenedor, { esAdmin, uid }) {
   const tbodyResumen = contenedor.querySelector("#tbody-rep-resumen");
   const selectArea = contenedor.querySelector("#rep-area");
   const btnImprimirDetalle = contenedor.querySelector("#btn-imprimir-detalle");
+  const inputSemana = contenedor.querySelector("#rep-semana");
+  const selectAreaGrid = contenedor.querySelector("#rep-area-grid");
+  const spanSemanaRango = contenedor.querySelector("#rep-semana-rango");
+  const btnImprimirGrid = contenedor.querySelector("#btn-imprimir-grid");
 
   let listaHoras = [];
   let listaVacaciones = [];
@@ -129,13 +176,28 @@ function construirVista(contenedor, { esAdmin, uid }) {
     snap.docs.forEach(d => mapUsuarios.set(d.id, d.data()));
   });
   suscribirEstructura((areas) => {
-    const areaElegida = selectArea.value;
-    selectArea.innerHTML = `<option value="todas">Todas las áreas</option>` +
-      areas.map(a => `<option value="${escapeHtml(a.nombre)}">${escapeHtml(a.nombre)}</option>`).join("");
-    if ([...selectArea.options].some(o => o.value === areaElegida)) selectArea.value = areaElegida;
+    [selectArea, selectAreaGrid].forEach(sel => {
+      const areaElegida = sel.value;
+      sel.innerHTML = `<option value="todas">Todas las áreas</option>` +
+        areas.map(a => `<option value="${escapeHtml(a.nombre)}">${escapeHtml(a.nombre)}</option>`).join("");
+      if ([...sel.options].some(o => o.value === areaElegida)) sel.value = areaElegida;
+    });
   });
 
   [inputDesde, inputHasta, chkIncluirTodo].forEach(el => el.addEventListener("change", renderTodo));
+
+  inputSemana.addEventListener("change", actualizarRangoSemana);
+
+  function actualizarRangoSemana() {
+    if (!inputSemana.value) {
+      spanSemanaRango.textContent = "";
+      return null;
+    }
+    const viernes = calcularSemanaLaboral(inputSemana.value);
+    const jueves = sumarDias(viernes, 6);
+    spanSemanaRango.textContent = `Semana del ${formatearFechaLarga(viernes)} al ${formatearFechaLarga(jueves)}`;
+    return viernes;
+  }
 
   function dentroDeRango(fechaStr) {
     if (!fechaStr) return false;
@@ -345,6 +407,164 @@ function construirVista(contenedor, { esAdmin, uid }) {
       </div>
       <div class="nota-pie">* Horario de las Extras: Se refiere a indicar entre que horas se dieron las extras, es decir de que hora a que hora.</div>
       <div class="codigo-formato"><span>ATAF082</span><span>Rev. 0&nbsp;&nbsp;&nbsp;05/02/2024</span></div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    const ventana = window.open("", "_blank");
+    if (!ventana) {
+      alert("El navegador bloqueó la ventana emergente. Habilita ventanas emergentes para este sitio e intenta de nuevo.");
+      return;
+    }
+    ventana.document.write(html);
+    ventana.document.close();
+  }
+
+  btnImprimirGrid.addEventListener("click", abrirVistaImpresionGrid);
+
+  // Reporte imprimible "Reporte semanal de horas extras" en cuadrícula — una
+  // fila por empleado con No. de empleado, nombre, puesto, horas extra de
+  // cada día de la semana laboral (viernes a jueves), total semanal y
+  // faltas. Solo cuenta lo ya aprobado (documento formal, no depende del
+  // checkbox de "incluir pendientes y rechazados").
+  function abrirVistaImpresionGrid() {
+    if (!inputSemana.value) {
+      alert("Elige un día dentro de la semana que quieres reportar.");
+      return;
+    }
+
+    const viernes = actualizarRangoSemana();
+    const diasSemana = Array.from({ length: 7 }, (_, i) => sumarDias(viernes, i));
+    const finSemana = diasSemana[6];
+
+    const areaSeleccionada = selectAreaGrid.value;
+    const dentroDeSemana = (fechaStr) => fechaStr >= viernes && fechaStr <= finSemana;
+    const perteneceArea = (empleadoId) =>
+      areaSeleccionada === "todas" || (mapUsuarios.get(empleadoId)?.area || "") === areaSeleccionada;
+
+    const horasSemana = listaHoras.filter(s => s.estatus === "aprobada" && dentroDeSemana(s.fecha) && perteneceArea(s.empleadoId));
+    const faltasSemana = listaFaltas.filter(f => f.estatus === "aprobada" && dentroDeSemana(f.fecha) && perteneceArea(f.empleadoId));
+
+    if (horasSemana.length === 0 && faltasSemana.length === 0) {
+      alert("No hay horas extra ni faltas aprobadas para esa semana" +
+        (areaSeleccionada === "todas" ? "." : ` en el área "${areaSeleccionada}".`));
+      return;
+    }
+
+    const porEmpleado = new Map();
+    function fila(empleadoId, nombreFallback) {
+      if (!porEmpleado.has(empleadoId)) {
+        const datosUsuario = mapUsuarios.get(empleadoId) || {};
+        porEmpleado.set(empleadoId, {
+          numeroEmpleado: datosUsuario.numeroEmpleado || "—",
+          nombre: nombreFallback || datosUsuario.nombre || "",
+          puesto: datosUsuario.puesto || "—",
+          horasPorDia: {},
+          faltas: 0
+        });
+      }
+      return porEmpleado.get(empleadoId);
+    }
+    horasSemana.forEach(s => {
+      const e = fila(s.empleadoId, s.empleadoNombre);
+      e.horasPorDia[s.fecha] = (e.horasPorDia[s.fecha] || 0) + (Number(s.horas) || 0);
+    });
+    faltasSemana.forEach(f => {
+      const e = fila(f.empleadoId, f.empleadoNombre);
+      e.faltas += 1;
+    });
+
+    const empleados = [...porEmpleado.values()].sort((a, b) => (a.nombre || "").localeCompare(b.nombre || ""));
+
+    const anio = viernes.slice(0, 4);
+    const periodoTexto = `SEMANA DEL ${formatearFechaLarga(viernes)} AL ${formatearFechaLarga(finSemana)}   AÑO ${anio}`;
+    const areaTexto = areaSeleccionada === "todas" ? "Todas" : areaSeleccionada;
+    const logoUrl = window.location.origin + "/img/logo-alanis.png";
+
+    const encabezadosDia = diasSemana.map(f => `<th>${diaSemana(f)}<br>${formatearFechaCorta(f)}</th>`).join("");
+
+    const filasHtml = empleados.map(e => {
+      const celdasDias = diasSemana.map(f => {
+        const horas = e.horasPorDia[f];
+        return `<td class="centrado">${horas ? horas : "—"}</td>`;
+      }).join("");
+      const totalSemana = Object.values(e.horasPorDia).reduce((acc, h) => acc + h, 0);
+      return `
+        <tr>
+          <td class="centrado">${escapeHtml(e.numeroEmpleado)}</td>
+          <td>${escapeHtml(e.nombre)}</td>
+          <td>${escapeHtml(e.puesto)}</td>
+          ${celdasDias}
+          <td class="centrado celda-total">${totalSemana}</td>
+          <td class="centrado">${e.faltas || "—"}</td>
+        </tr>
+      `;
+    }).join("");
+
+    const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Reporte semanal de horas extra (cuadrícula)</title>
+<style>
+  @page { size: letter portrait; margin: 12mm 10mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; color:#1a1a1a; font-size:10px; margin:0; padding:0; }
+  .hoja { margin: 0 auto; padding: 6mm; }
+  .encabezado { display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #1a1a1a; padding-bottom:6px; margin-bottom:6px; }
+  .logo-caja { width:110px; height:50px; display:flex; align-items:center; justify-content:center; }
+  .logo-caja img { max-width:110px; max-height:50px; }
+  .empresa-area { flex:1; display:flex; justify-content:space-between; align-items:center; padding-left:12px; font-weight:bold; font-size:11px; }
+  .titulo-reporte { text-align:center; font-weight:bold; font-size:13px; letter-spacing:.5px; margin:8px 0 4px; }
+  .periodo { text-align:center; font-size:10.5px; margin-bottom:12px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { border:1px solid #1a1a1a; padding:3px 4px; font-size:9px; }
+  th { background:#f7f8fa; font-weight:bold; text-align:center; }
+  .centrado { text-align:center; }
+  .celda-total { font-weight:bold; background:#f2f4f7; }
+  .pie { margin-top:26px; }
+  .autorizo { text-align:center; font-size:10.5px; margin:0 auto; width:220px; }
+  .linea-firma { border-top:1px solid #1a1a1a; margin-bottom:4px; padding-top:22px; }
+  .barra-imprimir { text-align:center; margin:14px 0; }
+  .barra-imprimir button { padding:8px 18px; font-size:13px; cursor:pointer; }
+  @media print { .barra-imprimir { display:none; } }
+</style>
+</head>
+<body>
+  <div class="barra-imprimir"><button onclick="window.print()">Imprimir / Guardar como PDF</button></div>
+  <div class="hoja">
+    <div class="encabezado">
+      <div class="logo-caja"><img src="${logoUrl}" alt="" onerror="this.style.display='none'"></div>
+      <div class="empresa-area">
+        <span>AUTO TRANSPORTES ALANIS, SA DE CV</span>
+        <span>AREA&nbsp;&nbsp;${escapeHtml(areaTexto)}</span>
+      </div>
+    </div>
+    <div class="titulo-reporte">REPORTE SEMANAL DE HORAS EXTRAS</div>
+    <div class="periodo">${escapeHtml(periodoTexto)}</div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>No.<br>Emp.</th>
+          <th>Nombre</th>
+          <th>Puesto</th>
+          ${encabezadosDia}
+          <th>H Ext</th>
+          <th>Faltas</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${filasHtml}
+      </tbody>
+    </table>
+
+    <div class="pie">
+      <div class="autorizo">
+        <div class="linea-firma"></div>
+        Autorizó: Iván Landa
+      </div>
     </div>
   </div>
 </body>
