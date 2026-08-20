@@ -366,7 +366,8 @@ function construirVista(contenedor, { esAdmin, uid }) {
     try {
       const {
         Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
-        WidthType, HeadingLevel, AlignmentType, PageOrientation, ShadingType
+        WidthType, HeadingLevel, AlignmentType, PageOrientation, ShadingType,
+        Footer, PageNumber, TabStopType, Tab
       } = await import("https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.mjs");
 
       // Se calcula el horario y el total de cada quien primero, para poder
@@ -385,25 +386,28 @@ function construirVista(contenedor, { esAdmin, uid }) {
         return;
       }
 
-      function celdaTexto(texto, { bold = false, italics = false, tamano = 20, color, centrado = true } = {}) {
+      // Todo el texto de la tabla va en Calibri 8pt (tamaño en docx se mide
+      // en medios-puntos: 16 = 8pt) — es lo único a lo que aplica esta
+      // fuente/tamaño, el título y el pie de página usan la suya propia.
+      function celdaTexto(texto, { bold = false, italics = false, color, centrado = true } = {}) {
         return new Paragraph({
           alignment: centrado ? AlignmentType.CENTER : AlignmentType.LEFT,
-          children: [new TextRun({ text: texto, bold, italics, size: tamano, color })]
+          children: [new TextRun({ text: texto, bold, italics, color, font: "Calibri", size: 16 })]
         });
       }
 
       function celdaDia(dia) {
         if (!dia || dia.descanso) {
           return new TableCell({
-            children: [celdaTexto("Descanso", { italics: true, tamano: 18 })]
+            children: [celdaTexto("Descanso", { italics: true })]
           });
         }
         const horasNetas = calcularHorasNetasDia(dia.horaInicio, dia.horaFin, dia.comida);
         return new TableCell({
           children: [
-            celdaTexto(`${dia.horaInicio}–${dia.horaFin}`, { bold: true, tamano: 18 }),
-            celdaTexto(`${horasNetas.toFixed(2)} hrs trabajadas`, { tamano: 16 }),
-            celdaTexto(`${dia.comida || 0} hrs comida`, { tamano: 16 })
+            celdaTexto(`${dia.horaInicio}–${dia.horaFin}`, { bold: true }),
+            celdaTexto(`${horasNetas.toFixed(2)} hrs trabajadas`),
+            celdaTexto(`${dia.comida || 0} hrs comida`)
           ]
         });
       }
@@ -415,7 +419,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
         children: encabezados.map((txt, i) => new TableCell({
           width: { size: anchosColumna[i], type: WidthType.PERCENTAGE },
           shading: { type: ShadingType.SOLID, color: "2C1E0F" },
-          children: [celdaTexto(txt, { bold: true, color: "FFFFFF", tamano: 18 })]
+          children: [celdaTexto(txt, { bold: true, color: "FFFFFF" })]
         }))
       });
 
@@ -425,16 +429,16 @@ function construirVista(contenedor, { esAdmin, uid }) {
           children: [
             new TableCell({
               width: { size: anchosColumna[0], type: WidthType.PERCENTAGE },
-              children: [celdaTexto(`${numeroTexto} - ${u.nombre || ""}`, { bold: true, centrado: false, tamano: 20 })]
+              children: [celdaTexto(`${numeroTexto} - ${u.nombre || ""}`, { bold: true, centrado: false })]
             }),
             ...ORDEN_COLUMNAS_DIA.map(i => celdaDia(u.horario[i])),
             new TableCell({
               width: { size: anchosColumna[8], type: WidthType.PERCENTAGE },
-              children: [celdaTexto(u.total.toFixed(2), { bold: true, tamano: 18 })]
+              children: [celdaTexto(u.total.toFixed(2), { bold: true })]
             }),
             new TableCell({
               width: { size: anchosColumna[9], type: WidthType.PERCENTAGE },
-              children: [celdaTexto("", { tamano: 18 })]
+              children: [celdaTexto("")]
             })
           ]
         });
@@ -445,6 +449,30 @@ function construirVista(contenedor, { esAdmin, uid }) {
         rows: [filaEncabezado, ...filasEmpleados]
       });
 
+      // Pie de página en una sola línea con 3 posiciones (tabulador central y
+      // derecho calculados a partir del ancho útil de la hoja en landscape
+      // letter menos los márgenes de arriba): "Generado el..." a la
+      // izquierda, la razón social al centro, y número de página / total a
+      // la derecha (sin la palabra "Total", solo "1/1", "1/2", etc.).
+      const anchoUtil = 15840 - 560 - 560; // twips: ancho letter landscape - margen izq - margen der
+      const piePagina = new Footer({
+        children: [
+          new Paragraph({
+            tabStops: [
+              { type: TabStopType.CENTER, position: 560 + anchoUtil / 2 },
+              { type: TabStopType.RIGHT, position: 560 + anchoUtil }
+            ],
+            children: [
+              new TextRun({ text: `Generado el ${formatearFechaHoraGeneracion()}`, font: "Calibri", size: 12 }),
+              new TextRun({ children: [new Tab()] }),
+              new TextRun({ text: "AUTOTRANSPORTES ALANIS, S.A. DE C.V.", font: "Calibri", size: 12, bold: true }),
+              new TextRun({ children: [new Tab()] }),
+              new TextRun({ children: [PageNumber.CURRENT, "/", PageNumber.TOTAL_PAGES], font: "Calibri", size: 12 })
+            ]
+          })
+        ]
+      });
+
       const doc = new Document({
         sections: [{
           properties: {
@@ -453,10 +481,9 @@ function construirVista(contenedor, { esAdmin, uid }) {
               margin: { top: 720, bottom: 720, left: 560, right: 560 }
             }
           },
+          footers: { default: piePagina },
           children: [
-            new Paragraph({ text: "AUTOTRANSPORTES ALANIS, S.A. DE C.V.", heading: HeadingLevel.HEADING_3 }),
             new Paragraph({ text: "Resumen de horarios por empleado", heading: HeadingLevel.HEADING_1 }),
-            new Paragraph({ text: `Generado el ${formatearFechaHoraGeneracion()}` }),
             new Paragraph({ text: "" }),
             tabla
           ]
