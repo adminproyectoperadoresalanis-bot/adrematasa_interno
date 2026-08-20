@@ -370,10 +370,16 @@ function construirVista(contenedor, { esAdmin, uid }) {
         WidthType, HeadingLevel, AlignmentType, PageOrientation, ShadingType
       } = await import("https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.mjs");
 
+      // Se calcula el horario y el total de cada quien primero, para poder
+      // ordenar por total de mayor a menor (en vez del alfabético de antes).
       const empleados = [...mapUsuarios.entries()]
         .map(([id, u]) => ({ id, ...u }))
         .filter(u => u.estatus === "activo")
-        .sort((a, b) => (a.nombre || "").localeCompare(b.nombre || "", "es", { sensitivity: "base" }));
+        .map(u => {
+          const horario = normalizarHorarioSemanal(u);
+          return { ...u, horario, total: calcularHorasSemanales(horario) };
+        })
+        .sort((a, b) => b.total - a.total);
 
       if (empleados.length === 0) {
         errorDiv.textContent = "No hay empleados activos para incluir en el resumen.";
@@ -404,7 +410,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
       }
 
       const encabezados = ["Empleado", ...ORDEN_COLUMNAS_DIA.map(i => NOMBRES_DIA[i]), "Total actual", "Proyección"];
-      const anchosColumna = [13, 9, 9, 9, 9, 9, 9, 9, 8, 16]; // suman 100%
+      const anchosColumna = [15, 9, 9, 9, 9, 9, 9, 9, 8, 14]; // suman 100% (Empleado más ancho por el "No. - Nombre")
       const filaEncabezado = new TableRow({
         tableHeader: true,
         children: encabezados.map((txt, i) => new TableCell({
@@ -415,18 +421,17 @@ function construirVista(contenedor, { esAdmin, uid }) {
       });
 
       const filasEmpleados = empleados.map(u => {
-        const horario = normalizarHorarioSemanal(u);
-        const total = calcularHorasSemanales(horario);
+        const numeroTexto = u.numeroEmpleado || "—";
         return new TableRow({
           children: [
             new TableCell({
               width: { size: anchosColumna[0], type: WidthType.PERCENTAGE },
-              children: [celdaTexto(u.nombre || "", { bold: true, centrado: false, tamano: 20 })]
+              children: [celdaTexto(`${numeroTexto} - ${u.nombre || ""}`, { bold: true, centrado: false, tamano: 20 })]
             }),
-            ...ORDEN_COLUMNAS_DIA.map(i => celdaDia(horario[i])),
+            ...ORDEN_COLUMNAS_DIA.map(i => celdaDia(u.horario[i])),
             new TableCell({
               width: { size: anchosColumna[8], type: WidthType.PERCENTAGE },
-              children: [celdaTexto(total.toFixed(2), { bold: true, tamano: 18 })]
+              children: [celdaTexto(u.total.toFixed(2), { bold: true, tamano: 18 })]
             }),
             new TableCell({
               width: { size: anchosColumna[9], type: WidthType.PERCENTAGE },
