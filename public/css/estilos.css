@@ -478,3 +478,114 @@ body.tiene-nav main#contenido-app { padding-bottom: 90px; }
 .barra-rechazada { background: #a32424; }
 
 .barra-valor { flex: 0 0 26px; text-align: right; font-weight: 600; color: #2c1e0f; }
+
+/* Centro de notificaciones (campanita en el encabezado) */
+.notificaciones-wrap { position: relative; display: flex; align-items: center; }
+
+.btn-notificaciones {
+  position: relative;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.4);
+  padding: 6px 10px;
+  font-size: 1rem;
+  line-height: 1;
+}
+.btn-notificaciones:hover { background: rgba(255,255,255,0.1); }
+
+.badge-notificaciones {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: #c0392b;
+  color: #fff;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  line-height: 1;
+}
+
+.panel-notificaciones {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  width: 320px;
+  max-width: 90vw;
+  background: #fff;
+  color: #2c1e0f;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.18);
+  overflow: hidden;
+  z-index: 50;
+}
+
+.panel-notificaciones-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid #eee;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.link-marcar-todas {
+  background: transparent;
+  color: #2c1e0f;
+  text-decoration: underline;
+  padding: 0;
+  font-size: 0.78rem;
+  font-weight: 400;
+}
+.link-marcar-todas:hover { background: transparent; color: #46301c; }
+
+.lista-notificaciones {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.notif-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #f2efea;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.notif-item:last-child { border-bottom: none; }
+.notif-item:hover { background: #faf8f5; }
+
+.notif-no-leida { background: #fbf5e9; }
+.notif-no-leida:hover { background: #f7edd8; }
+
+.notif-titulo { font-weight: 600; }
+.notif-mensaje { color: #555; }
+.notif-fecha { color: #999; font-size: 0.72rem; }
+
+.notif-vacia { padding: 20px 14px; text-align: center; color: #999; font-size: 0.85rem; }
+
+/* Enlaces de "Avisar por WhatsApp" en el historial de aprobaciones */
+.grupo-whatsapp { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.btn-whatsapp {
+  display: inline-block;
+  background: #1c7a41;
+  color: #fff;
+  text-decoration: none;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.btn-whatsapp:hover { background: #145c31; }
+
+.nota-whatsapp { color: #999; font-size: 0.78rem; }

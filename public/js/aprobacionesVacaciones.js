@@ -2,6 +2,8 @@ import { db } from "./firebase-config.js";
 import {
   collection, onSnapshot, doc, updateDoc, query, where, runTransaction
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { crearNotificacion } from "./notificaciones.js";
+import { botonesWhatsApp } from "./whatsapp.js";
 
 const ETIQUETAS_ESTATUS = {
   pendiente: "Pendiente",
@@ -9,7 +11,7 @@ const ETIQUETAS_ESTATUS = {
   rechazada: "Rechazada"
 };
 
-function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase) {
+function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryUsuarios) {
   contenedor.innerHTML = `
     <section class="panel">
       <h2>Vacaciones pendientes</h2>
@@ -29,9 +31,9 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase) {
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-vac-historial">
           <thead>
-            <tr><th>Empleado</th><th>Inicio</th><th>Fin</th><th>Días</th><th>Motivo</th><th>Estatus</th><th>Comentario</th><th>Autorizó</th></tr>
+            <tr><th>Empleado</th><th>Inicio</th><th>Fin</th><th>Días</th><th>Motivo</th><th>Estatus</th><th>Comentario</th><th>Autorizó</th><th>Avisar</th></tr>
           </thead>
-          <tbody id="tbody-vac-historial"><tr><td colspan="8">Cargando...</td></tr></tbody>
+          <tbody id="tbody-vac-historial"><tr><td colspan="9">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -41,17 +43,28 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase) {
   const tbodyPendientes = contenedor.querySelector("#tbody-vac-pendientes");
   const tbodyHistorial = contenedor.querySelector("#tbody-vac-historial");
 
+  let ultimoHistorial = [];
+  let usuariosPorId = {};
+
   onSnapshot(queryBase, (snap) => {
     const todas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     todas.sort((a, b) => (b.fechaInicio || "").localeCompare(a.fechaInicio || ""));
 
     const pendientes = todas.filter(s => s.estatus === "pendiente");
-    const historial = todas.filter(s => s.estatus !== "pendiente");
+    ultimoHistorial = todas.filter(s => s.estatus !== "pendiente");
 
     renderPendientes(pendientes);
-    renderHistorial(historial);
+    renderHistorial();
   }, (err) => {
     errorDiv.textContent = "No se pudieron cargar las solicitudes de vacaciones: " + err.message;
+  });
+
+  onSnapshot(queryUsuarios, (snap) => {
+    usuariosPorId = {};
+    snap.docs.forEach(d => { usuariosPorId[d.id] = d.data(); });
+    renderHistorial();
+  }, (err) => {
+    console.error("No se pudo cargar el móvil de los empleados:", err);
   });
 
   function renderPendientes(lista) {
@@ -60,7 +73,7 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase) {
       return;
     }
     tbodyPendientes.innerHTML = lista.map(s => `
-      <tr data-id="${s.id}" data-empleado-id="${s.empleadoId}" data-dias="${s.diasHabiles}">
+      <tr data-id="${s.id}">
         <td>${escapeHtml(s.empleadoNombre || "")}</td>
         <td>${s.fechaInicio}</td>
         <td>${s.fechaFin}</td>
@@ -76,39 +89,47 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase) {
 
     tbodyPendientes.querySelectorAll("tr[data-id]").forEach(fila => {
       const id = fila.dataset.id;
-      const empleadoId = fila.dataset.empleadoId;
-      const diasHabiles = Number(fila.dataset.dias);
+      const solicitud = lista.find(s => s.id === id);
       const comentarioInput = fila.querySelector(".input-comentario");
       fila.querySelector(".btn-aprobar").addEventListener("click", () => {
-        resolverSolicitud(id, "aprobada", comentarioInput.value.trim(), empleadoId, diasHabiles);
+        resolverSolicitud(solicitud, "aprobada", comentarioInput.value.trim());
       });
       fila.querySelector(".btn-rechazar").addEventListener("click", () => {
-        resolverSolicitud(id, "rechazada", comentarioInput.value.trim(), empleadoId, diasHabiles);
+        resolverSolicitud(solicitud, "rechazada", comentarioInput.value.trim());
       });
     });
   }
 
-  function renderHistorial(lista) {
-    if (lista.length === 0) {
-      tbodyHistorial.innerHTML = `<tr><td colspan="8">Todavía no hay historial.</td></tr>`;
+  function renderHistorial() {
+    if (ultimoHistorial.length === 0) {
+      tbodyHistorial.innerHTML = `<tr><td colspan="9">Todavía no hay historial.</td></tr>`;
       return;
     }
-    tbodyHistorial.innerHTML = lista.map(s => `
-      <tr>
-        <td>${escapeHtml(s.empleadoNombre || "")}</td>
-        <td>${s.fechaInicio}</td>
-        <td>${s.fechaFin}</td>
-        <td>${s.diasHabiles}</td>
-        <td>${s.motivo ? escapeHtml(s.motivo) : "—"}</td>
-        <td><span class="badge badge-${s.estatus}">${ETIQUETAS_ESTATUS[s.estatus] || s.estatus}</span></td>
-        <td>${s.comentarioRevisor ? escapeHtml(s.comentarioRevisor) : "—"}</td>
-        <td>${s.revisadoPorNombre ? escapeHtml(s.revisadoPorNombre) : "—"}</td>
-      </tr>
-    `).join("");
+    tbodyHistorial.innerHTML = ultimoHistorial.map(s => {
+      const aprobada = s.estatus === "aprobada";
+      const usuario = usuariosPorId[s.empleadoId] || {};
+      const mensaje = `Hola ${s.empleadoNombre || ""}, tu solicitud de vacaciones del ${s.fechaInicio} al ${s.fechaFin} (${s.diasHabiles} día(s)) fue ${aprobada ? "APROBADA ✅" : "RECHAZADA"}.${s.comentarioRevisor ? " Comentario: " + s.comentarioRevisor : ""} — Alanis`;
+      return `
+        <tr>
+          <td>${escapeHtml(s.empleadoNombre || "")}</td>
+          <td>${s.fechaInicio}</td>
+          <td>${s.fechaFin}</td>
+          <td>${s.diasHabiles}</td>
+          <td>${s.motivo ? escapeHtml(s.motivo) : "—"}</td>
+          <td><span class="badge badge-${s.estatus}">${ETIQUETAS_ESTATUS[s.estatus] || s.estatus}</span></td>
+          <td>${s.comentarioRevisor ? escapeHtml(s.comentarioRevisor) : "—"}</td>
+          <td>${s.revisadoPorNombre ? escapeHtml(s.revisadoPorNombre) : "—"}</td>
+          <td>${botonesWhatsApp(usuario.movilPais, usuario.movilNumero, mensaje)}</td>
+        </tr>
+      `;
+    }).join("");
   }
 
-  async function resolverSolicitud(id, estatus, comentario, empleadoId, diasHabiles) {
+  async function resolverSolicitud(solicitud, estatus, comentario) {
     errorDiv.textContent = "";
+    const id = solicitud.id;
+    const empleadoId = solicitud.empleadoId;
+    const diasHabiles = solicitud.diasHabiles;
     try {
       if (estatus === "aprobada") {
         // Transacción: aprueba la solicitud Y descuenta el saldo del empleado en un solo paso atómico.
@@ -151,6 +172,13 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase) {
           resueltoEn: new Date().toISOString()
         });
       }
+
+      const aprobada = estatus === "aprobada";
+      crearNotificacion(empleadoId, {
+        titulo: aprobada ? "Solicitud de vacaciones aprobada" : "Solicitud de vacaciones rechazada",
+        mensaje: `Tu solicitud del ${solicitud.fechaInicio} al ${solicitud.fechaFin} fue ${aprobada ? "aprobada" : "rechazada"}${comentario ? ": " + comentario : "."}`,
+        tipo: aprobada ? "aprobacion" : "rechazo"
+      });
     } catch (err) {
       errorDiv.textContent = "No se pudo actualizar la solicitud: " + err.message;
     }
@@ -158,11 +186,15 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase) {
 }
 
 export function iniciarGestionVacaciones(contenedor, uid, nombre) {
-  construirVista(contenedor, uid, nombre, collection(db, "solicitudesVacaciones"));
+  construirVista(contenedor, uid, nombre, collection(db, "solicitudesVacaciones"), collection(db, "usuarios"));
 }
 
 export function iniciarVistaSupervisorVacaciones(contenedor, uid, nombre) {
-  construirVista(contenedor, uid, nombre, query(collection(db, "solicitudesVacaciones"), where("supervisorId", "==", uid)));
+  construirVista(
+    contenedor, uid, nombre,
+    query(collection(db, "solicitudesVacaciones"), where("supervisorId", "==", uid)),
+    query(collection(db, "usuarios"), where("supervisorId", "==", uid))
+  );
 }
 
 function escapeHtml(texto) {

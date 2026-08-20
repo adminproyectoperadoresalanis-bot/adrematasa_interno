@@ -2,6 +2,7 @@ import { db } from "./firebase-config.js";
 import {
   collection, onSnapshot, doc, updateDoc, query, where
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { crearNotificacion } from "./notificaciones.js";
 
 const NOMBRES_DIA = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
@@ -250,12 +251,22 @@ export function iniciarMiEquipo(contenedor, uid) {
       const primerDescanso = horarioSemanalNuevo.findIndex(dia => dia.descanso);
       const diaDescanso = primerDescanso === -1 ? (u.diaDescanso ?? 0) : primerDescanso;
 
+      // Para avisarle al empleado solo cuando el horario de verdad cambió.
+      const horarioCambio = JSON.stringify(normalizarHorarioSemanal(u)) !== JSON.stringify(horarioSemanalNuevo);
+
       try {
         await updateDoc(doc(db, "usuarios", u.id), {
           horarioSemanal: horarioSemanalNuevo,
           horasSemanales,
           diaDescanso
         });
+        if (horarioCambio) {
+          crearNotificacion(u.id, {
+            titulo: "Tu horario semanal fue actualizado",
+            mensaje: "Tu supervisor cambió tu horario semanal. Entra a la app para ver el detalle.",
+            tipo: "horario"
+          });
+        }
         cerrarModal();
       } catch (err) {
         modalErrorDiv.textContent = "No se pudo guardar: " + err.message;

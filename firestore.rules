@@ -121,6 +121,24 @@ service cloud.firestore {
       allow update, delete: if esAdmin();
     }
 
+    match /notificaciones/{notifId} {
+      // Cada quien solo lee/marca como leídas las suyas.
+      allow read: if isSignedIn() && resource.data.destinatarioId == request.auth.uid;
+      allow update: if isSignedIn()
+        && resource.data.destinatarioId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['leida']);
+      // Solo el admin, o el supervisor directo del destinatario, puede crearle una notificación
+      // (aprobación/rechazo de una solicitud, cambio de horario) — nunca un compañero cualquiera.
+      allow create: if isSignedIn()
+        && request.resource.data.destinatarioId is string
+        && request.resource.data.leida == false
+        && (
+          esAdmin() ||
+          esSupervisorDe(get(/databases/$(database)/documents/usuarios/$(request.resource.data.destinatarioId)).data.supervisorId)
+        );
+      allow delete: if false;
+    }
+
     match /configuracion/{docId} {
       // Cualquier usuario con sesión puede leer (ej. para calcular días de vacaciones),
       // pero solo el admin puede definir o cambiar los umbrales.

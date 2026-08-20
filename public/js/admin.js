@@ -4,6 +4,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { calcularAniosAntiguedad, diasSegunAntiguedad, suscribirUmbrales, UMBRALES_DEFAULT } from "./vacacionesCalculo.js";
 import { suscribirEstructura, esPuestoDeCoordinacion, AREAS_DEFAULT } from "./estructuraOrganizacional.js";
+import { crearNotificacion } from "./notificaciones.js";
 
 const ROLES = ["empleado", "supervisor", "admin"];
 
@@ -663,6 +664,10 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
       const primerDescanso = horarioSemanalNuevo.findIndex(dia => dia.descanso);
       const diaDescanso = primerDescanso === -1 ? (u.diaDescanso ?? 0) : primerDescanso;
 
+      // Para avisarle al empleado solo cuando el horario de verdad cambió
+      // (y no en cualquier guardado del modal, como corregir su número de empleado).
+      const horarioCambio = JSON.stringify(normalizarHorarioSemanal(u)) !== JSON.stringify(horarioSemanalNuevo);
+
       const area = overlay.querySelector("#modal-area").value || null;
       const puesto = overlay.querySelector("#modal-puesto").value || null;
 
@@ -684,6 +689,13 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
 
       try {
         await guardarUsuario(u, cambios);
+        if (horarioCambio && !esUnoMismo) {
+          crearNotificacion(u.id, {
+            titulo: "Tu horario semanal fue actualizado",
+            mensaje: "Administración cambió tu horario semanal. Entra a la app para ver el detalle.",
+            tipo: "horario"
+          });
+        }
         cerrarModal();
       } catch (err) {
         modalErrorDiv.textContent = "No se pudo guardar: " + err.message;

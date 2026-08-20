@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Adrematasa Interno</title>
-<link rel="stylesheet" href="css/estilos.css?v=3">
+<link rel="stylesheet" href="css/estilos.css?v=4">
 </head>
 <body>
 <div id="vista-cargando" class="pantalla-auth">
@@ -71,6 +71,18 @@
   <header class="encabezado">
     <span>Adrematasa Interno</span>
     <span class="usuario-info">
+      <span id="notificaciones-wrap" class="notificaciones-wrap oculto">
+        <button type="button" id="btn-notificaciones" class="btn-notificaciones" title="Notificaciones">
+          🔔<span id="badge-notificaciones" class="badge-notificaciones oculto">0</span>
+        </button>
+        <div id="panel-notificaciones" class="panel-notificaciones oculto">
+          <div class="panel-notificaciones-header">
+            <span>Notificaciones</span>
+            <button type="button" id="btn-marcar-todas-leidas" class="link-marcar-todas">Marcar todas como leídas</button>
+          </div>
+          <ul id="lista-notificaciones" class="lista-notificaciones"></ul>
+        </div>
+      </span>
       <span id="nombre-usuario"></span>
       (<span id="rol-usuario"></span>)
       <button id="btn-logout">Cerrar sesión</button>

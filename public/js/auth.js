@@ -20,6 +20,7 @@ import { iniciarGestionFaltas, iniciarVistaSupervisorFaltas, iniciarVistaEmplead
 import { iniciarMiEquipo } from "./equipo.js";
 import { iniciarConfiguracion } from "./configuracion.js";
 import { iniciarReportesAdmin, iniciarReportesSupervisor } from "./reportes.js";
+import { iniciarCentroNotificaciones, detenerCentroNotificaciones } from "./notificaciones.js";
 
 const DOMINIO_ALANIS = "@alanis.com.mx";
 
@@ -46,6 +47,7 @@ const btnLogout = document.getElementById("btn-logout");
 const nombreUsuarioSpan = document.getElementById("nombre-usuario");
 const rolUsuarioSpan = document.getElementById("rol-usuario");
 const contenidoApp = document.getElementById("contenido-app");
+const notificacionesWrap = document.getElementById("notificaciones-wrap");
 
 function mostrarVista(vista) {
   [vistaCargando, vistaLogin, vistaRegistro, vistaRecuperar, vistaApp].forEach(v => v.classList.add("oculto"));
@@ -191,6 +193,8 @@ function traducirError(err) {
 
 onAuthStateChanged(auth, async (user) => {
   if (!user) {
+    detenerCentroNotificaciones();
+    notificacionesWrap?.classList.add("oculto");
     mostrarVista(vistaLogin);
     return;
   }
@@ -201,6 +205,8 @@ onAuthStateChanged(auth, async (user) => {
   const snap = await getDoc(refUsuario);
 
   if (!snap.exists()) {
+    detenerCentroNotificaciones();
+    notificacionesWrap?.classList.add("oculto");
     contenidoApp.innerHTML = `<p>No se encontró tu perfil. Contacta al administrador.</p>`;
     mostrarVista(vistaApp);
     return;
@@ -217,6 +223,8 @@ onAuthStateChanged(auth, async (user) => {
   // El estatus manda antes que el rol: una cuenta pendiente, rechazada o
   // inactiva/dada de baja no debe entrar a su panel aunque su rol sea admin.
   if (datosUsuario.estatus === "pendiente") {
+    detenerCentroNotificaciones();
+    notificacionesWrap?.classList.add("oculto");
     ocultarNavegacion();
     contenidoApp.innerHTML = `
       <div class="panel">
@@ -225,6 +233,8 @@ onAuthStateChanged(auth, async (user) => {
       </div>
     `;
   } else if (datosUsuario.estatus === "rechazado") {
+    detenerCentroNotificaciones();
+    notificacionesWrap?.classList.add("oculto");
     ocultarNavegacion();
     contenidoApp.innerHTML = `
       <div class="panel">
@@ -233,6 +243,8 @@ onAuthStateChanged(auth, async (user) => {
       </div>
     `;
   } else if (datosUsuario.estatus === "inactivo") {
+    detenerCentroNotificaciones();
+    notificacionesWrap?.classList.add("oculto");
     ocultarNavegacion();
     contenidoApp.innerHTML = `
       <div class="panel">
@@ -241,6 +253,8 @@ onAuthStateChanged(auth, async (user) => {
       </div>
     `;
   } else if (datosUsuario.rol === "admin") {
+    notificacionesWrap?.classList.remove("oculto");
+    iniciarCentroNotificaciones(user.uid);
     iniciarNavegacion("admin", {
       panel: (c) => iniciarPanelResumenAdmin(c),
       solicitudes: (c) => renderEquipoYPropia(c,
@@ -257,12 +271,16 @@ onAuthStateChanged(auth, async (user) => {
       configuracion: (c) => iniciarConfiguracion(c)
     }, "panel");
   } else if (datosUsuario.rol === "empleado") {
+    notificacionesWrap?.classList.remove("oculto");
+    iniciarCentroNotificaciones(user.uid);
     iniciarNavegacion("empleado", {
       horasExtra: (c) => iniciarVistaEmpleado(c, datosUsuario, user.uid),
       vacaciones: (c) => iniciarVistaVacacionesEmpleado(c, datosUsuario, user.uid),
       faltas: (c) => iniciarVistaEmpleadoFaltas(c, datosUsuario, user.uid)
     }, "horasExtra");
   } else if (datosUsuario.rol === "supervisor") {
+    notificacionesWrap?.classList.remove("oculto");
+    iniciarCentroNotificaciones(user.uid);
     iniciarNavegacion("supervisor", {
       panel: (c) => iniciarPanelResumenSupervisor(c, user.uid),
       solicitudes: (c) => renderEquipoYPropia(c,
@@ -278,6 +296,8 @@ onAuthStateChanged(auth, async (user) => {
       reportes: (c) => iniciarReportesSupervisor(c, user.uid)
     }, "panel");
   } else {
+    detenerCentroNotificaciones();
+    notificacionesWrap?.classList.add("oculto");
     ocultarNavegacion();
     contenidoApp.innerHTML = `<p>No se reconoce tu rol. Contacta al administrador.</p>`;
   }
