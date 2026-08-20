@@ -200,19 +200,18 @@ function construirVista(contenedor, { esAdmin, uid }) {
       </div>
     </section>
 
-    ${esAdmin ? `
     <section class="panel" style="margin-top:20px;">
       <h2>Resumen de horarios (Word)</h2>
       <p class="nota">
-        Un documento .docx con el horario semanal actual de cada empleado activo (entrada, salida, comida y total de
-        horas), y una columna "Proyección" en blanco para anotar a mano una propuesta de ajuste futuro.
+        Un documento .docx con el horario semanal actual de ${esAdmin ? "cada empleado activo" : "cada empleado activo de tu equipo"}
+        (entrada, salida, comida y total de horas), y una columna "Proyección" en blanco para anotar a mano una
+        propuesta de ajuste futuro.
       </p>
       <div class="acciones-form">
         <button type="button" class="secundario" id="btn-resumen-horarios">Descargar resumen de horarios (.docx)</button>
       </div>
       <div id="horarios-docx-error" class="error"></div>
     </section>
-    ` : ""}
   `;
 
   const selectSemana = contenedor.querySelector("#rep-semana");
