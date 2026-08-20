@@ -214,23 +214,9 @@ onAuthStateChanged(auth, async (user) => {
     c.innerHTML = `<div class="panel"><p>Esta sección todavía no está lista. Muy pronto.</p></div>`;
   };
 
-  if (datosUsuario.rol === "admin") {
-    iniciarNavegacion("admin", {
-      panel: (c) => iniciarPanelResumenAdmin(c),
-      solicitudes: (c) => renderEquipoYPropia(c,
-        (d) => iniciarGestionSolicitudes(d, user.uid, datosUsuario.nombre),
-        (d) => iniciarVistaEmpleado(d, datosUsuario, user.uid)
-      ),
-      vacaciones: (c) => renderEquipoYPropia(c,
-        (d) => iniciarGestionVacaciones(d, user.uid, datosUsuario.nombre),
-        (d) => iniciarVistaVacacionesEmpleado(d, datosUsuario, user.uid)
-      ),
-      faltas: (c) => iniciarGestionFaltas(c, user.uid, datosUsuario.nombre),
-      catalogo: (c) => iniciarPanelAdmin(c, user.uid),
-      reportes: (c) => iniciarReportesAdmin(c),
-      configuracion: (c) => iniciarConfiguracion(c)
-    }, "panel");
-  } else if (datosUsuario.estatus === "pendiente") {
+  // El estatus manda antes que el rol: una cuenta pendiente, rechazada o
+  // inactiva/dada de baja no debe entrar a su panel aunque su rol sea admin.
+  if (datosUsuario.estatus === "pendiente") {
     ocultarNavegacion();
     contenidoApp.innerHTML = `
       <div class="panel">
@@ -246,6 +232,30 @@ onAuthStateChanged(auth, async (user) => {
         <p class="nota">Contacta al administrador si crees que esto es un error.</p>
       </div>
     `;
+  } else if (datosUsuario.estatus === "inactivo") {
+    ocultarNavegacion();
+    contenidoApp.innerHTML = `
+      <div class="panel">
+        <p>Hola, ${datosUsuario.nombre}. Tu cuenta fue dada de baja.</p>
+        <p class="nota">Contacta al administrador si crees que esto es un error.</p>
+      </div>
+    `;
+  } else if (datosUsuario.rol === "admin") {
+    iniciarNavegacion("admin", {
+      panel: (c) => iniciarPanelResumenAdmin(c),
+      solicitudes: (c) => renderEquipoYPropia(c,
+        (d) => iniciarGestionSolicitudes(d, user.uid, datosUsuario.nombre),
+        (d) => iniciarVistaEmpleado(d, datosUsuario, user.uid)
+      ),
+      vacaciones: (c) => renderEquipoYPropia(c,
+        (d) => iniciarGestionVacaciones(d, user.uid, datosUsuario.nombre),
+        (d) => iniciarVistaVacacionesEmpleado(d, datosUsuario, user.uid)
+      ),
+      faltas: (c) => iniciarGestionFaltas(c, user.uid, datosUsuario.nombre),
+      catalogo: (c) => iniciarPanelAdmin(c, user.uid),
+      reportes: (c) => iniciarReportesAdmin(c),
+      configuracion: (c) => iniciarConfiguracion(c)
+    }, "panel");
   } else if (datosUsuario.rol === "empleado") {
     iniciarNavegacion("empleado", {
       horasExtra: (c) => iniciarVistaEmpleado(c, datosUsuario, user.uid),

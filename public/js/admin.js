@@ -10,14 +10,24 @@ const ROLES = ["empleado", "supervisor", "admin"];
 const ETIQUETAS_ESTATUS = {
   pendiente: "Pendiente",
   activo: "Activo",
+  inactivo: "Inactivo",
   rechazado: "Rechazado"
 };
 
 const CLASES_ESTATUS = {
   pendiente: "badge-pendiente",
   activo: "badge-aprobada",
+  inactivo: "badge-inactivo",
   rechazado: "badge-rechazada"
 };
+
+// Países disponibles para el móvil de cada empleado (Alanis opera en México
+// y con operadores/coordinadores en EUA y Canadá).
+const PAISES_MOVIL = [
+  { codigo: "MX", etiqueta: "México (+52)" },
+  { codigo: "US", etiqueta: "Estados Unidos (+1)" },
+  { codigo: "CA", etiqueta: "Canadá (+1)" }
+];
 
 const NOMBRES_DIA = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
@@ -111,7 +121,7 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
 
     <section class="panel" style="margin-top:20px;">
       <h2>Usuarios</h2>
-      <p class="nota">Por seguridad, no puedes cambiar tu propio rol ni tu propio supervisor. Da clic en "Editar" para ver y cambiar el resto de los datos de cada quien. Los días de vacaciones se actualizan solos según la antigüedad (Ley Federal del Trabajo) en cuanto alguien cumple un nuevo aniversario; los umbrales se ajustan en Configuración.</p>
+      <p class="nota">Por seguridad, no puedes cambiar tu propio rol ni tu propio supervisor. Da clic en el nombre para ver y cambiar el resto de los datos de cada quien. Los días de vacaciones se actualizan solos según la antigüedad (Ley Federal del Trabajo) en cuanto alguien cumple un nuevo aniversario; los umbrales se ajustan en Configuración.</p>
       <div id="admin-error" class="error"></div>
       <div id="resumen-area-puesto" class="nota"></div>
       <div class="tabla-wrap">
@@ -119,13 +129,11 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
           <thead>
             <tr>
               <th>Nombre</th>
-              <th>Correo</th>
               <th>Estatus</th>
-              <th></th>
             </tr>
           </thead>
           <tbody id="tbody-usuarios">
-            <tr><td colspan="4">Cargando...</td></tr>
+            <tr><td colspan="2">Cargando...</td></tr>
           </tbody>
         </table>
       </div>
@@ -301,7 +309,7 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
     renderResumenAreaPuesto();
 
     if (listaUsuarios.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="4">Aún no hay usuarios registrados.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="2">Aún no hay usuarios registrados.</td></tr>`;
       return;
     }
 
@@ -310,17 +318,19 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
       const falta = faltaAreaOPuesto(u);
       return `
         <tr data-id="${u.id}">
-          <td>${escapeHtml(u.nombre || "")} ${esUnoMismo ? '<span class="etiqueta-tu">(tú)</span>' : ""}</td>
-          <td>${escapeHtml(u.email || "")}</td>
+          <td>
+            <a href="#" class="link-editar-usuario${falta ? " link-editar-alerta" : ""}">${falta ? "⚠ " : ""}${escapeHtml(u.nombre || "")}</a>
+            ${esUnoMismo ? '<span class="etiqueta-tu">(tú)</span>' : ""}
+          </td>
           <td>${celdaEstatus(u)}</td>
-          <td><button type="button" class="secundario btn-editar-usuario${falta ? " btn-editar-alerta" : ""}">${falta ? "⚠ Editar" : "Editar"}</button></td>
         </tr>
       `;
     }).join("");
 
-    tbody.querySelectorAll(".btn-editar-usuario").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const id = btn.closest("tr").dataset.id;
+    tbody.querySelectorAll(".link-editar-usuario").forEach(enlace => {
+      enlace.addEventListener("click", (e) => {
+        e.preventDefault();
+        const id = enlace.closest("tr").dataset.id;
         const u = listaUsuarios.find(x => x.id === id);
         if (u) abrirModalEditar(u);
       });
@@ -371,6 +381,26 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
 
     const horarioSemanal = normalizarHorarioSemanal(u);
 
+    // El toggle de activo/inactivo solo aplica a cuentas ya aprobadas (pendiente
+    // y rechazado se manejan aparte, en Registros pendientes), y un admin no
+    // puede darse de baja a sí mismo.
+    const estatusEditable = !esUnoMismo && (u.estatus === "activo" || u.estatus === "inactivo");
+    const celdaEstatusModal = estatusEditable
+      ? `
+        <div class="toggle-fila">
+          <label class="toggle-switch">
+            <input type="checkbox" id="modal-toggle-activo" ${u.estatus === "activo" ? "checked" : ""}>
+            <span class="toggle-slider"></span>
+          </label>
+          <span id="modal-toggle-texto">${u.estatus === "activo" ? "Activo" : "Inactivo / Baja"}</span>
+        </div>
+      `
+      : celdaEstatus(u);
+
+    const opcionesPaisMovil = PAISES_MOVIL.map(p =>
+      `<option value="${p.codigo}" ${(u.movilPais || "MX") === p.codigo ? "selected" : ""}>${p.etiqueta}</option>`
+    ).join("");
+
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
     overlay.id = "modal-editar-usuario";
@@ -390,7 +420,7 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
         <div class="modal-fila">
           <label>Rol ${celdaRol}</label>
           <label>Supervisor asignado ${celdaSupervisor}</label>
-          <label>Estatus ${celdaEstatus(u)}</label>
+          <label>Estatus ${celdaEstatusModal}</label>
         </div>
 
         <div class="modal-fila">
@@ -409,6 +439,21 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
           <label>Días vacaciones
             <input type="number" min="0" step="1" id="modal-dias-vacaciones" value="${u.diasVacacionesDisponibles ?? 0}">
             <span class="nota-lft" id="modal-nota-vacaciones">${notaLftTexto(u.fechaIngreso, umbralesActuales)}</span>
+          </label>
+        </div>
+
+        <div class="modal-fila">
+          <label>País (móvil)
+            <select id="modal-movil-pais">${opcionesPaisMovil}</select>
+          </label>
+          <label>Móvil (10 dígitos)
+            <input type="tel" id="modal-movil-numero" maxlength="10" inputmode="numeric" placeholder="Ej. 6141234567" value="${escapeHtml(u.movilNumero || "")}">
+          </label>
+          <label>Tipo de móvil
+            <select id="modal-movil-tipo">
+              <option value="personal" ${(u.movilTipo || "personal") === "personal" ? "selected" : ""}>Personal</option>
+              <option value="laboral" ${u.movilTipo === "laboral" ? "selected" : ""}>Laboral</option>
+            </select>
           </label>
         </div>
 
@@ -456,6 +501,18 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
     const selRolModal = overlay.querySelector("#modal-rol");
     const tbodyHorario = overlay.querySelector("#tbody-horario-semanal");
     const totalHorasSpan = overlay.querySelector("#total-horas-semana");
+    const inputMovilNumero = overlay.querySelector("#modal-movil-numero");
+    const chkToggleActivo = overlay.querySelector("#modal-toggle-activo");
+    const toggleTexto = overlay.querySelector("#modal-toggle-texto");
+
+    // Solo dígitos y máximo 10, mientras se captura.
+    inputMovilNumero.addEventListener("input", () => {
+      inputMovilNumero.value = inputMovilNumero.value.replace(/\D/g, "").slice(0, 10);
+    });
+
+    chkToggleActivo?.addEventListener("change", () => {
+      toggleTexto.textContent = chkToggleActivo.checked ? "Activo" : "Inactivo / Baja";
+    });
 
     // Cada fila del horario semanal se recalcula sola: si el día está
     // marcado como descanso se deshabilitan sus horas y su comida, si no,
@@ -567,6 +624,15 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
       const fechaIngreso = overlay.querySelector("#modal-fecha-ingreso").value || null;
       const diasVacacionesDisponibles = Math.max(0, Math.round(Number(overlay.querySelector("#modal-dias-vacaciones").value) || 0));
 
+      const movilPais = overlay.querySelector("#modal-movil-pais").value;
+      const movilNumero = inputMovilNumero.value.trim();
+      const movilTipo = overlay.querySelector("#modal-movil-tipo").value;
+      if (movilNumero && movilNumero.length !== 10) {
+        modalErrorDiv.textContent = "El móvil debe tener 10 dígitos (o déjalo vacío si todavía no lo tienes).";
+        inputMovilNumero.classList.add("campo-vacio");
+        return;
+      }
+
       // A los días que no son descanso les hace falta hora de entrada y
       // salida; se marcan en rojo y se detiene el guardado si falta alguna.
       const filasHorario = [...tbodyHorario.querySelectorAll("tr[data-dia]")];
@@ -603,12 +669,17 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
       const cambios = {
         fechaIngreso, diasVacacionesDisponibles, diaDescanso,
         horarioSemanal: horarioSemanalNuevo, horasSemanales,
-        numeroEmpleado: numeroEmpleado || null, area, puesto
+        numeroEmpleado: numeroEmpleado || null, area, puesto,
+        movilPais, movilNumero: movilNumero || null, movilTipo
       };
 
       if (!esUnoMismo) {
         cambios.rol = overlay.querySelector("#modal-rol").value;
         cambios.supervisorId = overlay.querySelector("#modal-supervisor").value || null;
+      }
+
+      if (estatusEditable) {
+        cambios.estatus = chkToggleActivo.checked ? "activo" : "inactivo";
       }
 
       try {

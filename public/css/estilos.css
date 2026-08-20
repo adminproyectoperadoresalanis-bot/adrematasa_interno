@@ -201,12 +201,65 @@ main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100
   background: #fdecea;
 }
 
-.btn-editar-usuario.btn-editar-alerta {
-  border-color: #c0392b;
+.link-editar-usuario {
+  color: #2c1e0f;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+.link-editar-usuario:hover {
+  text-decoration: underline;
+}
+.link-editar-usuario.link-editar-alerta {
   color: #c0392b;
 }
-.btn-editar-usuario.btn-editar-alerta:hover {
-  background: #fdecea;
+
+.toggle-fila {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 42px;
+  height: 22px;
+  flex: 0 0 auto;
+}
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  background-color: #ccc;
+  transition: 0.2s;
+  border-radius: 22px;
+}
+.toggle-slider::before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #fff;
+  transition: 0.2s;
+  border-radius: 50%;
+}
+.toggle-switch input:checked + .toggle-slider {
+  background-color: #1c7a41;
+}
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(20px);
+}
+#modal-toggle-texto {
+  font-size: 0.85rem;
+  font-weight: 600;
 }
 
 .nota.nota-alerta {
@@ -267,6 +320,7 @@ main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100
 .badge-pendiente { background: #fdecc8; color: #8a5a00; }
 .badge-aprobada { background: #d9f2e3; color: #1c7a41; }
 .badge-rechazada { background: #fbdcdc; color: #a32424; }
+.badge-inactivo { background: #e6e0d5; color: #6b5f4d; }
 
 .panel + .panel { margin-top: 20px; }
 
