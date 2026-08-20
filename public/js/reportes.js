@@ -94,6 +94,55 @@ function hoyLocalStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// --- Horario semanal: mismos helpers que admin.js/equipo.js (se duplican
+// aquí por la misma razón: cada pantalla arma su horario a partir de lo que
+// tenga guardado el usuario, sin depender de un módulo compartido). ---
+const NOMBRES_DIA = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+// Orden en el que se imprimen las columnas del resumen: Lunes...Domingo
+// (el arreglo horarioSemanal guarda 0=domingo...6=sábado).
+const ORDEN_COLUMNAS_DIA = [1, 2, 3, 4, 5, 6, 0];
+
+function horarioSemanalPorDefault(diaDescansoActual) {
+  return NOMBRES_DIA.map((_, i) => (
+    i === diaDescansoActual
+      ? { descanso: true, horaInicio: "", horaFin: "", comida: 0 }
+      : { descanso: false, horaInicio: "08:00", horaFin: "17:00", comida: 1 }
+  ));
+}
+
+function normalizarHorarioSemanal(u) {
+  if (Array.isArray(u.horarioSemanal) && u.horarioSemanal.length === 7) {
+    return u.horarioSemanal.map(dia => ({
+      descanso: !!(dia && dia.descanso),
+      horaInicio: (dia && dia.horaInicio) || "",
+      horaFin: (dia && dia.horaFin) || "",
+      comida: Number(dia && dia.comida) || 0
+    }));
+  }
+  return horarioSemanalPorDefault(u.diaDescanso ?? 0);
+}
+
+function calcularHorasDia(horaInicio, horaFin) {
+  if (!horaInicio || !horaFin) return 0;
+  const [hi, mi] = horaInicio.split(":").map(Number);
+  const [hf, mf] = horaFin.split(":").map(Number);
+  if ([hi, mi, hf, mf].some(n => isNaN(n))) return 0;
+  let minutos = (hf * 60 + mf) - (hi * 60 + mi);
+  if (minutos <= 0) minutos += 24 * 60; // turno que cruza la medianoche
+  return minutos / 60;
+}
+
+function calcularHorasNetasDia(horaInicio, horaFin, comida) {
+  return Math.max(0, calcularHorasDia(horaInicio, horaFin) - (Number(comida) || 0));
+}
+
+function calcularHorasSemanales(horarioSemanal) {
+  return horarioSemanal.reduce(
+    (acc, dia) => acc + (dia.descanso ? 0 : calcularHorasNetasDia(dia.horaInicio, dia.horaFin, dia.comida)),
+    0
+  );
+}
+
 function construirVista(contenedor, { esAdmin, uid }) {
   contenedor.innerHTML = `
     <section class="panel">
@@ -140,6 +189,20 @@ function construirVista(contenedor, { esAdmin, uid }) {
         <button type="button" class="secundario" id="btn-vista-previa">VISTA PREVIA / IMPRIMIR</button>
       </div>
     </section>
+
+    ${esAdmin ? `
+    <section class="panel" style="margin-top:20px;">
+      <h2>Resumen de horarios (Word)</h2>
+      <p class="nota">
+        Un documento .docx con el horario semanal actual de cada empleado activo (entrada, salida, comida y total de
+        horas), y una columna "Proyección" en blanco para anotar a mano una propuesta de ajuste futuro.
+      </p>
+      <div class="acciones-form">
+        <button type="button" class="secundario" id="btn-resumen-horarios">Descargar resumen de horarios (.docx)</button>
+      </div>
+      <div id="horarios-docx-error" class="error"></div>
+    </section>
+    ` : ""}
   `;
 
   const selectSemana = contenedor.querySelector("#rep-semana");
@@ -273,6 +336,135 @@ function construirVista(contenedor, { esAdmin, uid }) {
   });
 
   btnVistaPrevia.addEventListener("click", abrirVistaPreviaImprimir);
+
+  contenedor.querySelector("#btn-resumen-horarios")?.addEventListener("click", generarResumenHorariosDocx);
+
+  // Arma y descarga un .docx con el horario semanal actual de cada empleado
+  // activo: un renglón por persona, una columna por día (Lunes...Domingo,
+  // aunque horarioSemanal lo guarda 0=domingo...6=sábado), el total de
+  // horas netas de la semana, y una columna "Proyección" en blanco para que
+  // el admin anote a mano una propuesta de ajuste futuro directo en Word.
+  // Se genera 100% en el navegador con la librería "docx" (sin backend),
+  // igual que el resto de esta app.
+  async function generarResumenHorariosDocx() {
+    const errorDiv = contenedor.querySelector("#horarios-docx-error");
+    const boton = contenedor.querySelector("#btn-resumen-horarios");
+    errorDiv.textContent = "";
+    boton.disabled = true;
+    const textoOriginal = boton.textContent;
+    boton.textContent = "Generando...";
+
+    try {
+      const {
+        Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+        WidthType, HeadingLevel, AlignmentType, PageOrientation, ShadingType
+      } = await import("https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.mjs");
+
+      const empleados = [...mapUsuarios.entries()]
+        .map(([id, u]) => ({ id, ...u }))
+        .filter(u => u.estatus === "activo")
+        .sort((a, b) => (a.nombre || "").localeCompare(b.nombre || "", "es", { sensitivity: "base" }));
+
+      if (empleados.length === 0) {
+        errorDiv.textContent = "No hay empleados activos para incluir en el resumen.";
+        return;
+      }
+
+      function celdaTexto(texto, { bold = false, italics = false, tamano = 20, color, centrado = true } = {}) {
+        return new Paragraph({
+          alignment: centrado ? AlignmentType.CENTER : AlignmentType.LEFT,
+          children: [new TextRun({ text: texto, bold, italics, size: tamano, color })]
+        });
+      }
+
+      function celdaDia(dia) {
+        if (!dia || dia.descanso) {
+          return new TableCell({
+            children: [celdaTexto("Descanso", { italics: true, tamano: 18 })]
+          });
+        }
+        const horasNetas = calcularHorasNetasDia(dia.horaInicio, dia.horaFin, dia.comida);
+        return new TableCell({
+          children: [
+            celdaTexto(`${dia.horaInicio}–${dia.horaFin}`, { bold: true, tamano: 18 }),
+            celdaTexto(`${horasNetas.toFixed(2)} hrs trabajadas`, { tamano: 16 }),
+            celdaTexto(`${dia.comida || 0} hrs comida`, { tamano: 16 })
+          ]
+        });
+      }
+
+      const encabezados = ["Empleado", ...ORDEN_COLUMNAS_DIA.map(i => NOMBRES_DIA[i]), "Total actual", "Proyección"];
+      const anchosColumna = [13, 9, 9, 9, 9, 9, 9, 9, 8, 16]; // suman 100%
+      const filaEncabezado = new TableRow({
+        tableHeader: true,
+        children: encabezados.map((txt, i) => new TableCell({
+          width: { size: anchosColumna[i], type: WidthType.PERCENTAGE },
+          shading: { type: ShadingType.SOLID, color: "2C1E0F" },
+          children: [celdaTexto(txt, { bold: true, color: "FFFFFF", tamano: 18 })]
+        }))
+      });
+
+      const filasEmpleados = empleados.map(u => {
+        const horario = normalizarHorarioSemanal(u);
+        const total = calcularHorasSemanales(horario);
+        return new TableRow({
+          children: [
+            new TableCell({
+              width: { size: anchosColumna[0], type: WidthType.PERCENTAGE },
+              children: [celdaTexto(u.nombre || "", { bold: true, centrado: false, tamano: 20 })]
+            }),
+            ...ORDEN_COLUMNAS_DIA.map(i => celdaDia(horario[i])),
+            new TableCell({
+              width: { size: anchosColumna[8], type: WidthType.PERCENTAGE },
+              children: [celdaTexto(total.toFixed(2), { bold: true, tamano: 18 })]
+            }),
+            new TableCell({
+              width: { size: anchosColumna[9], type: WidthType.PERCENTAGE },
+              children: [celdaTexto("", { tamano: 18 })]
+            })
+          ]
+        });
+      });
+
+      const tabla = new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        rows: [filaEncabezado, ...filasEmpleados]
+      });
+
+      const doc = new Document({
+        sections: [{
+          properties: {
+            page: {
+              size: { orientation: PageOrientation.LANDSCAPE },
+              margin: { top: 720, bottom: 720, left: 560, right: 560 }
+            }
+          },
+          children: [
+            new Paragraph({ text: "AUTOTRANSPORTES ALANIS, S.A. DE C.V.", heading: HeadingLevel.HEADING_3 }),
+            new Paragraph({ text: "Resumen de horarios por empleado", heading: HeadingLevel.HEADING_1 }),
+            new Paragraph({ text: `Generado el ${formatearFechaHoraGeneracion()}` }),
+            new Paragraph({ text: "" }),
+            tabla
+          ]
+        }]
+      });
+
+      const blob = await Packer.toBlob(doc);
+      const url = URL.createObjectURL(blob);
+      const enlace = document.createElement("a");
+      enlace.href = url;
+      enlace.download = `resumen_horarios_${hoyLocalStr()}.docx`;
+      document.body.appendChild(enlace);
+      enlace.click();
+      document.body.removeChild(enlace);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      errorDiv.textContent = "No se pudo generar el documento: " + err.message;
+    } finally {
+      boton.disabled = false;
+      boton.textContent = textoOriginal;
+    }
+  }
 
   // Construye la página 1 (REPORTE RH: un bloque por empleado con el
   // detalle de cada hora extra) de la semana elegida arriba.
