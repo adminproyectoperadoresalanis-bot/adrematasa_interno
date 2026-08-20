@@ -25,9 +25,9 @@ service cloud.firestore {
                     && request.resource.data.supervisorId == resource.data.supervisorId
                     && request.resource.data.estatus == resource.data.estatus;
       // Un supervisor puede descontar el saldo de vacaciones de alguien de su equipo al aprobar una solicitud,
-      // y también ajustar su día de descanso desde "Mi equipo" — nada más de la cuenta.
+      // y también editar su horario semanal completo desde "Mi equipo" — nada más de la cuenta.
       allow update: if isSignedIn() && esSupervisorDe(resource.data.supervisorId)
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['diasVacacionesDisponibles', 'diaDescanso']);
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['diasVacacionesDisponibles', 'diaDescanso', 'horarioSemanal', 'horasSemanales']);
       allow delete: if false;
     }
 
