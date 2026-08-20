@@ -2,6 +2,7 @@ import { db } from "./firebase-config.js";
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, where, getDoc
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { abrirFormatoVacacionesImprimir } from "./formatoVacaciones.js";
 
 const ETIQUETAS_ESTATUS = {
   pendiente: "Pendiente",
@@ -83,10 +84,15 @@ export function iniciarVistaVacacionesEmpleado(contenedor, datosUsuario, uid) {
   let editandoId = null;
   let saldoActual = 0;
   let diaDescansoActual = datosUsuario.diaDescanso ?? 0;
+  // Copia siempre fresca del usuario (número de empleado, área, puesto, fecha
+  // de ingreso...) para que el formato ATAF050 imprima datos al día aunque el
+  // admin los haya editado después de que esta pantalla se abrió.
+  let datosUsuarioActuales = datosUsuario;
 
   // Saldo y día de descanso en vivo: si el admin los cambia mientras el empleado tiene la app abierta, se actualizan solos.
   onSnapshot(doc(db, "usuarios", uid), (snap) => {
     const datos = snap.data() || {};
+    datosUsuarioActuales = datos;
     saldoActual = datos.diasVacacionesDisponibles || 0;
     saldoSpan.textContent = saldoActual;
     diaDescansoActual = datos.diaDescanso ?? 0;
@@ -214,6 +220,8 @@ export function iniciarVistaVacacionesEmpleado(contenedor, datosUsuario, uid) {
           ${s.estatus === "pendiente" ? `
             <button type="button" class="btn-editar">Editar</button>
             <button type="button" class="btn-eliminar btn-rechazar">Eliminar</button>
+          ` : s.estatus === "aprobada" ? `
+            <button type="button" class="secundario btn-imprimir-formato">Imprimir formato</button>
           ` : "—"}
         </td>
       </tr>
@@ -223,6 +231,9 @@ export function iniciarVistaVacacionesEmpleado(contenedor, datosUsuario, uid) {
       const id = fila.dataset.id;
       const solicitud = ultimaLista.find(s => s.id === id);
       fila.querySelector(".btn-editar")?.addEventListener("click", () => entrarModoEdicion(solicitud));
+      fila.querySelector(".btn-imprimir-formato")?.addEventListener("click", () => {
+        abrirFormatoVacacionesImprimir(solicitud, datosUsuarioActuales, saldoActual, diaDescansoActual);
+      });
       fila.querySelector(".btn-eliminar")?.addEventListener("click", async () => {
         if (!confirm("¿Eliminar esta solicitud de vacaciones? No se puede deshacer.")) return;
         try {
