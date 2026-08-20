@@ -156,6 +156,13 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
 
   onSnapshot(q, (snap) => {
     listaUsuarios = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // El orderBy("nombre") de Firestore ordena por bytes, no alfabéticamente
+    // de verdad (una mayúscula queda antes que cualquier minúscula, los
+    // acentos quedan revueltos) — se reordena aquí con localeCompare para
+    // que quede en orden alfabético real sin importar mayúsculas/acentos.
+    listaUsuarios.sort((a, b) =>
+      (a.nombre || "").localeCompare(b.nombre || "", "es", { sensitivity: "base" })
+    );
     aplicarCalculoAutomatico();
     renderPendientes();
     renderTabla();
