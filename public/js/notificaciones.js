@@ -1,6 +1,6 @@
 import { db } from "./firebase-config.js";
 import {
-  collection, addDoc, doc, updateDoc, onSnapshot, query, where, orderBy, limit, writeBatch
+  collection, addDoc, doc, updateDoc, onSnapshot, query, where, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
 // Crea una notificación in-app para "destinatarioId". Se usa desde
@@ -49,18 +49,24 @@ export function iniciarCentroNotificaciones(uid) {
   notificacionesActuales = [];
   panel.classList.add("oculto");
 
+  // Ojo: solo se filtra por destinatarioId, sin orderBy en la consulta —
+  // combinar un "where" con un "orderBy" en un campo distinto le exige a
+  // Firestore un índice compuesto que este proyecto no tiene creado (por
+  // eso el resto de la app, ej. vacaciones.js, también ordena en JS en vez
+  // de pedírselo a Firestore). El orden y el límite a 30 se hacen aquí abajo.
   const q = query(
     collection(db, "notificaciones"),
-    where("destinatarioId", "==", uid),
-    orderBy("creadoEn", "desc"),
-    limit(30)
+    where("destinatarioId", "==", uid)
   );
 
   unsubscribeActual = onSnapshot(q, (snap) => {
-    notificacionesActuales = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const todas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    todas.sort((a, b) => (b.creadoEn || "").localeCompare(a.creadoEn || ""));
+    notificacionesActuales = todas.slice(0, 30);
     renderPanel(badge, lista);
   }, (err) => {
     console.error("No se pudieron cargar las notificaciones:", err);
+    lista.innerHTML = `<li class="notif-vacia">No se pudieron cargar tus notificaciones.</li>`;
   });
 
   // El click-handler del botón, el de "clic afuera para cerrar" y el de
