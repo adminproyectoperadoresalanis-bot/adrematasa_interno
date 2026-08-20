@@ -477,7 +477,13 @@ function construirVista(contenedor, { esAdmin, uid }) {
         sections: [{
           properties: {
             page: {
-              size: { orientation: PageOrientation.LANDSCAPE },
+              // 12240x15840 twips son las medidas de carta (8.5x11") en
+              // vertical; con orientation LANDSCAPE la librería las voltea
+              // para dar la hoja horizontal de 15840x12240 que usa el resto
+              // de este documento (por eso el pie de página calcula su
+              // ancho útil a partir de 15840). Sin esto, docx usa A4 por
+              // default en vez de carta.
+              size: { width: 12240, height: 15840, orientation: PageOrientation.LANDSCAPE },
               margin: { top: 720, bottom: 720, left: 560, right: 560 }
             }
           },
