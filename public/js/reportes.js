@@ -143,6 +143,16 @@ function calcularHorasSemanales(horarioSemanal) {
   );
 }
 
+// Etiquetas cortas para el resumen de horarios: mismos valores de "tipo"
+// que ya usa faltas.js.
+const ETIQUETAS_FALTA_CORTAS = {
+  injustificada: "Injustificada",
+  justificada: "Justificada",
+  incapacidad: "Incapacidad",
+  permiso_con_goce: "Con goce",
+  permiso_sin_goce: "Sin goce"
+};
+
 function construirVista(contenedor, { esAdmin, uid }) {
   contenedor.innerHTML = `
     <section class="panel">
@@ -569,6 +579,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
           nombre: nombreFallback || datosUsuario.nombre || "",
           puesto: datosUsuario.puesto || "—",
           horasPorDia: {},
+          faltasPorDia: {}, // fecha -> tipo, para marcar "FALTA" en el día exacto
           faltas: 0
         });
       }
@@ -581,6 +592,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
     faltasSemana.forEach(f => {
       const e = fila(f.empleadoId, f.empleadoNombre);
       e.faltas += 1;
+      e.faltasPorDia[f.fecha] = f.tipo;
     });
 
     const empleados = [...porEmpleado.values()].sort((a, b) => (a.nombre || "").localeCompare(b.nombre || ""));
@@ -592,13 +604,19 @@ function construirVista(contenedor, { esAdmin, uid }) {
     const encabezadosDia = diasSemana.map(f => `<th>${diaSemana(f)}<br>${formatearFechaCorta(f)}</th>`).join("");
 
     const filasHtml = empleados.length === 0
-      ? `<tr><td colspan="${3 + diasSemana.length + 2}" class="centrado">Sin horas extra ni faltas aprobadas para esta semana.</td></tr>`
+      ? `<tr><td colspan="${3 + diasSemana.length + 3}" class="centrado">Sin horas extra ni faltas aprobadas para esta semana.</td></tr>`
       : empleados.map(e => {
         const celdasDias = diasSemana.map(f => {
+          const tipoFalta = e.faltasPorDia[f];
+          if (tipoFalta) return `<td class="centrado celda-falta">FALTA</td>`;
           const horas = e.horasPorDia[f];
           return `<td class="centrado">${horas ? horas : "—"}</td>`;
         }).join("");
         const totalSemana = Object.values(e.horasPorDia).reduce((acc, h) => acc + h, 0);
+        const tiposFalta = Object.values(e.faltasPorDia);
+        const celdaTipo = tiposFalta.length === 0
+          ? "—"
+          : [...new Set(tiposFalta.map(t => ETIQUETAS_FALTA_CORTAS[t] || t))].join(", ");
         return `
           <tr>
             <td class="centrado">${escapeHtml(e.numeroEmpleado)}</td>
@@ -607,6 +625,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
             ${celdasDias}
             <td class="centrado celda-total">${totalSemana}</td>
             <td class="centrado">${e.faltas || "—"}</td>
+            <td class="centrado">${escapeHtml(celdaTipo)}</td>
           </tr>
         `;
       }).join("");
@@ -629,6 +648,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
               ${encabezadosDia}
               <th>H Ext</th>
               <th>Faltas</th>
+              <th>Tipo<br>Falta</th>
             </tr>
           </thead>
           <tbody>
@@ -705,6 +725,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
   .pagina-nomina th, .pagina-nomina td { border:1px solid #1a1a1a; padding:3px 4px; font-size:9px; }
   .pagina-nomina th { background:#f7f8fa; font-weight:bold; text-align:center; }
   .pagina-nomina .celda-total { font-weight:bold; background:#f2f4f7; }
+  .pagina-nomina .celda-falta { font-weight:bold; color:#a32424; }
   .pagina-nomina .encabezado { border-bottom:1px solid #1a1a1a; }
   .pagina-nomina .periodo { margin-bottom:10px; }
   .pagina-nomina .pie-nomina { margin-top:auto; padding-top:16px; }
