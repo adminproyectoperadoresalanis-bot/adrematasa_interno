@@ -2,7 +2,6 @@ import { auth, db } from "./firebase-config.js";
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  sendPasswordResetEmail,
   onAuthStateChanged,
   signOut
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
@@ -34,11 +33,8 @@ const vistaApp = document.getElementById("vista-app");
 
 const formLogin = document.getElementById("form-login");
 const formRegistro = document.getElementById("form-registro");
-const formRecuperar = document.getElementById("form-recuperar");
 const errorLogin = document.getElementById("error-login");
 const errorRegistro = document.getElementById("error-registro");
-const errorRecuperar = document.getElementById("error-recuperar");
-const exitoRecuperar = document.getElementById("exito-recuperar");
 
 const linkIrRegistro = document.getElementById("link-ir-registro");
 const linkIrLogin = document.getElementById("link-ir-login");
@@ -87,40 +83,12 @@ linkIrLogin?.addEventListener("click", (e) => {
 linkIrRecuperar?.addEventListener("click", (e) => {
   e.preventDefault();
   errorLogin.textContent = "";
-  errorRecuperar.textContent = "";
-  exitoRecuperar.textContent = "";
-  exitoRecuperar.classList.add("oculto");
-  formRecuperar.reset();
   mostrarVista(vistaRecuperar);
 });
 
 linkIrLoginDesdeRecuperar?.addEventListener("click", (e) => {
   e.preventDefault();
-  errorRecuperar.textContent = "";
   mostrarVista(vistaLogin);
-});
-
-formRecuperar?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  errorRecuperar.textContent = "";
-  exitoRecuperar.textContent = "";
-  exitoRecuperar.classList.add("oculto");
-
-  const correo = document.getElementById("recuperar-correo").value.trim().toLowerCase();
-
-  if (!correo.endsWith(DOMINIO_ALANIS)) {
-    errorRecuperar.textContent = `Escribe tu correo Alanis (${DOMINIO_ALANIS})`;
-    return;
-  }
-
-  try {
-    await sendPasswordResetEmail(auth, correo);
-    exitoRecuperar.textContent = `Listo. Revisa la bandeja de entrada (y spam) de ${correo} para definir tu nueva contraseña.`;
-    exitoRecuperar.classList.remove("oculto");
-    formRecuperar.reset();
-  } catch (err) {
-    errorRecuperar.textContent = traducirError(err);
-  }
 });
 
 formRegistro?.addEventListener("submit", async (e) => {
