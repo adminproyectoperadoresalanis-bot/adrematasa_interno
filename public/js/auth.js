@@ -22,6 +22,7 @@ import { iniciarConfiguracion } from "./configuracion.js";
 import { iniciarReportesAdmin, iniciarReportesSupervisor } from "./reportes.js";
 import { iniciarCalendarioVacaciones } from "./calendarioVacaciones.js";
 import { iniciarCentroNotificaciones, detenerCentroNotificaciones } from "./notificaciones.js";
+import { iniciarCambioContrasena } from "./cuenta.js";
 
 const DOMINIO_ALANIS = "@alanis.com.mx";
 
@@ -177,6 +178,10 @@ formLogin?.addEventListener("submit", async (e) => {
 btnLogout?.addEventListener("click", async () => {
   await signOut(auth);
 });
+
+// Disponible para cualquier rol, en el encabezado — no depende de a qué
+// pestaña esté entrando cada quien.
+iniciarCambioContrasena();
 
 function traducirError(err) {
   const codigo = err.code || "";
