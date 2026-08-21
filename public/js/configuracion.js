@@ -1,7 +1,10 @@
-import { db } from "./firebase-config.js";
+import { db, auth } from "./firebase-config.js";
 import {
   doc, setDoc, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import {
+  sendPasswordResetEmail
+} from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import { UMBRALES_DEFAULT } from "./vacacionesCalculo.js";
 import { AREAS_DEFAULT } from "./estructuraOrganizacional.js";
 import { enviarCorreoResultado } from "./correo.js";
@@ -67,6 +70,22 @@ export function iniciarConfiguracion(contenedor) {
         <button type="button" id="btn-correo-prueba" class="secundario">Enviar correo de prueba</button>
       </div>
       <div id="correo-prueba-nota" class="nota"></div>
+    </section>
+
+    <section class="panel" style="margin-top:20px;">
+      <h2>Recuperar contraseña (prueba temporal)</h2>
+      <p class="nota">
+        El link "¿Olvidaste tu contraseña?" de la pantalla de inicio de sesión ya funciona —
+        usa el envío de correo propio de Firebase Authentication (no pasa por EmailJS/correo.js,
+        es un mecanismo aparte que ya trae la app desde el registro/login). Este panel es solo
+        para probarlo sin cerrar tu sesión de admin: escribe un correo Alanis ya registrado en
+        la app y da clic. Puedes quitar esta sección más adelante si ya no la necesitas.
+      </p>
+      <div class="acciones-form">
+        <input type="email" id="input-recuperar-prueba" placeholder="tucorreo@alanis.com.mx" style="min-width:260px;">
+        <button type="button" id="btn-recuperar-prueba" class="secundario">Enviar link de recuperación</button>
+      </div>
+      <div id="recuperar-prueba-nota" class="nota"></div>
     </section>
   `;
 
@@ -277,6 +296,34 @@ export function iniciarConfiguracion(contenedor) {
       ? "Enviado ✅ — revisa la bandeja de entrada (y spam) de " + destino
       : "No se pudo enviar: " + resultado.error;
     btnCorreoPrueba.disabled = false;
+  });
+
+  // --- Recuperar contraseña: botón temporal de prueba ---
+
+  const inputRecuperarPrueba = contenedor.querySelector("#input-recuperar-prueba");
+  const btnRecuperarPrueba = contenedor.querySelector("#btn-recuperar-prueba");
+  const notaRecuperarPrueba = contenedor.querySelector("#recuperar-prueba-nota");
+
+  btnRecuperarPrueba.addEventListener("click", async () => {
+    const destino = inputRecuperarPrueba.value.trim().toLowerCase();
+    if (!destino) {
+      notaRecuperarPrueba.textContent = "Escribe un correo primero.";
+      return;
+    }
+    btnRecuperarPrueba.disabled = true;
+    notaRecuperarPrueba.textContent = "Enviando...";
+    try {
+      await sendPasswordResetEmail(auth, destino);
+      notaRecuperarPrueba.textContent = "Enviado ✅ — revisa la bandeja de entrada (y spam) de " + destino;
+    } catch (err) {
+      const mensajes = {
+        "auth/user-not-found": "No existe una cuenta con ese correo en la app.",
+        "auth/invalid-email": "Ese correo no es válido.",
+        "auth/too-many-requests": "Demasiados intentos. Espera un momento e intenta de nuevo."
+      };
+      notaRecuperarPrueba.textContent = "No se pudo enviar: " + (mensajes[err.code] || err.message);
+    }
+    btnRecuperarPrueba.disabled = false;
   });
 }
 
