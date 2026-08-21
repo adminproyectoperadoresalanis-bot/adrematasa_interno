@@ -324,6 +324,91 @@ main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100
 
 .panel + .panel { margin-top: 20px; }
 
+/* Calendario mensual de vacaciones (solo admin) */
+.cal-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.cal-toolbar-nav { display: flex; align-items: center; gap: 8px; }
+.cal-toolbar-nav h2 { margin: 0 0 0 6px; font-size: 1.1rem; text-transform: capitalize; }
+.cal-toolbar-nav button { padding: 6px 12px; }
+
+.cal-leyenda { display: flex; flex-wrap: wrap; gap: 14px; font-size: 0.78rem; color: #666; }
+.cal-leyenda-item { display: flex; align-items: center; gap: 5px; }
+.cal-muestra { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
+.cal-muestra-aprobada { background: #1c7a41; }
+.cal-muestra-pendiente { background: #fdecc8; border: 1px dashed #8a5a00; }
+.cal-muestra-conflicto { background: #fff; border: 2px solid #c0392b; }
+.cal-muestra-festivo { background: #f5e6c8; }
+
+#cal-grid { border: 1px solid #e0ddd8; border-radius: 8px; overflow: hidden; }
+
+.cal-encabezados {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  background: #2c1e0f;
+}
+.cal-encabezado-dia {
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 8px 6px;
+  text-align: center;
+}
+
+.cal-semana {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-top: 1px solid #e0ddd8;
+}
+
+.cal-dia {
+  border-right: 1px solid #efece7;
+  padding: 4px 5px;
+  min-height: 26px;
+}
+.cal-dia:last-child { border-right: none; }
+.cal-dia-fuera-mes { background: #fafaf8; }
+.cal-dia-fuera-mes .cal-dia-numero { color: #bbb; }
+
+.cal-dia-numero { font-size: 0.78rem; font-weight: 600; color: #2c1e0f; }
+
+.cal-festivo {
+  font-size: 0.65rem;
+  color: #a3781a;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cal-barra {
+  margin: 1px 2px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+.cal-barra-aprobada { background: #1c7a41; }
+.cal-barra-pendiente { background: #fdecc8; color: #8a5a00; border: 1px dashed #8a5a00; }
+.cal-barra-conflicto { outline: 2px solid #c0392b; outline-offset: -2px; }
+
+@media (max-width: 700px) {
+  .cal-encabezado-dia { font-size: 0.62rem; padding: 6px 2px; }
+  .cal-dia-numero { font-size: 0.68rem; }
+  .cal-barra, .cal-festivo { font-size: 0.6rem; }
+}
+
 .tabla .input-comentario {
   width: 100%;
   min-width: 140px;

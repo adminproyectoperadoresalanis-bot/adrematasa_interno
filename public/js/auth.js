@@ -20,6 +20,7 @@ import { iniciarGestionFaltas, iniciarVistaSupervisorFaltas, iniciarVistaEmplead
 import { iniciarMiEquipo } from "./equipo.js";
 import { iniciarConfiguracion } from "./configuracion.js";
 import { iniciarReportesAdmin, iniciarReportesSupervisor } from "./reportes.js";
+import { iniciarCalendarioVacaciones } from "./calendarioVacaciones.js";
 import { iniciarCentroNotificaciones, detenerCentroNotificaciones } from "./notificaciones.js";
 
 const DOMINIO_ALANIS = "@alanis.com.mx";
@@ -265,6 +266,7 @@ onAuthStateChanged(auth, async (user) => {
         (d) => iniciarGestionVacaciones(d, user.uid, datosUsuario.nombre),
         (d) => iniciarVistaVacacionesEmpleado(d, datosUsuario, user.uid)
       ),
+      calendarioVacaciones: (c) => iniciarCalendarioVacaciones(c),
       faltas: (c) => iniciarGestionFaltas(c, user.uid, datosUsuario.nombre),
       catalogo: (c) => iniciarPanelAdmin(c, user.uid),
       reportes: (c) => iniciarReportesAdmin(c),

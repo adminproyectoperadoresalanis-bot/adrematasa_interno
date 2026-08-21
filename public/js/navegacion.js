@@ -14,6 +14,7 @@ const TABS_POR_ROL = {
   ],
   admin: [
     { id: "panel", etiqueta: "Panel" },
+    { id: "calendarioVacaciones", etiqueta: "Calendario" },
     { id: "solicitudes", etiqueta: "Horas extra" },
     { id: "vacaciones", etiqueta: "Vacaciones" },
     { id: "faltas", etiqueta: "Faltas" },
