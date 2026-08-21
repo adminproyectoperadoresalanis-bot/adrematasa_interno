@@ -577,23 +577,32 @@ function construirVista(contenedor, { esAdmin, uid }) {
 
     return `
       <div class="pagina pagina-rh">
-        <div class="encabezado">
-          <div class="logo-caja"><img src="${logoUrl}" alt="" onerror="this.style.display='none'"></div>
-          <div class="titulo-centro">${escapeHtml(tituloCentro)}</div>
-          <div class="espaciador"></div>
-        </div>
-        <div class="periodo">${escapeHtml(periodoTexto)}</div>
+        <table class="tabla-paginado">
+          <thead>
+            <tr><td>
+              <div class="encabezado">
+                <div class="logo-caja"><img src="${logoUrl}" alt="" onerror="this.style.display='none'"></div>
+                <div class="titulo-centro">${escapeHtml(tituloCentro)}</div>
+                <div class="espaciador"></div>
+              </div>
+              <div class="periodo">${escapeHtml(periodoTexto)}</div>
+            </td></tr>
+          </thead>
+          <tbody>
+            <tr><td>
+              ${segmentosHtml}
 
-        ${segmentosHtml}
-
-        <div class="pie">
-          <div class="firmas">
-            <div class="firma">Iván Landa<br>Autorización</div>
-            <div class="firma">Firma del Depto. de Nóminas<br>Revisión</div>
-          </div>
-          <div class="pie-empresa">AUTOTRANSPORTES ALANIS, S.A. DE C.V.</div>
-          <div class="codigo-formato"><span>ATAF082</span><span>Rev. 0&nbsp;&nbsp;&nbsp;05/02/2024</span></div>
-        </div>
+              <div class="pie">
+                <div class="firmas">
+                  <div class="firma">Iván Landa<br>Autorización</div>
+                  <div class="firma">Firma del Depto. de Nóminas<br>Revisión</div>
+                </div>
+                <div class="pie-empresa">AUTOTRANSPORTES ALANIS, S.A. DE C.V.</div>
+                <div class="codigo-formato"><span>ATAF082</span><span>Rev. 0&nbsp;&nbsp;&nbsp;05/02/2024</span></div>
+              </div>
+            </td></tr>
+          </tbody>
+        </table>
       </div>
     `;
   }
@@ -669,40 +678,49 @@ function construirVista(contenedor, { esAdmin, uid }) {
 
     return `
       <div class="pagina pagina-nomina">
-        <div class="encabezado">
-          <div class="logo-caja"><img src="${logoUrl}" alt="" onerror="this.style.display='none'"></div>
-          <div class="titulo-centro">${escapeHtml(tituloCentro)}</div>
-          <div class="espaciador"></div>
-        </div>
-        <div class="periodo">${escapeHtml(periodoTexto)}</div>
-
-        <table>
+        <table class="tabla-paginado">
           <thead>
-            <tr>
-              <th>No.<br>Emp.</th>
-              <th>Nombre</th>
-              <th>Puesto</th>
-              ${encabezadosDia}
-              <th>H Ext</th>
-              <th>Faltas</th>
-              <th>Tipo<br>Falta</th>
-            </tr>
+            <tr><td>
+              <div class="encabezado">
+                <div class="logo-caja"><img src="${logoUrl}" alt="" onerror="this.style.display='none'"></div>
+                <div class="titulo-centro">${escapeHtml(tituloCentro)}</div>
+                <div class="espaciador"></div>
+              </div>
+              <div class="periodo">${escapeHtml(periodoTexto)}</div>
+            </td></tr>
           </thead>
           <tbody>
-            ${filasHtml}
+            <tr><td>
+              <table class="tabla-datos">
+                <thead>
+                  <tr>
+                    <th>No.<br>Emp.</th>
+                    <th>Nombre</th>
+                    <th>Puesto</th>
+                    ${encabezadosDia}
+                    <th>H Ext</th>
+                    <th>Faltas</th>
+                    <th>Tipo<br>Falta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${filasHtml}
+                </tbody>
+              </table>
+
+              <div class="pie-nomina">
+                <div class="pie-nomina-contenido">
+                  <div class="autorizo">Autorizó: Iván Landa</div>
+                  <div class="meta-impresion">
+                    Reporte de horas extras de la semana ${numeroSemana}<br>
+                    Generado el ${formatearFechaHoraGeneracion()}
+                  </div>
+                </div>
+                <div class="pie-empresa">AUTOTRANSPORTES ALANIS, S.A. DE C.V.</div>
+              </div>
+            </td></tr>
           </tbody>
         </table>
-
-        <div class="pie-nomina">
-          <div class="pie-nomina-contenido">
-            <div class="autorizo">Autorizó: Iván Landa</div>
-            <div class="meta-impresion">
-              Reporte de horas extras de la semana ${numeroSemana}<br>
-              Generado el ${formatearFechaHoraGeneracion()}
-            </div>
-          </div>
-          <div class="pie-empresa">AUTOTRANSPORTES ALANIS, S.A. DE C.V.</div>
-        </div>
       </div>
     `;
   }
@@ -741,11 +759,23 @@ function construirVista(contenedor, { esAdmin, uid }) {
   .espaciador { width:110px; }
   .periodo { text-align:center; font-size:11px; margin-bottom:14px; }
   .centrado { text-align:center; }
-  .pie { margin-top:auto; padding-top:16px; }
+  .pie { margin-top:16px; padding-top:16px; break-inside: avoid; page-break-inside: avoid; }
   .sin-datos { text-align:center; color:#666; margin-top:20px; }
 
-  .pagina-rh { max-width: 190mm; margin: 0 auto; font-size:11px; display:flex; flex-direction:column; min-height:100vh; }
-  .pagina-rh table { width:100%; border-collapse:collapse; }
+  /* Tabla envoltura de cada "página": el encabezado va en <thead> para que
+     se repita arriba en cada hoja impresa si el contenido crece a más de
+     una hoja, y el detalle + pie van en <tbody> para que fluyan y se corten
+     de forma natural entre hojas, en vez de quedar forzados a llenar un
+     100vh completo (eso era lo que mandaba el pie a su propia hoja casi en
+     blanco). El pie no se repite en cada hoja a propósito: es un bloque de
+     cierre/firma, no un pie de página que deba salir varias veces. */
+  .tabla-paginado { width:100%; border-collapse:collapse; }
+  .tabla-paginado > thead { display: table-header-group; }
+  .tabla-paginado > tbody { display: table-row-group; }
+  .tabla-paginado > thead > tr > td,
+  .tabla-paginado > tbody > tr > td { border:none; padding:0; }
+
+  .pagina-rh { max-width: 190mm; margin: 0 auto; font-size:11px; }
   .pagina-rh .segmento-empleado { break-inside: avoid; margin-bottom:10px; }
   .pagina-rh .tabla-encabezado-empleado td { border:1px solid #1a1a1a; font-weight:bold; font-size:11px; padding:3px 6px; background:#eef1f4; }
   .pagina-rh .celda-nombre-empleado { width:65%; }
@@ -757,15 +787,16 @@ function construirVista(contenedor, { esAdmin, uid }) {
   .pagina-rh .pie-empresa { text-align:center; font-weight:bold; font-size:10px; margin:16px 0 6px; }
   .pagina-rh .codigo-formato { display:flex; justify-content:space-between; font-size:9.5px; margin-top:6px; padding-top:4px; }
 
-  .pagina-nomina { font-size:10px; display:flex; flex-direction:column; min-height:100vh; }
-  .pagina-nomina table { width:100%; border-collapse:collapse; }
-  .pagina-nomina th, .pagina-nomina td { border:1px solid #1a1a1a; padding:3px 4px; font-size:9px; }
-  .pagina-nomina th { background:#f7f8fa; font-weight:bold; text-align:center; }
+  .pagina-nomina { font-size:10px; }
+  .pagina-nomina .tabla-datos { width:100%; border-collapse:collapse; break-inside: auto; }
+  .pagina-nomina .tabla-datos th, .pagina-nomina .tabla-datos td { border:1px solid #1a1a1a; padding:3px 4px; font-size:9px; }
+  .pagina-nomina .tabla-datos th { background:#f7f8fa; font-weight:bold; text-align:center; }
+  .pagina-nomina .tabla-datos thead { display: table-header-group; }
   .pagina-nomina .celda-total { font-weight:bold; background:#f2f4f7; }
   .pagina-nomina .celda-falta { font-weight:bold; color:#a32424; }
   .pagina-nomina .encabezado { border-bottom:1px solid #1a1a1a; }
   .pagina-nomina .periodo { margin-bottom:10px; }
-  .pagina-nomina .pie-nomina { margin-top:auto; padding-top:16px; }
+  .pagina-nomina .pie-nomina { margin-top:16px; padding-top:16px; break-inside: avoid; page-break-inside: avoid; }
   .pagina-nomina .pie-empresa { text-align:center; font-weight:bold; font-size:10px; margin-top:12px; }
   .pagina-nomina .pie-nomina-contenido { display:flex; justify-content:space-between; align-items:flex-end; }
   .pagina-nomina .autorizo { text-align:left; font-size:10.5px; width:220px; padding-top:6px; }
