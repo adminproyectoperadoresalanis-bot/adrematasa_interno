@@ -151,7 +151,7 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
       // de página fijos; aquí solo va el cuerpo, como HTML real — el template
       // usa {{{mensaje}}} (triple llave) para no escapar las etiquetas.
       mensaje: `<p style="margin:0 0 12px;">Tu solicitud de vacaciones del ${s.fechaInicio} al ${s.fechaFin} (${s.diasHabiles} día(s)) fue:</p>
-<p style="margin:0 0 12px;"><span style="display:inline-block;padding:4px 12px;border-radius:4px;font-weight:bold;background:${aprobada ? "#e7f5ec" : "#fdecea"};color:${aprobada ? "#1c7a41" : "#c0392b"};">${aprobada ? "APROBADA ✅" : "RECHAZADA"}</span></p>${s.comentarioRevisor ? `<p style="margin:0;color:#555;font-size:0.9em;">Comentario: ${escapeHtml(s.comentarioRevisor)}</p>` : ""}`
+<p style="margin:0 0 12px;"><span style="display:inline-block;padding:4px 12px;border-radius:4px;font-weight:bold;background:${aprobada ? "#e7f5ec" : "#fdecea"};color:${aprobada ? "#1c7a41" : "#c0392b"};">${aprobada ? "APROBADA ✅" : "RECHAZADA"}</span></p>${s.comentarioRevisor ? `<p style="margin:0;color:#555;font-size:0.9em;">Comentario: ${escapeHtml(s.comentarioRevisor)}</p>` : ""}${aprobada ? `<p style="margin:12px 0 0;padding:10px 12px;background:#f5f3f0;border-radius:4px;font-size:0.9em;">📄 Imprima su formato desde la AdrematasaInternoWebApp para solicitar firma autógrafa de su Supervisor.</p>` : ""}`
     };
   }
 
