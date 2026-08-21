@@ -150,7 +150,10 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
       destinatarioEmail: usuario.email || "",
       destinatarioNombre: s.empleadoNombre || usuario.nombre || "",
       asunto: `Solicitud de horas extra ${aprobada ? "aprobada" : "rechazada"} — Alanis`,
-      mensaje: `Hola ${s.empleadoNombre || ""},\n\nTu solicitud de horas extra del ${s.fecha} (${s.horaInicio}-${s.horaFin}) fue ${aprobada ? "APROBADA" : "RECHAZADA"}.${s.comentarioRevisor ? "\nComentario: " + s.comentarioRevisor : ""}\n\nEste es un aviso automático de Adrematasa Interno (Alanis).`
+      // El template de EmailJS mete {{mensaje}} tal cual dentro del HTML del
+      // correo, así que los saltos de línea van con <br> (no con \n — el
+      // editor de EmailJS no los respeta al guardar el template).
+      mensaje: `Hola ${s.empleadoNombre || ""},<br><br>Tu solicitud de horas extra del ${s.fecha} (${s.horaInicio}-${s.horaFin}) fue ${aprobada ? "APROBADA" : "RECHAZADA"}.${s.comentarioRevisor ? "<br>Comentario: " + s.comentarioRevisor : ""}<br><br>Este es un aviso automático de Adrematasa Interno (Alanis).`
     };
   }
 
