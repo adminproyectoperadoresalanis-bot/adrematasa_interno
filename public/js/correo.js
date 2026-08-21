@@ -38,7 +38,7 @@
 // Mientras EMAILJS_CONFIG no esté lleno, enviarCorreoResultado() regresa un
 // error claro en vez de intentar mandar nada (no truena la app).
 const EMAILJS_CONFIG = {
-  serviceId: "service_416kx4m",
+  serviceId: "service_4k09qwm",
   templateId: "template_iwc9g4q",
   publicKey: "dcIzVrYyNvf886rC7"
 };
