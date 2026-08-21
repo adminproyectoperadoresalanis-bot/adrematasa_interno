@@ -10,6 +10,7 @@ const TABS_POR_ROL = {
     { id: "vacaciones", etiqueta: "Vacaciones" },
     { id: "faltas", etiqueta: "Faltas" },
     { id: "equipo", etiqueta: "Mi equipo" },
+    { id: "calendarioVacaciones", etiqueta: "Calendario" },
     { id: "reportes", etiqueta: "Reportes" }
   ],
   admin: [

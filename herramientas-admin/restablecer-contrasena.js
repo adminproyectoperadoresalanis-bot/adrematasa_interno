@@ -4,6 +4,10 @@
 // ningún lado, no toca el plan de Firebase (sigue siendo 100% Spark/gratis).
 //
 // CÓMO SE USA (ver instrucciones completas en LEEME.md de esta carpeta):
+//   node restablecer-contrasena.js
+//   (y responde las dos preguntas que te va haciendo la terminal)
+//
+// También puedes seguir pasándolos directo si prefieres, sin que te pregunte:
 //   node restablecer-contrasena.js correo@alanis.com.mx nuevaContrasenaTemporal
 //
 // Qué hace: busca al usuario por su correo en Firebase Authentication y le
@@ -21,6 +25,7 @@ console.log("Iniciando...");
 const { initializeApp, cert } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const path = require("path");
+const readline = require("readline");
 
 const RUTA_LLAVE = path.join(__dirname, "serviceAccountKey.json");
 
@@ -47,21 +52,6 @@ try {
   process.exit(1);
 }
 
-const [, , correo, nuevaContrasena] = process.argv;
-
-if (!correo || !nuevaContrasena) {
-  console.error("Uso: node restablecer-contrasena.js correo@alanis.com.mx nuevaContrasenaTemporal");
-  process.exit(1);
-}
-if (!correo.includes("@")) {
-  console.error("Ese correo no se ve válido: " + correo);
-  process.exit(1);
-}
-if (nuevaContrasena.length < 6) {
-  console.error("La contraseña debe tener al menos 6 caracteres.");
-  process.exit(1);
-}
-
 // Límite de tiempo: si en 20 segundos no hay respuesta de Firebase (problema
 // de red desde Codespaces, por ejemplo), avisamos en vez de quedarnos
 // esperando en silencio para siempre.
@@ -69,27 +59,50 @@ const limiteTiempo = () => new Promise((_, reject) => {
   setTimeout(() => reject(new Error("TIMEOUT")), 20000);
 });
 
-console.log(`Buscando la cuenta de ${correo}...`);
+function preguntar(rl, texto) {
+  return new Promise((resolve) => rl.question(texto, (respuesta) => resolve(respuesta.trim())));
+}
 
-Promise.race([auth.getUserByEmail(correo), limiteTiempo()])
-  .then((userRecord) => {
+async function pedirDatosPorTerminal() {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  let correo = "";
+  while (true) {
+    correo = await preguntar(rl, "\nCorreo del empleado: ");
+    if (!correo) { console.log("Escribe un correo."); continue; }
+    if (!correo.includes("@")) { console.log("Ese correo no se ve válido, intenta de nuevo."); continue; }
+    break;
+  }
+
+  let nuevaContrasena = "";
+  while (true) {
+    nuevaContrasena = await preguntar(rl, "Contraseña temporal nueva (mínimo 6 caracteres): ");
+    if (nuevaContrasena.length < 6) { console.log("Debe tener al menos 6 caracteres, intenta de nuevo."); continue; }
+    break;
+  }
+
+  rl.close();
+  return { correo, nuevaContrasena };
+}
+
+async function restablecer(correo, nuevaContrasena) {
+  console.log(`\nBuscando la cuenta de ${correo}...`);
+  try {
+    const userRecord = await Promise.race([auth.getUserByEmail(correo), limiteTiempo()]);
     console.log(`Cuenta encontrada (uid: ${userRecord.uid}). Actualizando contraseña...`);
-    return Promise.race([
+    const actualizado = await Promise.race([
       auth.updateUser(userRecord.uid, { password: nuevaContrasena }),
       limiteTiempo()
     ]);
-  })
-  .then((userRecord) => {
     console.log("");
     console.log("Listo ✅");
-    console.log(`Correo: ${userRecord.email}`);
+    console.log(`Correo: ${actualizado.email}`);
     console.log(`Contraseña nueva: ${nuevaContrasena}`);
     console.log("");
     console.log("Ahora compártele esa contraseña al empleado por otro medio (WhatsApp, en persona, etc.)");
     console.log("para que pueda iniciar sesión. Su perfil, historial y saldo de vacaciones siguen intactos.");
     process.exit(0);
-  })
-  .catch((err) => {
+  } catch (err) {
     console.error("");
     if (err.message === "TIMEOUT") {
       console.error("Se agotó el tiempo de espera (20s) sin respuesta de Firebase.");
@@ -100,4 +113,23 @@ Promise.race([auth.getUserByEmail(correo), limiteTiempo()])
       console.error("Error: " + (err.message || err));
     }
     process.exit(1);
-  });
+  }
+}
+
+const [, , correoArg, contrasenaArg] = process.argv;
+
+if (correoArg && contrasenaArg) {
+  // Uso directo con argumentos, sin preguntas — sigue funcionando igual que antes.
+  if (!correoArg.includes("@")) {
+    console.error("Ese correo no se ve válido: " + correoArg);
+    process.exit(1);
+  }
+  if (contrasenaArg.length < 6) {
+    console.error("La contraseña debe tener al menos 6 caracteres.");
+    process.exit(1);
+  }
+  restablecer(correoArg, contrasenaArg);
+} else {
+  // Sin argumentos: modo interactivo, pregunta paso a paso.
+  pedirDatosPorTerminal().then(({ correo, nuevaContrasena }) => restablecer(correo, nuevaContrasena));
+}

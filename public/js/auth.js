@@ -268,6 +268,7 @@ onAuthStateChanged(auth, async (user) => {
       ),
       faltas: (c) => iniciarVistaSupervisorFaltas(c, user.uid, datosUsuario.nombre),
       equipo: (c) => iniciarMiEquipo(c, user.uid),
+      calendarioVacaciones: (c) => iniciarCalendarioVacaciones(c, { uidSupervisor: user.uid }),
       reportes: (c) => iniciarReportesSupervisor(c, user.uid)
     }, "panel");
   } else {

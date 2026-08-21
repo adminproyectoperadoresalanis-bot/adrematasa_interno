@@ -1,12 +1,17 @@
 import { db } from "./firebase-config.js";
 import {
-  collection, onSnapshot
+  collection, onSnapshot, query, where
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
-// Calendario mensual de vacaciones (solo admin) — de un vistazo, quién está
-// de vacaciones (pendiente o aprobada) en cada fecha, si hay días festivos
-// oficiales de por medio, y si dos personas del mismo puesto se empalman
-// (funciones que no pueden quedarse sin cubrir al mismo tiempo).
+// Calendario mensual de vacaciones — de un vistazo, quién está de vacaciones
+// (pendiente o aprobada) en cada fecha, si hay días festivos oficiales de por
+// medio, y si dos personas del mismo puesto se empalman (funciones que no
+// pueden quedarse sin cubrir al mismo tiempo).
+//
+// El admin lo ve para toda la empresa. El supervisor lo ve acotado solo a su
+// propio equipo (pasándole { uidSupervisor: uid } como segundo argumento) —
+// por eso los empalmes que detecta un supervisor son solo entre su propia
+// gente, no contra otros equipos.
 
 const DIAS_SEMANA = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const MESES = [
@@ -49,7 +54,9 @@ function festivosOficiales(anio) {
   ];
 }
 
-export function iniciarCalendarioVacaciones(contenedor) {
+export function iniciarCalendarioVacaciones(contenedor, opciones) {
+  const uidSupervisor = opciones && opciones.uidSupervisor;
+
   contenedor.innerHTML = `
     <section class="panel">
       <div class="cal-toolbar">
@@ -83,7 +90,14 @@ export function iniciarCalendarioVacaciones(contenedor) {
   let usuariosPorId = {};
   let solicitudes = [];
 
-  onSnapshot(collection(db, "usuarios"), (snap) => {
+  const queryUsuarios = uidSupervisor
+    ? query(collection(db, "usuarios"), where("supervisorId", "==", uidSupervisor))
+    : collection(db, "usuarios");
+  const querySolicitudes = uidSupervisor
+    ? query(collection(db, "solicitudesVacaciones"), where("supervisorId", "==", uidSupervisor))
+    : collection(db, "solicitudesVacaciones");
+
+  onSnapshot(queryUsuarios, (snap) => {
     usuariosPorId = {};
     snap.docs.forEach(d => { usuariosPorId[d.id] = d.data(); });
     render();
@@ -91,7 +105,7 @@ export function iniciarCalendarioVacaciones(contenedor) {
     errorDiv.textContent = "No se pudieron cargar los empleados: " + err.message;
   });
 
-  onSnapshot(collection(db, "solicitudesVacaciones"), (snap) => {
+  onSnapshot(querySolicitudes, (snap) => {
     solicitudes = snap.docs
       .map(d => ({ id: d.id, ...d.data() }))
       .filter(s => (s.estatus === "pendiente" || s.estatus === "aprobada") && s.fechaInicio && s.fechaFin);
