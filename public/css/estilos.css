@@ -377,6 +377,16 @@ main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100
 .cal-dia-fuera-mes .cal-dia-numero { color: #bbb; }
 
 .cal-dia-numero { font-size: 0.78rem; font-weight: 600; color: #2c1e0f; }
+.cal-dia-numero-hoy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #2b6cb0;
+  color: #fff !important;
+}
 
 .cal-festivo {
   font-size: 0.65rem;

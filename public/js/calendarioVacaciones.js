@@ -76,6 +76,7 @@ export function iniciarCalendarioVacaciones(contenedor) {
   const errorDiv = contenedor.querySelector("#cal-error");
 
   const hoy = new Date();
+  const hoyStr = fechaStr(hoy);
   let anioActual = hoy.getFullYear();
   let mesActual = hoy.getMonth() + 1; // 1-12
 
@@ -208,9 +209,10 @@ export function iniciarCalendarioVacaciones(contenedor) {
       const fStr = fechaStr(fecha);
       const esMesActual = fecha.getMonth() === primerDiaMes.getMonth() && fecha.getFullYear() === primerDiaMes.getFullYear();
       const festivoNombre = festivos[fStr];
+      const esHoy = fStr === hoyStr;
       return `
         <div class="cal-dia ${esMesActual ? "" : "cal-dia-fuera-mes"}" style="grid-column:${i + 1};">
-          <div class="cal-dia-numero">${fecha.getDate()}</div>
+          <div class="cal-dia-numero ${esHoy ? "cal-dia-numero-hoy" : ""}">${fecha.getDate()}</div>
           ${festivoNombre ? `<div class="cal-festivo" title="${escapeHtml(festivoNombre)}">${escapeHtml(festivoNombre)}</div>` : ""}
         </div>
       `;
