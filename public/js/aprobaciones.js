@@ -150,10 +150,11 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
       destinatarioEmail: usuario.email || "",
       destinatarioNombre: s.empleadoNombre || usuario.nombre || "",
       asunto: `Solicitud de horas extra ${aprobada ? "aprobada" : "rechazada"} — Alanis`,
-      // El template de EmailJS mete {{mensaje}} tal cual dentro del HTML del
-      // correo, así que los saltos de línea van con <br> (no con \n — el
-      // editor de EmailJS no los respeta al guardar el template).
-      mensaje: `Hola ${s.empleadoNombre || ""},<br><br>Tu solicitud de horas extra del ${s.fecha} (${s.horaInicio}-${s.horaFin}) fue ${aprobada ? "APROBADA" : "RECHAZADA"}.${s.comentarioRevisor ? "<br>Comentario: " + s.comentarioRevisor : ""}<br><br>Este es un aviso automático de Adrematasa Interno (Alanis).`
+      // El template de EmailJS pone el saludo ("Hola {{to_name}},") y el pie
+      // de página fijos; aquí solo va el cuerpo, como HTML real — el template
+      // usa {{{mensaje}}} (triple llave) para no escapar las etiquetas.
+      mensaje: `<p style="margin:0 0 12px;">Tu solicitud de horas extra del ${s.fecha} (${s.horaInicio}-${s.horaFin}) fue:</p>
+<p style="margin:0 0 12px;"><span style="display:inline-block;padding:4px 12px;border-radius:4px;font-weight:bold;background:${aprobada ? "#e7f5ec" : "#fdecea"};color:${aprobada ? "#1c7a41" : "#c0392b"};">${aprobada ? "APROBADA ✅" : "RECHAZADA"}</span></p>${s.comentarioRevisor ? `<p style="margin:0;color:#555;font-size:0.9em;">Comentario: ${escapeHtml(s.comentarioRevisor)}</p>` : ""}`
     };
   }
 

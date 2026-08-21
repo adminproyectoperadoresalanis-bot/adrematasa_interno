@@ -271,7 +271,7 @@ export function iniciarConfiguracion(contenedor) {
       destinatarioEmail: destino,
       destinatarioNombre: "Prueba",
       asunto: "Correo de prueba — Adrematasa Interno",
-      mensaje: "Si recibiste este correo, el envío automático de avisos de aprobación/rechazo desde la app ya está funcionando correctamente."
+      mensaje: `<p style="margin:0;">Si recibiste este correo, el envío automático de avisos de aprobación/rechazo desde la app ya está funcionando correctamente.</p>`
     });
     notaCorreoPrueba.textContent = resultado.ok
       ? "Enviado ✅ — revisa la bandeja de entrada (y spam) de " + destino
