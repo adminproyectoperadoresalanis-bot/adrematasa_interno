@@ -3,7 +3,7 @@ import {
   collection, onSnapshot, doc, updateDoc, query, where
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { crearNotificacion } from "./notificaciones.js";
-import { botonesWhatsApp } from "./whatsapp.js";
+import { enviarCorreoResultado } from "./correo.js";
 
 const ETIQUETAS_ESTATUS = {
   pendiente: "Pendiente",
@@ -31,7 +31,7 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-historial">
           <thead>
-            <tr><th>Empleado</th><th>Fecha</th><th>Horario</th><th>Horas</th><th>Motivo</th><th>Estatus</th><th>Comentario</th><th>Autorizó</th><th>Avisar</th></tr>
+            <tr><th>Empleado</th><th>Fecha</th><th>Horario</th><th>Horas</th><th>Motivo</th><th>Estatus</th><th>Comentario</th><th>Autorizó</th><th>Correo</th></tr>
           </thead>
           <tbody id="tbody-historial"><tr><td colspan="9">Cargando...</td></tr></tbody>
         </table>
@@ -59,7 +59,7 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
     errorDiv.textContent = "No se pudieron cargar las solicitudes: " + err.message;
   });
 
-  // Móvil de cada empleado (para armar los enlaces de WhatsApp del
+  // Correo de cada empleado (para el botón "Enviar correo" del
   // historial). Puede llegar después de las solicitudes — por eso
   // renderHistorial() se vuelve a llamar cuando cambie esto también.
   onSnapshot(queryUsuarios, (snap) => {
@@ -108,12 +108,8 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
       tbodyHistorial.innerHTML = `<tr><td colspan="9">Todavía no hay historial.</td></tr>`;
       return;
     }
-    tbodyHistorial.innerHTML = ultimoHistorial.map(s => {
-      const aprobada = s.estatus === "aprobada";
-      const usuario = usuariosPorId[s.empleadoId] || {};
-      const mensaje = `Hola ${s.empleadoNombre || ""}, tu solicitud de horas extra del ${s.fecha} (${s.horaInicio}-${s.horaFin}) fue ${aprobada ? "APROBADA ✅" : "RECHAZADA"}.${s.comentarioRevisor ? " Comentario: " + s.comentarioRevisor : ""} — Alanis`;
-      return `
-        <tr>
+    tbodyHistorial.innerHTML = ultimoHistorial.map(s => `
+        <tr data-id-correo="${s.id}">
           <td>${escapeHtml(s.empleadoNombre || "")}</td>
           <td>${s.fecha}</td>
           <td>${s.horaInicio}–${s.horaFin}</td>
@@ -122,10 +118,40 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
           <td><span class="badge badge-${s.estatus}">${ETIQUETAS_ESTATUS[s.estatus] || s.estatus}</span></td>
           <td>${s.comentarioRevisor ? escapeHtml(s.comentarioRevisor) : "—"}</td>
           <td>${s.revisadoPorNombre ? escapeHtml(s.revisadoPorNombre) : "—"}</td>
-          <td>${botonesWhatsApp(usuario.movilPais, usuario.movilNumero, mensaje)}</td>
+          <td>
+            <button type="button" class="secundario btn-enviar-correo">Enviar correo</button>
+            <div class="nota-correo"></div>
+          </td>
         </tr>
-      `;
-    }).join("");
+      `).join("");
+
+    tbodyHistorial.querySelectorAll("tr[data-id-correo]").forEach(fila => {
+      const id = fila.dataset.idCorreo;
+      const solicitud = ultimoHistorial.find(s => s.id === id);
+      const boton = fila.querySelector(".btn-enviar-correo");
+      const nota = fila.querySelector(".nota-correo");
+      boton.addEventListener("click", async () => {
+        boton.disabled = true;
+        nota.textContent = "Enviando...";
+        const usuario = usuariosPorId[solicitud.empleadoId] || {};
+        const resultado = await enviarCorreoResultado(mensajeCorreoSolicitud(solicitud, usuario));
+        nota.textContent = resultado.ok ? "Enviado ✅" : "No se pudo enviar: " + resultado.error;
+        boton.disabled = false;
+      });
+    });
+  }
+
+  // Arma el asunto/mensaje/destinatario del correo de aviso a partir de la
+  // solicitud ya resuelta y los datos del empleado (usados tanto por el
+  // botón manual del historial como por el envío automático al resolver).
+  function mensajeCorreoSolicitud(s, usuario) {
+    const aprobada = s.estatus === "aprobada";
+    return {
+      destinatarioEmail: usuario.email || "",
+      destinatarioNombre: s.empleadoNombre || usuario.nombre || "",
+      asunto: `Solicitud de horas extra ${aprobada ? "aprobada" : "rechazada"} — Alanis`,
+      mensaje: `Hola ${s.empleadoNombre || ""},\n\nTu solicitud de horas extra del ${s.fecha} (${s.horaInicio}-${s.horaFin}) fue ${aprobada ? "APROBADA" : "RECHAZADA"}.${s.comentarioRevisor ? "\nComentario: " + s.comentarioRevisor : ""}\n\nEste es un aviso automático de Adrematasa Interno (Alanis).`
+    };
   }
 
   async function resolverSolicitud(solicitud, estatus, comentario) {
@@ -144,6 +170,16 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
         mensaje: `Tu solicitud del ${solicitud.fecha} (${solicitud.horaInicio}–${solicitud.horaFin}) fue ${aprobada ? "aprobada" : "rechazada"}${comentario ? ": " + comentario : "."}`,
         tipo: aprobada ? "aprobacion" : "rechazo"
       });
+
+      // Aviso por correo al empleado — mejor esfuerzo: si falla (llaves de
+      // EmailJS sin configurar, sin internet, etc.) no debe tumbar la
+      // aprobación/rechazo, que ya quedó guardada arriba. El botón manual
+      // "Enviar correo" del historial sirve para reintentar ese caso.
+      const usuario = usuariosPorId[solicitud.empleadoId] || {};
+      enviarCorreoResultado(mensajeCorreoSolicitud({ ...solicitud, estatus, comentarioRevisor: comentario || null }, usuario))
+        .then(resultado => {
+          if (!resultado.ok) console.error("No se pudo enviar el correo de aviso:", resultado.error);
+        });
     } catch (err) {
       errorDiv.textContent = "No se pudo actualizar la solicitud: " + err.message;
     }

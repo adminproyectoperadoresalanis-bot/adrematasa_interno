@@ -573,19 +573,5 @@ body.tiene-nav main#contenido-app { padding-bottom: 90px; }
 
 .notif-vacia { padding: 20px 14px; text-align: center; color: #999; font-size: 0.85rem; }
 
-/* Enlaces de "Avisar por WhatsApp" en el historial de aprobaciones */
-.grupo-whatsapp { display: flex; gap: 6px; flex-wrap: wrap; }
-
-.btn-whatsapp {
-  display: inline-block;
-  background: #1c7a41;
-  color: #fff;
-  text-decoration: none;
-  padding: 5px 8px;
-  border-radius: 6px;
-  font-size: 0.72rem;
-  white-space: nowrap;
-}
-.btn-whatsapp:hover { background: #145c31; }
-
-.nota-whatsapp { color: #999; font-size: 0.78rem; }
+/* Botón "Enviar correo" y su nota de estado en el historial de aprobaciones */
+.nota-correo { color: #999; font-size: 0.78rem; margin-top: 4px; }
