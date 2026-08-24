@@ -209,17 +209,14 @@ export function iniciarOrganigrama(contenedor) {
     }
     ARBOL_ORGANIGRAMA.forEach(recorrer);
 
-    const pendientes = [];
+    const pendientesPorArea = [];
     areas.forEach(a => {
       if (areasCubiertasPorEntero.has(a.nombre)) return;
-      (a.puestos || []).forEach(p => {
-        if (!paresExplicitos.has(a.nombre + "||" + p)) {
-          pendientes.push({ area: a.nombre, puesto: p });
-        }
-      });
+      const puestos = (a.puestos || []).filter(p => !paresExplicitos.has(a.nombre + "||" + p));
+      if (puestos.length > 0) pendientesPorArea.push({ area: a.nombre, puestos });
     });
 
-    if (pendientes.length === 0) {
+    if (pendientesPorArea.length === 0) {
       otrosDiv.innerHTML = "";
       return;
     }
@@ -228,13 +225,19 @@ export function iniciarOrganigrama(contenedor) {
       <div class="panel" style="margin-top:20px; background:#faf8f5;">
         <h3 style="margin-top:0; font-size:0.95rem;">Puestos sin ubicar en el árbol</h3>
         <p class="nota" style="margin-bottom:12px;">
-          Estos puestos existen en Configuración › Áreas y puestos pero todavía no se les
-          definió un lugar en el organigrama. Avísale al administrador del sistema para
-          acomodarlos.
+          Estos puestos existen en Configuración › Áreas y puestos pero el nombre del Área
+          y/o del Puesto no coincide exactamente con lo que espera el árbol del organigrama
+          (mayúsculas, acentos o palabras distintas cuentan como distinto). Avísale al
+          administrador del sistema para acomodarlos o corregir el texto.
         </p>
-        <div class="otros-grid">
-          ${pendientes.map(p => `<div style="width:240px;">${renderCajaPuesto(p.area, p.puesto)}</div>`).join("")}
-        </div>
+        ${pendientesPorArea.map(grupo => `
+          <div style="margin-bottom:16px;">
+            <p style="font-size:0.8rem; font-weight:600; color:#6b5a44; margin:0 0 8px;">Área: ${escapeHtml(grupo.area)}</p>
+            <div class="otros-grid">
+              ${grupo.puestos.map(p => `<div style="width:240px;">${renderCajaPuesto(grupo.area, p)}</div>`).join("")}
+            </div>
+          </div>
+        `).join("")}
       </div>
     `;
   }
