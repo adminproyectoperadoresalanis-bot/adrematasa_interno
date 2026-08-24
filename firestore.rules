@@ -14,7 +14,19 @@ service cloud.firestore {
     }
 
     match /usuarios/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || esAdmin() || esSupervisorDe(resource.data.supervisorId));
+      // Además de verse a sí mismo, al admin, o (si es supervisor) a su
+      // equipo: cualquiera puede leer el doc de SU PROPIO supervisor (para
+      // saber a quién avisarle por correo al crear una solicitud) y el de
+      // cualquier admin (para el mismo aviso cuando no tiene supervisor
+      // asignado — el admin hace de respaldo). Nunca expone datos de un
+      // compañero cualquiera, solo de quien ya podría aprobarle algo.
+      allow read: if isSignedIn() && (
+        request.auth.uid == userId ||
+        esAdmin() ||
+        esSupervisorDe(resource.data.supervisorId) ||
+        (exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) && userId == usuarioActual().supervisorId) ||
+        resource.data.rol == 'admin'
+      );
       allow create: if isSignedIn() && request.auth.uid == userId && isAlanisEmail()
                     && request.resource.data.rol == 'empleado'
                     && request.resource.data.estatus == 'pendiente'

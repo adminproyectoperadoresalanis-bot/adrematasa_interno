@@ -3,6 +3,7 @@ import {
   collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, where, getDoc
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { abrirFormatoVacacionesImprimir } from "./formatoVacaciones.js";
+import { avisarNuevaSolicitud } from "./avisoNuevaSolicitud.js";
 
 const ETIQUETAS_ESTATUS = {
   pendiente: "Pendiente",
@@ -184,6 +185,17 @@ export function iniciarVistaVacacionesEmpleado(contenedor, datosUsuario, uid) {
         });
         form.reset();
         diasCalculados.textContent = "—";
+
+        // Aviso por correo a quien le toca aprobar (mejor esfuerzo — no
+        // bloquea ni afecta el guardado de arriba, que ya quedó hecho).
+        avisarNuevaSolicitud({
+          datosUsuario,
+          asunto: `Nueva solicitud de vacaciones de ${datosUsuario.nombre}`,
+          mensaje: `<p style="margin:0 0 12px;">${escapeHtml(datosUsuario.nombre)} envió una nueva solicitud de vacaciones:</p>
+<p style="margin:0 0 4px;"><strong>Del:</strong> ${fechaInicio} <strong>al:</strong> ${fechaFin} (${diasHabiles} día${diasHabiles === 1 ? "" : "s"} hábil${diasHabiles === 1 ? "" : "es"})</p>
+${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(motivo)}</p>` : ""}
+<p style="margin:0;color:#555;font-size:0.9em;">Entra a Adrematasa Interno para aprobarla o rechazarla.</p>`
+        });
       }
     } catch (err) {
       errorDiv.textContent = "No se pudo guardar la solicitud: " + err.message;

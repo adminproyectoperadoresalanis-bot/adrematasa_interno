@@ -2,6 +2,7 @@ import { db } from "./firebase-config.js";
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, where
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { avisarNuevaSolicitud } from "./avisoNuevaSolicitud.js";
 
 const ETIQUETAS_ESTATUS = {
   pendiente: "Pendiente",
@@ -171,6 +172,18 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
         });
         form.reset();
         horasCalculadas.textContent = "—";
+
+        // Aviso por correo a quien le toca aprobar (mejor esfuerzo — no
+        // bloquea ni afecta el guardado de arriba, que ya quedó hecho).
+        avisarNuevaSolicitud({
+          datosUsuario,
+          asunto: `Nueva solicitud de horas extra de ${datosUsuario.nombre}`,
+          mensaje: `<p style="margin:0 0 12px;">${escapeHtml(datosUsuario.nombre)} envió una nueva solicitud de horas extra:</p>
+<p style="margin:0 0 4px;"><strong>Fecha:</strong> ${fecha}</p>
+<p style="margin:0 0 4px;"><strong>Horario:</strong> ${horaInicio}–${horaFin} (${horas} h)</p>
+<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(motivo)}</p>
+<p style="margin:0;color:#555;font-size:0.9em;">Entra a Adrematasa Interno para aprobarla o rechazarla.</p>`
+        });
       }
     } catch (err) {
       errorDiv.textContent = "No se pudo guardar la solicitud: " + err.message;

@@ -48,11 +48,17 @@ function configurado() {
 }
 
 // destinatarioEmail / destinatarioNombre: a quién se le avisa.
-// asunto / mensaje: texto ya armado (la leyenda de aprobación o rechazo).
+// asunto / mensaje: texto ya armado (HTML del cuerpo del correo).
 // Regresa { ok: true } o { ok: false, error } — nunca lanza, para que se
-// pueda llamar "en automático" sin arriesgar el flujo principal (aprobar o
-// rechazar la solicitud) si el correo falla.
-export async function enviarCorreoResultado({ destinatarioEmail, destinatarioNombre, asunto, mensaje }) {
+// pueda llamar "en automático" sin arriesgar el flujo principal (crear,
+// aprobar o rechazar una solicitud) si el correo falla.
+//
+// Es genérica a propósito: se usa tanto para avisar el RESULTADO de una
+// solicitud (aprobaciones.js / aprobacionesVacaciones.js, vía el alias
+// enviarCorreoResultado) como para avisar que se CREÓ una solicitud nueva
+// (solicitudes.js / vacaciones.js, vía el alias enviarCorreoAvisoNuevaSolicitud)
+// — mismo mecanismo, mismo template de EmailJS, solo cambia el texto.
+async function enviarCorreo({ destinatarioEmail, destinatarioNombre, asunto, mensaje }) {
   if (!destinatarioEmail) {
     return { ok: false, error: "Este empleado no tiene correo registrado." };
   }
@@ -81,3 +87,8 @@ export async function enviarCorreoResultado({ destinatarioEmail, destinatarioNom
     return { ok: false, error: detalle };
   }
 }
+
+// Alias con nombre específico según de dónde se llama — mismo código, solo
+// para que quede claro en cada archivo qué tipo de aviso está mandando.
+export const enviarCorreoResultado = enviarCorreo;
+export const enviarCorreoAvisoNuevaSolicitud = enviarCorreo;
