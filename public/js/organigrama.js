@@ -13,19 +13,18 @@
 // Catálogo de empleados). Si nadie coincide, se muestra "Vacante". Si más
 // de una persona coincide, se listan todas.
 //
-// Para que "Dirección de operaciones" y "Gerencia de operaciones
-// Importación" aparezcan con nombre, hace falta (una sola vez):
-//   1) En Configuración > Áreas y puestos, agregar un área "Dirección
-//      General" con los puestos "Dirección de operaciones" y "Gerencia de
-//      operaciones Importación" (los nombres deben quedar EXACTAMENTE
-//      así, con mayúsculas y todo, para que coincidan).
-//   2) En Catálogo de empleados, editar los perfiles de Eduardo y de Iván
-//      y ponerles esa Área y ese Puesto exactos.
+// Cada nodo hace match contra el catálogo por Área + Puesto EXACTOS (mismo
+// texto, mayúsculas y acentos incluidos). Un nodo puede traer además una
+// "etiqueta" opcional: es solo el texto que se muestra en la caja (por
+// ejemplo, para distinguir los tres puestos que en el catálogo se llaman
+// igual, "Coordinador", pero están en áreas distintas) — el match contra
+// usuarios se sigue haciendo con "puesto", no con "etiqueta".
 //
 // Cualquier área/puesto del catálogo que no esté contemplado en el árbol
-// de abajo (por ejemplo, un área nueva que se agregue en Configuración)
-// aparece en la sección "Puestos sin ubicar en el árbol", para que nada se
-// pierda de vista en silencio.
+// de abajo (por ejemplo, un área nueva que se agregue en Configuración, o
+// un puesto cuyo texto no coincida exactamente) aparece en la sección
+// "Puestos sin ubicar en el árbol", para que nada se pierda de vista en
+// silencio.
 
 import { db } from "./firebase-config.js";
 import {
@@ -39,20 +38,22 @@ const ARBOL_ORGANIGRAMA = [
     area: "Dirección General",
     hijos: [
       {
-        puesto: "Gerencia de operaciones Importación",
-        area: "Dirección General",
+        puesto: "Gerente",
+        area: "Gerencia de operaciones de importación",
+        etiqueta: "Gerencia de operaciones de importación",
         hijos: [
           {
-            puesto: "Coordinador de operaciones MX",
-            area: "Operaciones",
+            puesto: "Coordinador",
+            area: "Operaciones MEX",
+            etiqueta: "Coordinador de operaciones MEX",
             hijos: [
-              { puesto: "Supervisor de turno", area: "Operaciones", hijos: [] },
-              { puesto: "Auxiliar de operaciones", area: "Operaciones", hijos: [] },
-              { puesto: "Despachador", area: "Operaciones", hijos: [] }
+              { puesto: "Supervisor", area: "Operaciones MEX", hijos: [] },
+              { puesto: "Auxiliar", area: "Operaciones MEX", hijos: [] },
+              { puesto: "Despachador", area: "Operaciones MEX", hijos: [] }
             ]
           },
-          { puesto: "Coordinador de operaciones EUA", area: "Operaciones", hijos: [] },
-          { puesto: "Coordinador de operadores", area: "Operaciones", hijos: [] },
+          { puesto: "Coordinador", area: "Operaciones EUA", etiqueta: "Coordinador de operaciones EUA", hijos: [] },
+          { puesto: "Coordinador", area: "Coordinador de operadores", etiqueta: "Coordinador de operadores", hijos: [] },
           { esArea: true, area: "Atención al cliente", hijos: [] },
           { esArea: true, area: "Control vehicular", hijos: [] }
         ]
@@ -129,13 +130,13 @@ export function iniciarOrganigrama(contenedor) {
     </div>`;
   }
 
-  function renderCajaPuesto(area, puesto) {
+  function renderCajaPuesto(area, puesto, etiqueta) {
     const lista = titularesDe(area, puesto);
     const coordinador = esPuestoDeCoordinacion(puesto);
     return `
       <div class="caja-puesto ${coordinador ? "coordinador" : ""}">
         <div class="puesto-encabezado">
-          <span class="puesto-nombre">${escapeHtml(puesto)}</span>
+          <span class="puesto-nombre">${escapeHtml(etiqueta || puesto)}</span>
           ${coordinador ? `<span class="insignia-coordinador">Coordinador</span>` : ""}
         </div>
         ${cajaTitulares(lista)}
@@ -162,7 +163,7 @@ export function iniciarOrganigrama(contenedor) {
       cajaHtml = `<div class="caja-area">${escapeHtml(nodo.area)}<span class="conteo">${conteo}</span></div>`;
       hijosNodos = puestos.map(p => ({ puesto: p, area: nodo.area, hijos: [] }));
     } else {
-      cajaHtml = renderCajaPuesto(nodo.area, nodo.puesto);
+      cajaHtml = renderCajaPuesto(nodo.area, nodo.puesto, nodo.etiqueta);
       hijosNodos = nodo.hijos || [];
     }
 

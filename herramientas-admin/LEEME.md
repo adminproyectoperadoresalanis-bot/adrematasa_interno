@@ -1,10 +1,16 @@
-# Restablecer contraseña sin correo (herramienta de admin)
+# Herramientas de admin (línea de comandos)
 
-Esta carpeta trae una herramienta de línea de comandos para que tú, como
-administrador, puedas restablecer la contraseña de un empleado que la
-olvidó — sin depender de ningún correo (ni el de Firebase ni EmailJS) y sin
-salir del plan gratuito Spark. Se corre a mano, una sola vez por caso, desde
-la terminal de Codespaces.
+Esta carpeta trae herramientas de línea de comandos para tareas que tú,
+como administrador, necesitas hacer directo contra Firebase sin depender de
+ningún correo ni salir del plan gratuito Spark. Se corren a mano desde la
+terminal de Codespaces:
+
+- `restablecer-contrasena.js` — restablece la contraseña de un empleado que
+  la olvidó.
+- `crear-usuario.js` — crea de una vez a alguien ya activo (cuenta + Área +
+  Puesto), sin que esa persona tenga que registrarse. Pensado para gente
+  que necesita salir en el Organigrama / Catálogo de empleados pero que
+  nunca va a usar la app (por ejemplo, un director).
 
 **Importante:** esto NO se sube a producción ni se despliega con
 `publicar.sh`. Vive aparte, solo para uso tuyo desde la terminal.
@@ -38,14 +44,18 @@ la terminal de Codespaces.
    npm install firebase-admin
    ```
 
-## Uso
+## Uso: restablecer-contrasena.js
 
 Cada vez que alguien olvide su contraseña:
 
 ```
 cd herramientas-admin
-node restablecer-contrasena.js correo@alanis.com.mx unaContrasenaTemporal123
+node restablecer-contrasena.js
 ```
+
+(y responde las preguntas; también puedes seguir pasando correo y
+contraseña directo como antes: `node restablecer-contrasena.js
+correo@alanis.com.mx unaContrasenaTemporal123`)
 
 Verás algo como:
 
@@ -63,9 +73,26 @@ Luego solo le avisas la contraseña nueva al empleado por el medio que
 prefieras (no por esta herramienta — esto no manda nada, solo la cambia).
 Con esa contraseña puede iniciar sesión normal en la app.
 
-## Qué NO hace
+Qué NO hace: no manda ningún correo, no toca su perfil de Firestore (rol,
+saldo de vacaciones, historial de solicitudes) ni su correo — solo cambia
+la contraseña.
 
-- No manda ningún correo.
-- No toca su perfil de Firestore (rol, saldo de vacaciones, historial de
-  solicitudes) — todo sigue exactamente igual.
-- No cambia su correo ni ningún otro dato, solo la contraseña.
+## Uso: crear-usuario.js
+
+Para dar de alta a alguien que necesitas que aparezca en el Organigrama o
+en Catálogo de empleados, pero que nunca va a entrar a la app:
+
+```
+cd herramientas-admin
+node crear-usuario.js
+```
+
+Te pregunta nombre, correo Alanis, Área, Puesto y rol (Área y Puesto deben
+escribirse EXACTAMENTE igual que en Configuración › Áreas y puestos, para
+que haga match). Queda activo de inmediato — no pasa por "pendiente" ni
+necesita aprobación.
+
+Como esa persona no va a iniciar sesión, la herramienta le pone una
+contraseña aleatoria por su cuenta (no te la muestra ni la necesitas). Si
+algún día sí necesita entrar, usa `restablecer-contrasena.js` para ponerle
+una que sí conozca.
