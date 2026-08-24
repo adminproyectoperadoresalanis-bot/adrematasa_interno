@@ -20,6 +20,7 @@ const TABS_POR_ROL = {
     { id: "vacaciones", etiqueta: "Vacaciones" },
     { id: "faltas", etiqueta: "Faltas" },
     { id: "catalogo", etiqueta: "Catálogo de empleados" },
+    { id: "organigrama", etiqueta: "Organigrama" },
     { id: "reportes", etiqueta: "Reportes" },
     { id: "configuracion", etiqueta: "Configuración" }
   ]

@@ -22,6 +22,7 @@ import { iniciarReportesAdmin, iniciarReportesSupervisor } from "./reportes.js";
 import { iniciarCalendarioVacaciones } from "./calendarioVacaciones.js";
 import { iniciarCentroNotificaciones, detenerCentroNotificaciones } from "./notificaciones.js";
 import { iniciarCambioContrasena } from "./cuenta.js";
+import { iniciarOrganigrama } from "./organigrama.js";
 
 const DOMINIO_ALANIS = "@alanis.com.mx";
 
@@ -242,6 +243,7 @@ onAuthStateChanged(auth, async (user) => {
       calendarioVacaciones: (c) => iniciarCalendarioVacaciones(c),
       faltas: (c) => iniciarGestionFaltas(c, user.uid, datosUsuario.nombre),
       catalogo: (c) => iniciarPanelAdmin(c, user.uid),
+      organigrama: (c) => iniciarOrganigrama(c),
       reportes: (c) => iniciarReportesAdmin(c),
       configuracion: (c) => iniciarConfiguracion(c)
     }, "panel");

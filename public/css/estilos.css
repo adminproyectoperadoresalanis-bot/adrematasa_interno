@@ -670,3 +670,62 @@ body.tiene-nav main#contenido-app { padding-bottom: 90px; }
 
 /* Botón "Enviar correo" y su nota de estado en el historial de aprobaciones */
 .nota-correo { color: #999; font-size: 0.78rem; margin-top: 4px; }
+
+/* Organigrama */
+.organigrama-scroll { overflow-x: auto; padding-bottom: 12px; }
+#organigrama-arbol { width: max-content; margin: 0 auto; }
+
+.nodo-organigrama { display: flex; flex-direction: column; align-items: center; }
+
+.linea-v { width: 2px; height: 20px; background: #d8cfc4; }
+
+.fila-hijos { display: flex; justify-content: center; }
+
+.rama { position: relative; padding: 20px 16px 0; display: flex; flex-direction: column; align-items: center; }
+.rama::before {
+  content: ""; position: absolute; top: 0; left: 50%; width: 2px; height: 20px;
+  background: #d8cfc4; transform: translateX(-1px);
+}
+.rama::after { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: #d8cfc4; }
+.rama:first-child::after { left: 50%; }
+.rama:last-child::after { right: 50%; }
+
+.caja-puesto {
+  background: #f5f3f0;
+  border: 1px solid #e3ddd3;
+  border-radius: 8px;
+  padding: 10px 12px;
+  width: 240px;
+}
+.caja-puesto.coordinador { background: #fff6e8; border: 1px solid #e8c98d; }
+
+.puesto-encabezado { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 7px; }
+.puesto-nombre { font-size: 0.8rem; font-weight: 600; line-height: 1.2; }
+.insignia-coordinador {
+  background: #2c1e0f; color: #fff; font-size: 0.62rem; padding: 2px 7px;
+  border-radius: 20px; white-space: nowrap; font-weight: 600;
+}
+
+.lista-titulares { display: flex; flex-direction: column; gap: 5px; }
+.chip-titular {
+  display: flex; align-items: center; gap: 7px; background: #fff;
+  border: 1px solid #e3ddd3; border-radius: 20px; padding: 3px 10px 3px 3px;
+}
+.avatar-iniciales {
+  width: 22px; height: 22px; border-radius: 50%; background: #2c1e0f; color: #fff;
+  font-size: 0.65rem; font-weight: 600; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.chip-titular span:last-child { font-size: 0.76rem; }
+.vacante { font-size: 0.76rem; color: #a8894f; font-style: italic; padding: 4px 2px; }
+
+.caja-area {
+  background: #fbe9d0; border: 1px solid #e8c98d; color: #6b4a1a;
+  padding: 9px 20px; border-radius: 8px; font-weight: 600; font-size: 0.85rem;
+  text-align: center; width: 240px;
+}
+.caja-area .conteo { display: block; font-weight: 400; font-size: 0.72rem; color: #8a6a35; margin-top: 2px; }
+
+.otros-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+
+.leyenda { display: flex; justify-content: center; gap: 22px; padding-top: 18px; border-top: 1px solid #eee; font-size: 0.78rem; color: #666; flex-wrap: wrap; }
+.leyenda-item { display: flex; align-items: center; gap: 6px; }

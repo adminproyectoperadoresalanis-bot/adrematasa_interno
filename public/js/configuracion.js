@@ -4,7 +4,6 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { UMBRALES_DEFAULT } from "./vacacionesCalculo.js";
 import { AREAS_DEFAULT } from "./estructuraOrganizacional.js";
-import { enviarCorreoResultado } from "./correo.js";
 
 export function iniciarConfiguracion(contenedor) {
   contenedor.innerHTML = `
@@ -52,21 +51,6 @@ export function iniciarConfiguracion(contenedor) {
         <button type="button" id="btn-agregar-area" class="secundario">+ Agregar área</button>
         <button type="button" id="btn-guardar-areas">Guardar cambios</button>
       </div>
-    </section>
-
-    <section class="panel" style="margin-top:20px;">
-      <h2>Correo de avisos (prueba temporal)</h2>
-      <p class="nota">
-        Panel temporal para probar que el envío de correos de aprobación/rechazo (ver
-        js/correo.js) ya está bien configurado con EmailJS, sin necesidad de aprobar o
-        rechazar una solicitud real. Escribe un correo y da clic — si te llega, ya quedó
-        listo. Puedes quitar esta sección más adelante si ya no la necesitas.
-      </p>
-      <div class="acciones-form">
-        <input type="email" id="input-correo-prueba" placeholder="tucorreo@alanis.com.mx" style="min-width:260px;">
-        <button type="button" id="btn-correo-prueba" class="secundario">Enviar correo de prueba</button>
-      </div>
-      <div id="correo-prueba-nota" class="nota"></div>
     </section>
   `;
 
@@ -251,32 +235,6 @@ export function iniciarConfiguracion(contenedor) {
     } catch (err) {
       errorAreasDiv.textContent = "No se pudo guardar: " + err.message;
     }
-  });
-
-  // --- Correo de avisos: botón temporal de prueba ---
-
-  const inputCorreoPrueba = contenedor.querySelector("#input-correo-prueba");
-  const btnCorreoPrueba = contenedor.querySelector("#btn-correo-prueba");
-  const notaCorreoPrueba = contenedor.querySelector("#correo-prueba-nota");
-
-  btnCorreoPrueba.addEventListener("click", async () => {
-    const destino = inputCorreoPrueba.value.trim();
-    if (!destino) {
-      notaCorreoPrueba.textContent = "Escribe un correo primero.";
-      return;
-    }
-    btnCorreoPrueba.disabled = true;
-    notaCorreoPrueba.textContent = "Enviando...";
-    const resultado = await enviarCorreoResultado({
-      destinatarioEmail: destino,
-      destinatarioNombre: "Prueba",
-      asunto: "Correo de prueba — Adrematasa Interno",
-      mensaje: `<p style="margin:0;">Si recibiste este correo, el envío automático de avisos de aprobación/rechazo desde la app ya está funcionando correctamente.</p>`
-    });
-    notaCorreoPrueba.textContent = resultado.ok
-      ? "Enviado ✅ — revisa la bandeja de entrada (y spam) de " + destino
-      : "No se pudo enviar: " + resultado.error;
-    btnCorreoPrueba.disabled = false;
   });
 }
 
