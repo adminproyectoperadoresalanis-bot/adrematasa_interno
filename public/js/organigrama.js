@@ -47,9 +47,15 @@ const ARBOL_ORGANIGRAMA = [
             area: "Operaciones MEX",
             etiqueta: "Coordinador de operaciones MEX",
             hijos: [
-              { puesto: "Supervisor", area: "Operaciones MEX", hijos: [] },
-              { puesto: "Auxiliar", area: "Operaciones MEX", hijos: [] },
-              { puesto: "Despachador", area: "Operaciones MEX", hijos: [] }
+              {
+                puesto: "Supervisor", area: "Operaciones MEX", hijos: [
+                  {
+                    puesto: "Auxiliar", area: "Operaciones MEX", hijos: [
+                      { puesto: "Despachador", area: "Operaciones MEX", hijos: [] }
+                    ]
+                  }
+                ]
+              }
             ]
           },
           { puesto: "Coordinador", area: "Operaciones EUA", etiqueta: "Coordinador de operaciones EUA", hijos: [] },
@@ -137,7 +143,7 @@ export function iniciarOrganigrama(contenedor) {
       <div class="caja-puesto ${coordinador ? "coordinador" : ""}">
         <div class="puesto-encabezado">
           <span class="puesto-nombre">${escapeHtml(etiqueta || puesto)}</span>
-          ${coordinador ? `<span class="insignia-coordinador">Coordinador</span>` : ""}
+          ${coordinador ? `<span class="insignia-coordinador">Coord.</span>` : ""}
         </div>
         ${cajaTitulares(lista)}
       </div>
@@ -235,7 +241,7 @@ export function iniciarOrganigrama(contenedor) {
           <div style="margin-bottom:16px;">
             <p style="font-size:0.8rem; font-weight:600; color:#6b5a44; margin:0 0 8px;">Área: ${escapeHtml(grupo.area)}</p>
             <div class="otros-grid">
-              ${grupo.puestos.map(p => `<div style="width:240px;">${renderCajaPuesto(grupo.area, p)}</div>`).join("")}
+              ${grupo.puestos.map(p => `<div style="width:172px;">${renderCajaPuesto(grupo.area, p)}</div>`).join("")}
             </div>
           </div>
         `).join("")}
