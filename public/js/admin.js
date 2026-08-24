@@ -608,11 +608,24 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
 
     // Un puesto de "Coordinador..." casi siempre implica aprobar solicitudes
     // de su equipo, así que se sugiere el rol de supervisor (el admin lo
-    // puede corregir si no aplica).
+    // puede corregir si no aplica). Si después el puesto cambia a algo que
+    // ya no es de coordinación, se deshace la sugerencia — pero SOLO si el
+    // rol sigue siendo justo el que esta misma sugerencia puso; si el admin
+    // ya lo cambió a mano (por ejemplo a "admin", o a "supervisor" a
+    // propósito para un puesto que no es de coordinación), no se toca. Sin
+    // esto, alguien podía quedar marcado como supervisor para siempre solo
+    // por haber pasado brevemente por un puesto de "Coordinador..." mientras
+    // se corregía su Área/Puesto, aunque el puesto final ya no lo fuera.
+    let rolSugeridoPorPuesto = null;
     selPuesto.addEventListener("change", () => {
       marcarSiVacio(selPuesto);
-      if (selRolModal && esPuestoDeCoordinacion(selPuesto.value)) {
+      if (!selRolModal) return;
+      if (esPuestoDeCoordinacion(selPuesto.value)) {
+        rolSugeridoPorPuesto = "supervisor";
         selRolModal.value = "supervisor";
+      } else if (rolSugeridoPorPuesto && selRolModal.value === rolSugeridoPorPuesto) {
+        selRolModal.value = "empleado";
+        rolSugeridoPorPuesto = null;
       }
     });
 
