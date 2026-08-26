@@ -1,4 +1,20 @@
+// "Horas extra", "Vacaciones" y "Faltas" comparten un solo botón del menú
+// inferior ("Gestión") en los roles que ya tienen muchas pestañas (admin y
+// supervisor) — en el celular no cabían todas. Un tab con "subtabs" no
+// dibuja una pantalla directamente: dentro de él aparecen 3 toggles y cada
+// uno dibuja la pantalla de siempre (los ids de los subtabs son justo los
+// mismos ids que ya existían como tabs sueltos, así que el objeto
+// `pantallas` que arma auth.js no cambia nada).
+const SUBTABS_GESTION = [
+  { id: "solicitudes", etiqueta: "Horas extra" },
+  { id: "vacaciones", etiqueta: "Vacaciones" },
+  { id: "faltas", etiqueta: "Faltas" }
+];
+
 const TABS_POR_ROL = {
+  // Empleado ya tenía solo 3 pestañas — le entran bien al celular tal cual,
+  // así que aquí no se agrupan en "Gestión" (agruparlas dejaría un menú de
+  // una sola opción, sin ganar nada).
   empleado: [
     { id: "horasExtra", etiqueta: "Horas extra" },
     { id: "vacaciones", etiqueta: "Vacaciones" },
@@ -6,9 +22,7 @@ const TABS_POR_ROL = {
   ],
   supervisor: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "solicitudes", etiqueta: "Horas extra" },
-    { id: "vacaciones", etiqueta: "Vacaciones" },
-    { id: "faltas", etiqueta: "Faltas" },
+    { id: "gestion", etiqueta: "Gestión", subtabs: SUBTABS_GESTION },
     { id: "equipo", etiqueta: "Mi equipo" },
     { id: "calendarioVacaciones", etiqueta: "Calendario" },
     { id: "reportes", etiqueta: "Reportes" }
@@ -16,9 +30,7 @@ const TABS_POR_ROL = {
   admin: [
     { id: "panel", etiqueta: "Panel" },
     { id: "calendarioVacaciones", etiqueta: "Calendario" },
-    { id: "solicitudes", etiqueta: "Horas extra" },
-    { id: "vacaciones", etiqueta: "Vacaciones" },
-    { id: "faltas", etiqueta: "Faltas" },
+    { id: "gestion", etiqueta: "Gestión", subtabs: SUBTABS_GESTION },
     { id: "catalogo", etiqueta: "Catálogo de empleados" },
     { id: "organigrama", etiqueta: "Organigrama" },
     { id: "reportes", etiqueta: "Reportes" },
@@ -46,10 +58,46 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial) {
   nav.classList.remove("oculto");
   document.body.classList.add("tiene-nav");
 
+  // Dibuja el submenú de "Gestión": una fila de toggles (Horas extra /
+  // Vacaciones / Faltas) arriba, y abajo la pantalla de lo que esté
+  // seleccionado — la fila de toggles se queda fija mientras se cambia
+  // entre las 3, para no tener que volver a tocar "Gestión" cada vez.
+  function mostrarGrupo(tab, idSubtabInicial) {
+    contenidoApp.innerHTML = `
+      <div class="subnav-gestion">
+        ${tab.subtabs.map(st => `<button type="button" class="subnav-boton" data-subtab="${st.id}">${st.etiqueta}</button>`).join("")}
+      </div>
+      <div class="subnav-contenido"></div>
+    `;
+    const subContenido = contenidoApp.querySelector(".subnav-contenido");
+    const botonesSubtab = contenidoApp.querySelectorAll(".subnav-boton");
+
+    function mostrarSubtab(idSubtab) {
+      botonesSubtab.forEach(btn => btn.classList.toggle("activo", btn.dataset.subtab === idSubtab));
+      const dibujar = pantallas[idSubtab];
+      if (dibujar) {
+        dibujar(subContenido);
+      } else {
+        subContenido.innerHTML = `<div class="panel"><p>Próximamente.</p></div>`;
+      }
+    }
+
+    botonesSubtab.forEach(btn => {
+      btn.addEventListener("click", () => mostrarSubtab(btn.dataset.subtab));
+    });
+
+    mostrarSubtab(idSubtabInicial || tab.subtabs[0].id);
+  }
+
   function mostrar(idTab) {
     nav.querySelectorAll(".nav-boton").forEach(btn => {
       btn.classList.toggle("activo", btn.dataset.tab === idTab);
     });
+    const tab = tabs.find(t => t.id === idTab);
+    if (tab && tab.subtabs) {
+      mostrarGrupo(tab);
+      return;
+    }
     const dibujar = pantallas[idTab];
     if (dibujar) {
       dibujar(contenidoApp);

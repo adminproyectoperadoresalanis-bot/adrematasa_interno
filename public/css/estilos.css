@@ -488,20 +488,59 @@ main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100
 
 .nav-boton {
   flex: 1;
+  /* Sin esto, un flex item nunca se encoge más chico que su contenido sin
+     partir palabras (min-width:auto por default) — con etiquetas largas
+     como "Catálogo de empleados" o "Configuración" eso empujaba la barra
+     completa más ancha que la pantalla en un celular angosto, aunque ya
+     hubiera pocas pestañas. */
+  min-width: 0;
   background: transparent;
   color: #6b5a44;
   border: none;
   border-top: 2px solid transparent;
   border-radius: 0;
-  padding: 12px 4px 10px;
-  font-size: 0.75rem;
+  padding: 10px 2px 8px;
+  font-size: 0.7rem;
   line-height: 1.2;
+  /* Con etiquetas largas ("Configuración", "Catálogo de empleados") en una
+     columna angosta, hyphens:auto parte la palabra en su sílaba (como en
+     un periódico) en vez de a media letra — mucho más legible que un corte
+     crudo. overflow-wrap:break-word solo entra como último recurso, por si
+     el navegador no trae diccionario de guiones para esa palabra. */
+  hyphens: auto;
+  -webkit-hyphens: auto;
+  overflow-wrap: break-word;
   cursor: pointer;
 }
 .nav-boton:hover { background: #f5f3f0; }
 .nav-boton.activo { color: #2c1e0f; font-weight: 700; border-top-color: #2c1e0f; }
 
 body.tiene-nav main#contenido-app { padding-bottom: 90px; }
+
+/* Los 3 toggles de "Gestión" (Horas extra / Vacaciones / Faltas): un
+   segmentado tipo pastilla, mismo tono café que el resto de la nav. */
+.subnav-gestion {
+  display: flex;
+  gap: 4px;
+  background: #f5f3f0;
+  border: 1px solid #e0ddd8;
+  border-radius: 999px;
+  padding: 4px;
+  margin-bottom: 20px;
+}
+.subnav-boton {
+  flex: 1;
+  background: transparent;
+  color: #6b5a44;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.subnav-boton:hover { background: #fff; }
+.subnav-boton.activo { background: #2c1e0f; color: #fff; }
 
 .tarjeta-saldo {
   display: inline-block;
@@ -672,6 +711,9 @@ body.tiene-nav main#contenido-app { padding-bottom: 90px; }
 .nota-correo { color: #999; font-size: 0.78rem; margin-top: 4px; }
 
 /* Organigrama */
+.organigrama-encabezado { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.organigrama-encabezado h2 { margin: 0; }
+#organigrama-descarga-estado { margin-bottom: 10px; }
 .organigrama-scroll { overflow-x: auto; padding-bottom: 12px; }
 #organigrama-arbol { width: max-content; margin: 0 auto; }
 
