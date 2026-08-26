@@ -608,13 +608,20 @@ function construirVista(contenedor, { esAdmin, uid }) {
   }
 
   // Construye la página 2 (REPORTE NOMINA: cuadrícula semanal, viernes a
-  // jueves) de la semana elegida arriba.
+  // jueves) de la semana elegida arriba. Incluye horas extra, faltas y
+  // vacaciones aprobadas — antes solo juntaba horas extra y faltas, así que
+  // un empleado con únicamente vacaciones esa semana nunca aparecía en esta
+  // tabla (aunque sí salía en "Resumen del periodo", que siempre las contó).
   function construirPaginaNomina(viernes, jueves, numeroSemana) {
     const diasSemana = Array.from({ length: 7 }, (_, i) => sumarDias(viernes, i));
     const dentroDeSemana = (fechaStr) => fechaStr >= viernes && fechaStr <= jueves;
-
-    const horasSemana = listaHoras.filter(s => s.estatus === "aprobada" && dentroDeSemana(s.fecha));
-    const faltasSemana = listaFaltas.filter(f => f.estatus === "aprobada" && dentroDeSemana(f.fecha));
+    // Una solicitud de vacaciones es un rango (fechaInicio..fechaFin), no una
+    // fecha única como horas/faltas, así que "cae en esta semana" es que su
+    // rango se traslape con la semana — puede empezar antes o terminar
+    // después y aun así tocar algunos días de esta semana.
+    const vacacionesSemana = listaVacaciones.filter(v =>
+      v.estatus === "aprobada" && v.fechaInicio <= jueves && v.fechaFin >= viernes
+    );
 
     const porEmpleado = new Map();
     function fila(empleadoId, nombreFallback) {
@@ -626,11 +633,14 @@ function construirVista(contenedor, { esAdmin, uid }) {
           puesto: datosUsuario.puesto || "—",
           horasPorDia: {},
           faltasPorDia: {}, // fecha -> tipo, para marcar "FALTA" en el día exacto
+          vacacionesPorDia: {}, // fecha -> true, para marcar "VAC" en el día exacto
           faltas: 0
         });
       }
       return porEmpleado.get(empleadoId);
     }
+    const horasSemana = listaHoras.filter(s => s.estatus === "aprobada" && dentroDeSemana(s.fecha));
+    const faltasSemana = listaFaltas.filter(f => f.estatus === "aprobada" && dentroDeSemana(f.fecha));
     horasSemana.forEach(s => {
       const e = fila(s.empleadoId, s.empleadoNombre);
       e.horasPorDia[s.fecha] = (e.horasPorDia[s.fecha] || 0) + (Number(s.horas) || 0);
@@ -639,6 +649,18 @@ function construirVista(contenedor, { esAdmin, uid }) {
       const e = fila(f.empleadoId, f.empleadoNombre);
       e.faltas += 1;
       e.faltasPorDia[f.fecha] = f.tipo;
+    });
+    vacacionesSemana.forEach(v => {
+      const e = fila(v.empleadoId, v.empleadoNombre);
+      // El día de descanso del empleado no se marca como vacación aunque
+      // caiga dentro del rango solicitado — igual que en vacaciones.js, ese
+      // día no se descuenta del saldo porque de por sí no es día laboral.
+      const diaDescanso = (mapUsuarios.get(v.empleadoId) || {}).diaDescanso ?? 0;
+      diasSemana.forEach(f => {
+        if (f >= v.fechaInicio && f <= v.fechaFin && new Date(f + "T00:00:00").getDay() !== diaDescanso) {
+          e.vacacionesPorDia[f] = true;
+        }
+      });
     });
 
     const empleados = [...porEmpleado.values()].sort((a, b) => (a.nombre || "").localeCompare(b.nombre || ""));
@@ -650,15 +672,17 @@ function construirVista(contenedor, { esAdmin, uid }) {
     const encabezadosDia = diasSemana.map(f => `<th>${diaSemana(f)}<br>${formatearFechaCorta(f)}</th>`).join("");
 
     const filasHtml = empleados.length === 0
-      ? `<tr><td colspan="${3 + diasSemana.length + 3}" class="centrado">Sin horas extra ni faltas aprobadas para esta semana.</td></tr>`
+      ? `<tr><td colspan="${3 + diasSemana.length + 4}" class="centrado">Sin horas extra, vacaciones ni faltas aprobadas para esta semana.</td></tr>`
       : empleados.map(e => {
         const celdasDias = diasSemana.map(f => {
           const tipoFalta = e.faltasPorDia[f];
           if (tipoFalta) return `<td class="centrado celda-falta">FALTA</td>`;
+          if (e.vacacionesPorDia[f]) return `<td class="centrado celda-vacacion">VACACIONES</td>`;
           const horas = e.horasPorDia[f];
           return `<td class="centrado">${horas ? horas : "—"}</td>`;
         }).join("");
         const totalSemana = Object.values(e.horasPorDia).reduce((acc, h) => acc + h, 0);
+        const totalVacaciones = Object.keys(e.vacacionesPorDia).length;
         const tiposFalta = Object.values(e.faltasPorDia);
         const celdaTipo = tiposFalta.length === 0
           ? "—"
@@ -667,9 +691,10 @@ function construirVista(contenedor, { esAdmin, uid }) {
           <tr>
             <td class="centrado">${escapeHtml(e.numeroEmpleado)}</td>
             <td>${escapeHtml(e.nombre)}</td>
-            <td>${escapeHtml(e.puesto)}</td>
+            <td class="col-puesto">${escapeHtml(e.puesto)}</td>
             ${celdasDias}
             <td class="centrado celda-total">${totalSemana}</td>
+            <td class="centrado">${totalVacaciones || "—"}</td>
             <td class="centrado">${e.faltas || "—"}</td>
             <td class="centrado">${escapeHtml(celdaTipo)}</td>
           </tr>
@@ -696,9 +721,10 @@ function construirVista(contenedor, { esAdmin, uid }) {
                   <tr>
                     <th>No.<br>Emp.</th>
                     <th>Nombre</th>
-                    <th>Puesto</th>
+                    <th class="col-puesto">Puesto</th>
                     ${encabezadosDia}
                     <th>H Ext</th>
+                    <th>Días<br>Vac</th>
                     <th>Faltas</th>
                     <th>Tipo<br>Falta</th>
                   </tr>
@@ -794,6 +820,12 @@ function construirVista(contenedor, { esAdmin, uid }) {
   .pagina-nomina .tabla-datos thead { display: table-header-group; }
   .pagina-nomina .celda-total { font-weight:bold; background:#f2f4f7; }
   .pagina-nomina .celda-falta { font-weight:bold; color:#a32424; }
+  /* "VACACIONES" no se corta a media palabra: se deja en una sola línea y se
+     le da a la columna del día que la necesite el ancho que le falte,
+     quitándoselo a la columna Puesto (ver .col-puesto abajo) — así solo se
+     ensanchan los días que de verdad tuvieron vacación, no todos. */
+  .pagina-nomina .celda-vacacion { font-weight:bold; color:#1a6b3c; white-space:nowrap; }
+  .pagina-nomina .col-puesto { max-width:62px; word-break:break-word; }
   .pagina-nomina .encabezado { border-bottom:1px solid #1a1a1a; }
   .pagina-nomina .periodo { margin-bottom:10px; }
   .pagina-nomina .pie-nomina { margin-top:16px; padding-top:16px; break-inside: avoid; page-break-inside: avoid; }
