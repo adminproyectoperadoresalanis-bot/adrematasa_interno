@@ -667,7 +667,24 @@ function construirVista(contenedor, { esAdmin, uid }) {
       });
     });
 
-    const empleados = [...porEmpleado.values()].sort((a, b) => (a.nombre || "").localeCompare(b.nombre || ""));
+    // Orden pedido: primero quien tiene horas extra (lo más importante para
+    // nómina), luego quien tiene faltas, y hasta el final quien solo tiene
+    // vacaciones — dentro de cada grupo, alfabético. Si alguien cae en más
+    // de una categoría (ej. horas extra Y una falta la misma semana), se
+    // agrupa por la más importante que tenga (horas extra gana sobre falta,
+    // falta gana sobre vacaciones).
+    function categoriaEmpleado(e) {
+      const totalHoras = Object.values(e.horasPorDia).reduce((acc, h) => acc + h, 0);
+      if (totalHoras > 0) return 0;
+      if (e.faltas > 0) return 1;
+      return 2;
+    }
+    const empleados = [...porEmpleado.values()].sort((a, b) => {
+      const catA = categoriaEmpleado(a);
+      const catB = categoriaEmpleado(b);
+      if (catA !== catB) return catA - catB;
+      return (a.nombre || "").localeCompare(b.nombre || "");
+    });
 
     const anio = viernes.slice(0, 4);
     const periodoTexto = `Del ${formatearFechaLargaCap(viernes)} al ${formatearFechaLargaCap(jueves)} ${anio}`;
