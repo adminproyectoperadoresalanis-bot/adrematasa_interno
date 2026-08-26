@@ -542,35 +542,39 @@ function construirVista(contenedor, { esAdmin, uid }) {
     const tituloCentro = `REPORTE SEMANAL PARA RH - SEMANA ${numeroSemana}`;
     const logoUrl = window.location.origin + "/img/logo-alanis.png";
 
+    // Una sola tabla por empleado (antes eran 2 tablas separadas: encabezado
+    // + horas — se veían como 2 cuadros sueltos, desalineados del ancho de
+    // la tabla de abajo). El renglón de Nombre/Puesto ahora es una sola
+    // celda que ocupa las 4 columnas, con un flex adentro: Nombre se
+    // estira para tomar todo el espacio libre, Puesto solo toma el ancho
+    // de su propio texto (no crece aunque el renglón sea más ancho).
     const segmentosHtml = empleados.length === 0
       ? `<p class="sin-datos">Sin horas extra aprobadas para este periodo.</p>`
       : empleados.map(e => `
         <div class="segmento-empleado">
-          <table class="tabla-encabezado-empleado">
+          <table class="tabla-empleado">
             <tr>
-              <td class="celda-nombre-empleado">NOMBRE DEL EMPLEADO: ${escapeHtml(e.nombre)}</td>
-              <td class="celda-puesto-empleado">Puesto: ${escapeHtml(e.puesto)}</td>
+              <td colspan="4" class="fila-nombre-puesto">
+                <div class="flex-nombre-puesto">
+                  <div class="celda-nombre-empleado">NOMBRE DEL EMPLEADO: ${escapeHtml(e.nombre)}</div>
+                  <div class="celda-puesto-empleado">Puesto: ${escapeHtml(e.puesto)}</div>
+                </div>
+              </td>
             </tr>
-          </table>
-          <table class="tabla-horas">
-            <thead>
+            <tr>
+              <th style="width:12%;">Fecha</th>
+              <th style="width:14%;">Cantidad de Horas</th>
+              <th style="width:22%;">Horario de las Extras *</th>
+              <th>Motivo de la Hora(s) Extra(s)</th>
+            </tr>
+            ${e.filas.map(s => `
               <tr>
-                <th style="width:12%;">Fecha</th>
-                <th style="width:14%;">Cantidad de Horas</th>
-                <th style="width:22%;">Horario de las Extras *</th>
-                <th>Motivo de la Hora(s) Extra(s)</th>
+                <td class="centrado">${formatearFechaCorta(s.fecha)}</td>
+                <td class="centrado">${s.horas}</td>
+                <td class="centrado">${formatearHora12(s.horaInicio)} - ${formatearHora12(s.horaFin)}</td>
+                <td>${escapeHtml(s.motivo || "")}</td>
               </tr>
-            </thead>
-            <tbody>
-              ${e.filas.map(s => `
-                <tr>
-                  <td class="centrado">${formatearFechaCorta(s.fecha)}</td>
-                  <td class="centrado">${s.horas}</td>
-                  <td class="centrado">${formatearHora12(s.horaInicio)} - ${formatearHora12(s.horaFin)}</td>
-                  <td>${escapeHtml(s.motivo || "")}</td>
-                </tr>
-              `).join("")}
-            </tbody>
+            `).join("")}
           </table>
         </div>
       `).join("");
@@ -773,11 +777,16 @@ function construirVista(contenedor, { esAdmin, uid }) {
 <meta charset="UTF-8">
 <title>Reporte de horas extras de la semana ${numeroSemana}</title>
 <style>
+  /* La página de nóminas usa una página CSS nombrada ("nomina") en horizontal,
+     mientras la de RH se queda con la página por default en vertical — un
+     mismo PDF puede combinar las 2 orientaciones así, cada elemento avisa a
+     cuál "page" pertenece con la propiedad page: (ver .pagina-nomina abajo). */
   @page { size: letter portrait; margin: 12mm 10mm; }
+  @page nomina { size: letter landscape; margin: 12mm 10mm; }
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; color:#1a1a1a; margin:0; padding:0; }
   .pagina { padding: 6mm; }
-  .pagina-nomina { break-before: page; page-break-before: always; }
+  .pagina-nomina { page: nomina; break-before: page; page-break-before: always; }
   .encabezado { display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #1a1a1a; padding-bottom:6px; margin-bottom:6px; }
   .logo-caja { width:110px; height:50px; display:flex; align-items:center; justify-content:center; }
   .logo-caja img { max-width:110px; max-height:50px; }
@@ -803,11 +812,16 @@ function construirVista(contenedor, { esAdmin, uid }) {
 
   .pagina-rh { max-width: 190mm; margin: 0 auto; font-size:11px; }
   .pagina-rh .segmento-empleado { break-inside: avoid; margin-bottom:10px; }
-  .pagina-rh .tabla-encabezado-empleado td { border:1px solid #1a1a1a; font-weight:bold; font-size:11px; padding:3px 6px; background:#eef1f4; }
-  .pagina-rh .celda-nombre-empleado { width:65%; }
-  .pagina-rh .celda-puesto-empleado { width:35%; }
-  .pagina-rh .tabla-horas th, .pagina-rh .tabla-horas td { border:1px solid #1a1a1a; padding:3px 6px; font-size:10.5px; }
-  .pagina-rh .tabla-horas th { background:#f7f8fa; font-weight:bold; text-align:center; }
+  /* Una sola tabla, con border-collapse: las líneas del renglón Nombre/Puesto
+     y las de la tabla de horas de abajo comparten el mismo trazo — ya no son
+     2 cuadros sueltos con doble borde y ancho distinto. */
+  .pagina-rh .tabla-empleado { width:100%; border-collapse:collapse; }
+  .pagina-rh .tabla-empleado th, .pagina-rh .tabla-empleado td { border:1px solid #1a1a1a; padding:3px 6px; font-size:10.5px; }
+  .pagina-rh .tabla-empleado th { background:#f7f8fa; font-weight:bold; text-align:center; }
+  .pagina-rh .fila-nombre-puesto { background:#eef1f4; padding:0; }
+  .pagina-rh .flex-nombre-puesto { display:flex; align-items:stretch; }
+  .pagina-rh .celda-nombre-empleado { flex:1 1 auto; padding:4px 6px; font-weight:bold; font-size:11px; border-right:1px solid #1a1a1a; }
+  .pagina-rh .celda-puesto-empleado { flex:0 0 auto; padding:4px 6px; font-weight:bold; font-size:11px; white-space:nowrap; }
   .pagina-rh .firmas { display:flex; justify-content:space-between; margin-top:20px; }
   .pagina-rh .firma { width:45%; text-align:center; font-size:10.5px; }
   .pagina-rh .pie-empresa { text-align:center; font-weight:bold; font-size:10px; margin:16px 0 6px; }
@@ -825,7 +839,10 @@ function construirVista(contenedor, { esAdmin, uid }) {
      quitándoselo a la columna Puesto (ver .col-puesto abajo) — así solo se
      ensanchan los días que de verdad tuvieron vacación, no todos. */
   .pagina-nomina .celda-vacacion { font-weight:bold; color:#1a6b3c; white-space:nowrap; }
-  .pagina-nomina .col-puesto { max-width:62px; word-break:break-word; }
+  /* En horizontal hay ~36% más ancho útil que en vertical, así que Puesto
+     puede ser menos angosta que antes y seguir dejando a los días de
+     vacación el espacio que necesitan para "VACACIONES" en una sola línea. */
+  .pagina-nomina .col-puesto { max-width:95px; word-break:break-word; }
   .pagina-nomina .encabezado { border-bottom:1px solid #1a1a1a; }
   .pagina-nomina .periodo { margin-bottom:10px; }
   .pagina-nomina .pie-nomina { margin-top:16px; padding-top:16px; break-inside: avoid; page-break-inside: avoid; }
