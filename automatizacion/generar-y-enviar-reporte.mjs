@@ -56,10 +56,15 @@
 //     (no pide DNS). Pon ese mismo correo como valor de este secret.
 //
 //   DESTINATARIOS_REPORTE
-//     Los correos que deben recibir el reporte cada jueves, separados por
-//     coma, ej: nominas@alanis.com.mx,ilanda@alanis.com.mx
+//     Los correos que deben recibir el reporte cada jueves (destinatarios
+//     principales, "Para:"), separados por coma, ej:
+//     nominas@alanis.com.mx,rh@alanis.com.mx
 //
-// Con los 4 secrets guardados, el workflow ya puede correr — tanto en su
+//   DESTINATARIOS_CC  (opcional — si no la creas, simplemente no se manda copia)
+//     Correos que deben llegar en copia (CC), separados por coma, ej:
+//     ilanda@alanis.com.mx
+//
+// Con los 4 o 5 secrets guardados, el workflow ya puede correr — tanto en su
 // horario (jueves) como a mano desde la pestaña "Actions" del repo (botón
 // "Run workflow", con la casilla "Forzar envío" si quieres probarlo sin
 // esperar al jueves).
@@ -162,6 +167,12 @@ async function main() {
   if (destinatarios.length === 0) {
     throw new Error('El secret "DESTINATARIOS_REPORTE" está vacío — debe traer al menos un correo.');
   }
+  // DESTINATARIOS_CC es opcional: si el secret no existe, process.env.DESTINATARIOS_CC
+  // es undefined y copiaEn queda como arreglo vacío (no se manda "cc" a Brevo).
+  const copiaEn = (process.env.DESTINATARIOS_CC || "")
+    .split(",")
+    .map(correo => correo.trim())
+    .filter(Boolean);
 
   const asunto = `Reporte semanal de nómina — Semana ${numeroSemana} (${formatearFechaLargaCap(viernes)} a ${formatearFechaLargaCap(jueves)})`;
   const cuerpo = `
@@ -179,6 +190,7 @@ async function main() {
     body: JSON.stringify({
       sender: { email: variableRequerida("BREVO_SENDER_EMAIL"), name: "Adrematasa Interno" },
       to: destinatarios.map(email => ({ email })),
+      ...(copiaEn.length > 0 ? { cc: copiaEn.map(email => ({ email })) } : {}),
       subject: asunto,
       htmlContent: cuerpo,
       attachment: [{
@@ -193,7 +205,8 @@ async function main() {
     throw new Error(`Brevo respondió ${respuesta.status}: ${detalle}`);
   }
   const resultado = await respuesta.json().catch(() => ({}));
-  console.log(`Correo enviado a ${destinatarios.join(", ")}. messageId: ${resultado.messageId || "(sin messageId en la respuesta)"}`);
+  const detalleCc = copiaEn.length > 0 ? ` (con copia a ${copiaEn.join(", ")})` : "";
+  console.log(`Correo enviado a ${destinatarios.join(", ")}${detalleCc}. messageId: ${resultado.messageId || "(sin messageId en la respuesta)"}`);
 }
 
 main().catch(err => {
