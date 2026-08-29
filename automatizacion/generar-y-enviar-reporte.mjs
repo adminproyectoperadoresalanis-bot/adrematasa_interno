@@ -55,16 +55,16 @@
 //     confirmación a esa bandeja — dale clic al link y ya queda verificado
 //     (no pide DNS). Pon ese mismo correo como valor de este secret.
 //
-//   DESTINATARIOS_REPORTE
-//     Los correos que deben recibir el reporte cada jueves (destinatarios
-//     principales, "Para:"), separados por coma, ej:
-//     nominas@alanis.com.mx,rh@alanis.com.mx
+//   DESTINATARIOS_REPORTE  (opcional — ver nota abajo)
+//   DESTINATARIOS_CC        (opcional)
+//     Estos dos secrets son ahora solo un RESPALDO. Los destinatarios reales se
+//     editan desde la app: Configuración → "Reporte semanal de nómina (correo
+//     automático)" (se guardan en Firestore, en configuracion/reporteSemanal).
+//     Si ese documento no existe o está vacío, el script usa estos secrets en su
+//     lugar — por eso conviene dejarlos configurados la primera vez, igual con
+//     correos separados por coma, ej: nominas@alanis.com.mx,rh@alanis.com.mx
 //
-//   DESTINATARIOS_CC  (opcional — si no la creas, simplemente no se manda copia)
-//     Correos que deben llegar en copia (CC), separados por coma, ej:
-//     ilanda@alanis.com.mx
-//
-// Con los 4 o 5 secrets guardados, el workflow ya puede correr — tanto en su
+// Con los secrets guardados, el workflow ya puede correr — tanto en su
 // horario (jueves) como a mano desde la pestaña "Actions" del repo (botón
 // "Run workflow", con la casilla "Forzar envío" si quieres probarlo sin
 // esperar al jueves).
@@ -161,19 +161,33 @@ async function main() {
   console.log(`PDF generado: ${(pdfBuffer.length / 1024).toFixed(0)} KB.`);
 
   // --- 5. Enviar por correo (Brevo, con el PDF adjunto) ---
-  const destinatarios = variableRequerida("DESTINATARIOS_REPORTE")
-    .split(",")
-    .map(correo => correo.trim())
-    .filter(Boolean);
-  if (destinatarios.length === 0) {
-    throw new Error('El secret "DESTINATARIOS_REPORTE" está vacío — debe traer al menos un correo.');
+  // Los destinatarios se leen primero de Firestore (configuracion/reporteSemanal), que es lo
+  // que edita el admin desde Configuración en la app — así nadie tiene que tocar GitHub para
+  // cambiar a quién llega el reporte. Si ese documento no existe todavía o viene vacío, se usa
+  // como respaldo el secret de GitHub (compatibilidad con la configuración anterior).
+  const snapConfigCorreo = await db.collection("configuracion").doc("reporteSemanal").get();
+  const configCorreo = snapConfigCorreo.exists ? snapConfigCorreo.data() : null;
+
+  let destinatarios = Array.isArray(configCorreo?.destinatarios) ? configCorreo.destinatarios.filter(Boolean) : [];
+  let copiaEn = Array.isArray(configCorreo?.cc) ? configCorreo.cc.filter(Boolean) : [];
+
+  if (destinatarios.length > 0) {
+    console.log(`Destinatarios leídos de Firestore (configuracion/reporteSemanal): ${destinatarios.join(", ")}${copiaEn.length > 0 ? ` (CC: ${copiaEn.join(", ")})` : ""}`);
+  } else {
+    console.log('No hay destinatarios configurados en Firestore (configuracion/reporteSemanal) — usando el secret "DESTINATARIOS_REPORTE" de GitHub como respaldo.');
+    destinatarios = variableRequerida("DESTINATARIOS_REPORTE")
+      .split(",")
+      .map(correo => correo.trim())
+      .filter(Boolean);
+    copiaEn = (process.env.DESTINATARIOS_CC || "")
+      .split(",")
+      .map(correo => correo.trim())
+      .filter(Boolean);
   }
-  // DESTINATARIOS_CC es opcional: si el secret no existe, process.env.DESTINATARIOS_CC
-  // es undefined y copiaEn queda como arreglo vacío (no se manda "cc" a Brevo).
-  const copiaEn = (process.env.DESTINATARIOS_CC || "")
-    .split(",")
-    .map(correo => correo.trim())
-    .filter(Boolean);
+
+  if (destinatarios.length === 0) {
+    throw new Error('No hay destinatarios configurados ni en Firestore (configuracion/reporteSemanal) ni en el secret "DESTINATARIOS_REPORTE" — debe haber al menos un correo en alguno de los dos.');
+  }
 
   const asunto = `Reporte semanal de nómina — Semana ${numeroSemana} (${formatearFechaLargaCap(viernes)} a ${formatearFechaLargaCap(jueves)})`;
   const cuerpo = `
@@ -189,7 +203,7 @@ async function main() {
       "accept": "application/json"
     },
     body: JSON.stringify({
-      sender: { email: variableRequerida("BREVO_SENDER_EMAIL"), name: "Adrematasa Interno" },
+      sender: { email: variableRequerida("BREVO_SENDER_EMAIL"), name: "Ivan Landa" },
       to: destinatarios.map(email => ({ email })),
       ...(copiaEn.length > 0 ? { cc: copiaEn.map(email => ({ email })) } : {}),
       subject: asunto,

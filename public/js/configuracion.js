@@ -52,6 +52,29 @@ export function iniciarConfiguracion(contenedor) {
         <button type="button" id="btn-guardar-areas">Guardar cambios</button>
       </div>
     </section>
+
+    <section class="panel" style="margin-top:20px;">
+      <h2>Reporte semanal de nómina (correo automático)</h2>
+      <p class="nota">
+        Cada jueves a las 6:00 pm (hora de Nuevo Laredo) se manda automáticamente por correo el
+        mismo PDF que genera el botón "Vista previa / Imprimir" en Reportes, con las horas extra,
+        faltas y vacaciones que estén <strong>aprobadas</strong> a esa hora — sin que nadie tenga
+        que abrir la app. Aquí defines a quién llega. Separa varios correos con comas.
+      </p>
+      <div id="reporte-correo-error" class="error"></div>
+      <p id="reporte-correo-exito" class="nota oculto" style="color:#1c7a41;"></p>
+      <div>
+        <label for="input-reporte-para" style="display:block; font-weight:600; margin-bottom:4px;">Destinatarios (Para)</label>
+        <input type="text" id="input-reporte-para" style="width:100%;" placeholder="nominas@alanis.com.mx, rh@alanis.com.mx">
+      </div>
+      <div style="margin-top:12px;">
+        <label for="input-reporte-cc" style="display:block; font-weight:600; margin-bottom:4px;">Con copia (CC) — opcional</label>
+        <input type="text" id="input-reporte-cc" style="width:100%;" placeholder="ilanda@alanis.com.mx">
+      </div>
+      <div class="acciones-form" style="margin-top:14px;">
+        <button type="button" id="btn-guardar-reporte-correo">Guardar cambios</button>
+      </div>
+    </section>
   `;
 
   const tbody = contenedor.querySelector("#tbody-umbrales");
@@ -234,6 +257,52 @@ export function iniciarConfiguracion(contenedor) {
       exitoAreasP.classList.remove("oculto");
     } catch (err) {
       errorAreasDiv.textContent = "No se pudo guardar: " + err.message;
+    }
+  });
+
+  // --- Reporte semanal de nómina (correo automático) ---
+
+  const inputReportePara = contenedor.querySelector("#input-reporte-para");
+  const inputReporteCc = contenedor.querySelector("#input-reporte-cc");
+  const errorReporteDiv = contenedor.querySelector("#reporte-correo-error");
+  const exitoReporteP = contenedor.querySelector("#reporte-correo-exito");
+  const btnGuardarReporteCorreo = contenedor.querySelector("#btn-guardar-reporte-correo");
+
+  const refReporteCorreo = doc(db, "configuracion", "reporteSemanal");
+
+  onSnapshot(refReporteCorreo, (snap) => {
+    const datos = snap.exists() ? snap.data() : null;
+    inputReportePara.value = Array.isArray(datos?.destinatarios) ? datos.destinatarios.join(", ") : "";
+    inputReporteCc.value = Array.isArray(datos?.cc) ? datos.cc.join(", ") : "";
+  }, (err) => {
+    errorReporteDiv.textContent = "No se pudo cargar la configuración: " + err.message;
+  });
+
+  function separarCorreos(texto) {
+    return (texto || "")
+      .split(",")
+      .map(c => c.trim())
+      .filter(Boolean);
+  }
+
+  btnGuardarReporteCorreo.addEventListener("click", async () => {
+    errorReporteDiv.textContent = "";
+    exitoReporteP.classList.add("oculto");
+
+    const destinatarios = separarCorreos(inputReportePara.value);
+    const cc = separarCorreos(inputReporteCc.value);
+
+    if (destinatarios.length === 0) {
+      errorReporteDiv.textContent = 'Agrega al menos un correo en "Destinatarios (Para)".';
+      return;
+    }
+
+    try {
+      await setDoc(refReporteCorreo, { destinatarios, cc, actualizadoEn: new Date().toISOString() });
+      exitoReporteP.textContent = "Cambios guardados. Se aplicarán en el próximo envío automático del jueves (o al correr el workflow manualmente desde GitHub Actions).";
+      exitoReporteP.classList.remove("oculto");
+    } catch (err) {
+      errorReporteDiv.textContent = "No se pudo guardar: " + err.message;
     }
   });
 }
