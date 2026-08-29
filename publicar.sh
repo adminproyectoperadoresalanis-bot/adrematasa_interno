@@ -1,5 +1,5 @@
 #!/bin/bash
-# Guarda todos los cambios en git y publica en Firebase (Hosting + reglas e
+# Guarda todos los cambios en git, los sube a GitHub y publica en Firebase (Hosting + reglas e
 # índices de Firestore), en un solo paso.
 # Uso: ./publicar.sh
 set -e
@@ -10,5 +10,7 @@ if git diff --cached --quiet; then
 else
   git commit -m "Actualización $(date '+%Y-%m-%d %H:%M')"
 fi
+echo "Subiendo a GitHub..."
+git push
 echo "Publicando en Firebase..."
 firebase deploy --only hosting,firestore:rules,firestore:indexes
