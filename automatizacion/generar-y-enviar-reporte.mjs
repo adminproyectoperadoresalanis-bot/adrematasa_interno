@@ -68,7 +68,8 @@
 // horario (jueves) como a mano desde la pestaña "Actions" del repo (botón
 // "Run workflow", con la casilla "Forzar envío" si quieres probarlo sin
 // esperar al jueves).
-import admin from "firebase-admin";
+import { initializeApp, cert } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 import { chromium } from "playwright";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
@@ -122,8 +123,8 @@ async function main() {
 
   // --- 1. Firestore vía Admin SDK ---
   const credencial = JSON.parse(variableRequerida("FIREBASE_SERVICE_ACCOUNT"));
-  admin.initializeApp({ credential: admin.credential.cert(credencial) });
-  const db = admin.firestore();
+  const appFirebase = initializeApp({ credential: cert(credencial) });
+  const db = getFirestore(appFirebase);
 
   const [snapHoras, snapVacaciones, snapFaltas, snapUsuarios] = await Promise.all([
     db.collection("solicitudes").get(),
