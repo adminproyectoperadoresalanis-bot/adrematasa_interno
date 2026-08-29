@@ -1,0 +1,10 @@
+{
+  "name": "adrematasa-automatizacion",
+  "private": true,
+  "description": "Script que corre en GitHub Actions cada jueves para generar y mandar por correo el reporte semanal de nómina — no forma parte de la PWA (que sigue siendo 100% sin build, HTML/CSS/JS plano servido por Firebase Hosting). Vive en su propia carpeta con su propio package.json para no mezclar dependencias de Node con el resto del repo.",
+  "type": "module",
+  "dependencies": {
+    "firebase-admin": "^14.3.0",
+    "playwright": "^1.62.0"
+  }
+}

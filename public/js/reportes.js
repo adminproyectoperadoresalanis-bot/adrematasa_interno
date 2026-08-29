@@ -2,90 +2,12 @@ import { db } from "./firebase-config.js";
 import {
   collection, onSnapshot, query, where
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
-
-const MESES_ABREV = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
-const MESES_LARGO = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
-
-function formatearFechaCorta(fechaStr) {
-  // "2026-08-08" -> "08-ago"
-  const [, m, d] = (fechaStr || "").split("-").map(Number);
-  if (!m || !d) return fechaStr || "";
-  return `${String(d).padStart(2, "0")}-${MESES_ABREV[m - 1]}`;
-}
-
-function formatearFechaLarga(fechaStr) {
-  // "2026-08-07" -> "7 agosto"
-  const [, m, d] = (fechaStr || "").split("-").map(Number);
-  if (!m || !d) return fechaStr || "";
-  return `${d} ${MESES_LARGO[m - 1]}`;
-}
-
-function formatearHora12(horaStr) {
-  // "14:00" -> "2:00 pm"
-  const [h, m] = (horaStr || "").split(":").map(Number);
-  if (isNaN(h)) return horaStr || "";
-  const periodo = h >= 12 ? "pm" : "am";
-  let h12 = h % 12;
-  if (h12 === 0) h12 = 12;
-  return `${h12}:${String(m || 0).padStart(2, "0")} ${periodo}`;
-}
-
-const DIAS_ABREV = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
-
-function calcularSemanaLaboral(fechaStr) {
-  // Semana laboral Alanis: viernes a jueves. Devuelve la fecha (yyyy-mm-dd) del viernes de esa semana.
-  const d = new Date(fechaStr + "T00:00:00");
-  const dow = d.getDay();
-  const diffDias = (dow - 5 + 7) % 7;
-  d.setDate(d.getDate() - diffDias);
-  return d.toISOString().slice(0, 10);
-}
-
-function sumarDias(fechaStr, n) {
-  const d = new Date(fechaStr + "T00:00:00");
-  d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-
-function diaSemana(fechaStr) {
-  const d = new Date(fechaStr + "T00:00:00");
-  return DIAS_ABREV[d.getDay()];
-}
-
-function formatearFechaDDMMYY(fechaStr) {
-  // "2026-08-14" -> "14/08/26"
-  const [a, m, d] = (fechaStr || "").split("-");
-  if (!a || !m || !d) return fechaStr || "";
-  return `${d}/${m}/${a.slice(2)}`;
-}
-
-function numeroSemanaISO(fechaStr) {
-  // Número de semana ISO-8601 (semana que contiene el jueves de esa semana).
-  const d = new Date(fechaStr + "T00:00:00");
-  const diaISO = (d.getDay() + 6) % 7 + 1; // lunes=1 ... domingo=7
-  d.setDate(d.getDate() + 4 - diaISO);
-  const inicioAnio = new Date(d.getFullYear(), 0, 1);
-  return Math.ceil(((d - inicioAnio) / 86400000 + 1) / 7);
-}
-
-function formatearFechaLargaCap(fechaStr) {
-  // "2026-08-14" -> "14 Agosto" (mes con mayúscula inicial)
-  const [, m, d] = (fechaStr || "").split("-").map(Number);
-  if (!m || !d) return fechaStr || "";
-  const mes = MESES_LARGO[m - 1];
-  return `${d} ${mes.charAt(0).toUpperCase()}${mes.slice(1)}`;
-}
-
-function formatearFechaHoraGeneracion() {
-  const d = new Date();
-  const mes = MESES_LARGO[d.getMonth()];
-  const fecha = `${d.getDate()} ${mes.charAt(0).toUpperCase()}${mes.slice(1)} ${d.getFullYear()}`;
-  let horas = d.getHours();
-  const minutos = String(d.getMinutes()).padStart(2, "0");
-  const periodo = horas >= 12 ? "pm" : "am";
-  horas = horas % 12 || 12;
-  return `${fecha}, ${horas}:${minutos} ${periodo}`;
-}
+import {
+  formatearFechaCorta, formatearHora12, sumarDias, calcularSemanaLaboral,
+  numeroSemanaISO, formatearFechaDDMMYY, formatearFechaLargaCap,
+  formatearFechaHoraGeneracion, escapeHtml as escapeHtmlCompartido,
+  construirPaginaRH, construirPaginaNomina, construirHtmlReporteCompleto
+} from "./reportesHtml.js";
 
 function hoyLocalStr() {
   // Evita el corrimiento de un día que da toISOString() cerca de medianoche
@@ -142,16 +64,6 @@ function calcularHorasSemanales(horarioSemanal) {
     0
   );
 }
-
-// Etiquetas cortas para el resumen de horarios: mismos valores de "tipo"
-// que ya usa faltas.js.
-const ETIQUETAS_FALTA_CORTAS = {
-  injustificada: "Injustificada",
-  justificada: "Justificada",
-  incapacidad: "Incapacidad",
-  permiso_con_goce: "Con goce",
-  permiso_sin_goce: "Sin goce"
-};
 
 function construirVista(contenedor, { esAdmin, uid }) {
   contenedor.innerHTML = `
@@ -328,7 +240,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
     }
     tbodyResumen.innerHTML = resumen.map(e => `
       <tr>
-        <td>${escapeHtml(e.nombre)}</td>
+        <td>${escapeHtmlCompartido(e.nombre)}</td>
         <td>${e.horas}</td>
         <td>${e.vacaciones}</td>
         <td>${e.faltas}</td>
@@ -513,268 +425,13 @@ function construirVista(contenedor, { esAdmin, uid }) {
     }
   }
 
-  // Construye la página 1 (REPORTE RH: un bloque por empleado con el
-  // detalle de cada hora extra) de la semana elegida arriba.
-  function construirPaginaRH(viernes, jueves, numeroSemana) {
-    const filtradas = listaHoras
-      .filter(s => s.estatus === "aprobada")
-      .filter(s => s.fecha >= viernes && s.fecha <= jueves);
-
-    const porEmpleado = new Map();
-    filtradas.forEach(s => {
-      if (!porEmpleado.has(s.empleadoId)) {
-        const datosUsuario = mapUsuarios.get(s.empleadoId) || {};
-        porEmpleado.set(s.empleadoId, {
-          nombre: s.empleadoNombre || datosUsuario.nombre || "",
-          puesto: datosUsuario.puesto || "—",
-          filas: []
-        });
-      }
-      porEmpleado.get(s.empleadoId).filas.push(s);
-    });
-
-    const empleados = [...porEmpleado.values()];
-    empleados.forEach(e => e.filas.sort((a, b) => (a.fecha || "").localeCompare(b.fecha || "")));
-    empleados.sort((a, b) => (a.nombre || "").localeCompare(b.nombre || ""));
-
-    const anio = viernes.slice(0, 4);
-    const periodoTexto = `Semana ${numeroSemana} - Del ${formatearFechaLargaCap(viernes)} al ${formatearFechaLargaCap(jueves)} ${anio}`;
-    const tituloCentro = `REPORTE SEMANAL PARA RH - SEMANA ${numeroSemana}`;
-    const logoUrl = window.location.origin + "/img/logo-alanis.png";
-
-    // Una sola tabla por empleado (antes eran 2 tablas separadas: encabezado
-    // + horas — se veían como 2 cuadros sueltos, desalineados del ancho de
-    // la tabla de abajo). El renglón de Nombre/Puesto ahora es una sola
-    // celda que ocupa las 4 columnas, con un flex adentro: Nombre se
-    // estira para tomar todo el espacio libre, Puesto solo toma el ancho
-    // de su propio texto (no crece aunque el renglón sea más ancho).
-    const segmentosHtml = empleados.length === 0
-      ? `<p class="sin-datos">Sin horas extra aprobadas para este periodo.</p>`
-      : empleados.map(e => `
-        <div class="segmento-empleado">
-          <table class="tabla-empleado">
-            <tr>
-              <td colspan="4" class="fila-nombre-puesto">
-                <div class="flex-nombre-puesto">
-                  <div class="celda-nombre-empleado">NOMBRE DEL EMPLEADO: ${escapeHtml(e.nombre)}</div>
-                  <div class="celda-puesto-empleado">Puesto: ${escapeHtml(e.puesto)}</div>
-                </div>
-              </td>
-            </tr>
-            <tr>
-              <th style="width:12%;">Fecha</th>
-              <th style="width:14%;">Cantidad de Horas</th>
-              <th style="width:22%;">Horario de las Extras *</th>
-              <th>Motivo de la Hora(s) Extra(s)</th>
-            </tr>
-            ${e.filas.map(s => `
-              <tr>
-                <td class="centrado">${formatearFechaCorta(s.fecha)}</td>
-                <td class="centrado">${s.horas}</td>
-                <td class="centrado">${formatearHora12(s.horaInicio)} - ${formatearHora12(s.horaFin)}</td>
-                <td>${escapeHtml(s.motivo || "")}</td>
-              </tr>
-            `).join("")}
-          </table>
-        </div>
-      `).join("");
-
-    return `
-      <div class="pagina pagina-rh">
-        <table class="tabla-paginado">
-          <thead>
-            <tr><td>
-              <div class="encabezado">
-                <div class="logo-caja"><img src="${logoUrl}" alt="" onerror="this.style.display='none'"></div>
-                <div class="titulo-centro">${escapeHtml(tituloCentro)}</div>
-                <div class="espaciador"></div>
-              </div>
-              <div class="periodo">${escapeHtml(periodoTexto)}</div>
-            </td></tr>
-          </thead>
-          <tbody>
-            <tr><td>
-              ${segmentosHtml}
-
-              <div class="pie">
-                <div class="firmas">
-                  <div class="firma">Iván Landa<br>Autorización</div>
-                  <div class="firma">Firma del Depto. de Nóminas<br>Revisión</div>
-                </div>
-                <div class="pie-empresa">AUTOTRANSPORTES ALANIS, S.A. DE C.V.</div>
-                <div class="codigo-formato"><span>ATAF082</span><span>Rev. 0&nbsp;&nbsp;&nbsp;05/02/2024</span></div>
-              </div>
-            </td></tr>
-          </tbody>
-        </table>
-      </div>
-    `;
-  }
-
-  // Construye la página 2 (REPORTE NOMINA: cuadrícula semanal, viernes a
-  // jueves) de la semana elegida arriba. Incluye horas extra, faltas y
-  // vacaciones aprobadas — antes solo juntaba horas extra y faltas, así que
-  // un empleado con únicamente vacaciones esa semana nunca aparecía en esta
-  // tabla (aunque sí salía en "Resumen del periodo", que siempre las contó).
-  function construirPaginaNomina(viernes, jueves, numeroSemana) {
-    const diasSemana = Array.from({ length: 7 }, (_, i) => sumarDias(viernes, i));
-    const dentroDeSemana = (fechaStr) => fechaStr >= viernes && fechaStr <= jueves;
-    // Una solicitud de vacaciones es un rango (fechaInicio..fechaFin), no una
-    // fecha única como horas/faltas, así que "cae en esta semana" es que su
-    // rango se traslape con la semana — puede empezar antes o terminar
-    // después y aun así tocar algunos días de esta semana.
-    const vacacionesSemana = listaVacaciones.filter(v =>
-      v.estatus === "aprobada" && v.fechaInicio <= jueves && v.fechaFin >= viernes
-    );
-
-    const porEmpleado = new Map();
-    function fila(empleadoId, nombreFallback) {
-      if (!porEmpleado.has(empleadoId)) {
-        const datosUsuario = mapUsuarios.get(empleadoId) || {};
-        porEmpleado.set(empleadoId, {
-          numeroEmpleado: datosUsuario.numeroEmpleado || "—",
-          nombre: nombreFallback || datosUsuario.nombre || "",
-          puesto: datosUsuario.puesto || "—",
-          horasPorDia: {},
-          faltasPorDia: {}, // fecha -> tipo, para marcar "FALTA" en el día exacto
-          vacacionesPorDia: {}, // fecha -> true, para marcar "VAC" en el día exacto
-          faltas: 0
-        });
-      }
-      return porEmpleado.get(empleadoId);
-    }
-    const horasSemana = listaHoras.filter(s => s.estatus === "aprobada" && dentroDeSemana(s.fecha));
-    const faltasSemana = listaFaltas.filter(f => f.estatus === "aprobada" && dentroDeSemana(f.fecha));
-    horasSemana.forEach(s => {
-      const e = fila(s.empleadoId, s.empleadoNombre);
-      e.horasPorDia[s.fecha] = (e.horasPorDia[s.fecha] || 0) + (Number(s.horas) || 0);
-    });
-    faltasSemana.forEach(f => {
-      const e = fila(f.empleadoId, f.empleadoNombre);
-      e.faltas += 1;
-      e.faltasPorDia[f.fecha] = f.tipo;
-    });
-    vacacionesSemana.forEach(v => {
-      const e = fila(v.empleadoId, v.empleadoNombre);
-      // El día de descanso del empleado no se marca como vacación aunque
-      // caiga dentro del rango solicitado — igual que en vacaciones.js, ese
-      // día no se descuenta del saldo porque de por sí no es día laboral.
-      const diaDescanso = (mapUsuarios.get(v.empleadoId) || {}).diaDescanso ?? 0;
-      diasSemana.forEach(f => {
-        if (f >= v.fechaInicio && f <= v.fechaFin && new Date(f + "T00:00:00").getDay() !== diaDescanso) {
-          e.vacacionesPorDia[f] = true;
-        }
-      });
-    });
-
-    // Orden pedido: primero quien tiene horas extra (lo más importante para
-    // nómina), luego quien tiene faltas, y hasta el final quien solo tiene
-    // vacaciones — dentro de cada grupo, alfabético. Si alguien cae en más
-    // de una categoría (ej. horas extra Y una falta la misma semana), se
-    // agrupa por la más importante que tenga (horas extra gana sobre falta,
-    // falta gana sobre vacaciones).
-    function categoriaEmpleado(e) {
-      const totalHoras = Object.values(e.horasPorDia).reduce((acc, h) => acc + h, 0);
-      if (totalHoras > 0) return 0;
-      if (e.faltas > 0) return 1;
-      return 2;
-    }
-    const empleados = [...porEmpleado.values()].sort((a, b) => {
-      const catA = categoriaEmpleado(a);
-      const catB = categoriaEmpleado(b);
-      if (catA !== catB) return catA - catB;
-      return (a.nombre || "").localeCompare(b.nombre || "");
-    });
-
-    const anio = viernes.slice(0, 4);
-    const periodoTexto = `Del ${formatearFechaLargaCap(viernes)} al ${formatearFechaLargaCap(jueves)} ${anio}`;
-    const tituloCentro = `REPORTE SEMANAL PARA NOMINAS - SEMANA ${numeroSemana}`;
-    const logoUrl = window.location.origin + "/img/logo-alanis.png";
-    const encabezadosDia = diasSemana.map(f => `<th>${diaSemana(f)}<br>${formatearFechaCorta(f)}</th>`).join("");
-
-    const filasHtml = empleados.length === 0
-      ? `<tr><td colspan="${3 + diasSemana.length + 4}" class="centrado">Sin horas extra, vacaciones ni faltas aprobadas para esta semana.</td></tr>`
-      : empleados.map(e => {
-        const celdasDias = diasSemana.map(f => {
-          const tipoFalta = e.faltasPorDia[f];
-          if (tipoFalta) return `<td class="centrado celda-falta">FALTA</td>`;
-          if (e.vacacionesPorDia[f]) return `<td class="centrado celda-vacacion">VACACIONES</td>`;
-          const horas = e.horasPorDia[f];
-          return `<td class="centrado">${horas ? horas : "—"}</td>`;
-        }).join("");
-        const totalSemana = Object.values(e.horasPorDia).reduce((acc, h) => acc + h, 0);
-        const totalVacaciones = Object.keys(e.vacacionesPorDia).length;
-        const tiposFalta = Object.values(e.faltasPorDia);
-        const celdaTipo = tiposFalta.length === 0
-          ? "—"
-          : [...new Set(tiposFalta.map(t => ETIQUETAS_FALTA_CORTAS[t] || t))].join(", ");
-        return `
-          <tr>
-            <td class="centrado">${escapeHtml(e.numeroEmpleado)}</td>
-            <td>${escapeHtml(e.nombre)}</td>
-            <td class="col-puesto">${escapeHtml(e.puesto)}</td>
-            ${celdasDias}
-            <td class="centrado celda-total">${totalSemana}</td>
-            <td class="centrado">${totalVacaciones || "—"}</td>
-            <td class="centrado">${e.faltas || "—"}</td>
-            <td class="centrado">${escapeHtml(celdaTipo)}</td>
-          </tr>
-        `;
-      }).join("");
-
-    return `
-      <div class="pagina pagina-nomina">
-        <table class="tabla-paginado">
-          <thead>
-            <tr><td>
-              <div class="encabezado">
-                <div class="logo-caja"><img src="${logoUrl}" alt="" onerror="this.style.display='none'"></div>
-                <div class="titulo-centro">${escapeHtml(tituloCentro)}</div>
-                <div class="espaciador"></div>
-              </div>
-              <div class="periodo">${escapeHtml(periodoTexto)}</div>
-            </td></tr>
-          </thead>
-          <tbody>
-            <tr><td>
-              <table class="tabla-datos">
-                <thead>
-                  <tr>
-                    <th>No.<br>Emp.</th>
-                    <th>Nombre</th>
-                    <th class="col-puesto">Puesto</th>
-                    ${encabezadosDia}
-                    <th>H Ext</th>
-                    <th>Días<br>Vac</th>
-                    <th>Faltas</th>
-                    <th>Tipo<br>Falta</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${filasHtml}
-                </tbody>
-              </table>
-
-              <div class="pie-nomina">
-                <div class="pie-nomina-contenido">
-                  <div class="autorizo">Autorizó: Iván Landa</div>
-                  <div class="meta-impresion">
-                    Reporte de horas extras de la semana ${numeroSemana}<br>
-                    Generado el ${formatearFechaHoraGeneracion()}
-                  </div>
-                </div>
-                <div class="pie-empresa">AUTOTRANSPORTES ALANIS, S.A. DE C.V.</div>
-              </div>
-            </td></tr>
-          </tbody>
-        </table>
-      </div>
-    `;
-  }
-
   // Un solo PDF con 2 páginas: REPORTE RH (detalle por empleado) y
   // REPORTE NOMINA (cuadrícula semanal). Solo cuenta lo ya aprobado (documento
   // formal, no depende del checkbox de "incluir pendientes y rechazados").
+  // El armado real de las 2 páginas vive en js/reportesHtml.js — lo mismo
+  // que usa automatizacion/generar-y-enviar-reporte.mjs para el correo
+  // automático de los jueves, así que ambos lados siempre producen el
+  // mismo formato exacto.
   function abrirVistaPreviaImprimir() {
     if (!selectSemana.value) {
       alert("Elige la semana en la sección Reportes de arriba.");
@@ -784,101 +441,11 @@ function construirVista(contenedor, { esAdmin, uid }) {
     const viernes = selectSemana.value;
     const jueves = sumarDias(viernes, 6);
     const numeroSemana = numeroSemanaISO(jueves);
+    const logoSrc = window.location.origin + "/img/logo-alanis.png";
 
-    const paginaRH = construirPaginaRH(viernes, jueves, numeroSemana);
-    const paginaNomina = construirPaginaNomina(viernes, jueves, numeroSemana);
-
-    const html = `<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<title>Reporte de horas extras de la semana ${numeroSemana}</title>
-<style>
-  /* La página de nóminas usa una página CSS nombrada ("nomina") en horizontal,
-     mientras la de RH se queda con la página por default en vertical — un
-     mismo PDF puede combinar las 2 orientaciones así, cada elemento avisa a
-     cuál "page" pertenece con la propiedad page: (ver .pagina-nomina abajo). */
-  @page { size: letter portrait; margin: 12mm 10mm; }
-  @page nomina { size: letter landscape; margin: 12mm 10mm; }
-  * { box-sizing: border-box; }
-  body { font-family: Arial, Helvetica, sans-serif; color:#1a1a1a; margin:0; padding:0; }
-  .pagina { padding: 6mm; }
-  .pagina-nomina { page: nomina; break-before: page; page-break-before: always; }
-  .encabezado { display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #1a1a1a; padding-bottom:6px; margin-bottom:6px; }
-  .logo-caja { width:110px; height:50px; display:flex; align-items:center; justify-content:center; }
-  .logo-caja img { max-width:110px; max-height:50px; }
-  .titulo-centro { flex:1; text-align:center; font-weight:bold; font-size:12px; padding:0 10px; }
-  .espaciador { width:110px; }
-  .periodo { text-align:center; font-size:11px; margin-bottom:14px; }
-  .centrado { text-align:center; }
-  .pie { margin-top:16px; padding-top:16px; break-inside: avoid; page-break-inside: avoid; }
-  .sin-datos { text-align:center; color:#666; margin-top:20px; }
-
-  /* Tabla envoltura de cada "página": el encabezado va en <thead> para que
-     se repita arriba en cada hoja impresa si el contenido crece a más de
-     una hoja, y el detalle + pie van en <tbody> para que fluyan y se corten
-     de forma natural entre hojas, en vez de quedar forzados a llenar un
-     100vh completo (eso era lo que mandaba el pie a su propia hoja casi en
-     blanco). El pie no se repite en cada hoja a propósito: es un bloque de
-     cierre/firma, no un pie de página que deba salir varias veces. */
-  .tabla-paginado { width:100%; border-collapse:collapse; }
-  .tabla-paginado > thead { display: table-header-group; }
-  .tabla-paginado > tbody { display: table-row-group; }
-  .tabla-paginado > thead > tr > td,
-  .tabla-paginado > tbody > tr > td { border:none; padding:0; }
-
-  .pagina-rh { max-width: 190mm; margin: 0 auto; font-size:11px; }
-  .pagina-rh .segmento-empleado { break-inside: avoid; margin-bottom:10px; }
-  /* Una sola tabla, con border-collapse: las líneas del renglón Nombre/Puesto
-     y las de la tabla de horas de abajo comparten el mismo trazo — ya no son
-     2 cuadros sueltos con doble borde y ancho distinto. */
-  .pagina-rh .tabla-empleado { width:100%; border-collapse:collapse; }
-  .pagina-rh .tabla-empleado th, .pagina-rh .tabla-empleado td { border:1px solid #1a1a1a; padding:3px 6px; font-size:10.5px; }
-  .pagina-rh .tabla-empleado th { background:#f7f8fa; font-weight:bold; text-align:center; }
-  .pagina-rh .fila-nombre-puesto { background:#eef1f4; padding:0; }
-  .pagina-rh .flex-nombre-puesto { display:flex; align-items:stretch; }
-  .pagina-rh .celda-nombre-empleado { flex:1 1 auto; padding:4px 6px; font-weight:bold; font-size:11px; border-right:1px solid #1a1a1a; }
-  .pagina-rh .celda-puesto-empleado { flex:0 0 auto; padding:4px 6px; font-weight:bold; font-size:11px; white-space:nowrap; }
-  .pagina-rh .firmas { display:flex; justify-content:space-between; margin-top:20px; }
-  .pagina-rh .firma { width:45%; text-align:center; font-size:10.5px; }
-  .pagina-rh .pie-empresa { text-align:center; font-weight:bold; font-size:10px; margin:16px 0 6px; }
-  .pagina-rh .codigo-formato { display:flex; justify-content:space-between; font-size:9.5px; margin-top:6px; padding-top:4px; }
-
-  .pagina-nomina { font-size:10px; }
-  .pagina-nomina .tabla-datos { width:100%; border-collapse:collapse; break-inside: auto; }
-  .pagina-nomina .tabla-datos th, .pagina-nomina .tabla-datos td { border:1px solid #1a1a1a; padding:3px 4px; font-size:9px; }
-  .pagina-nomina .tabla-datos th { background:#f7f8fa; font-weight:bold; text-align:center; }
-  .pagina-nomina .tabla-datos thead { display: table-header-group; }
-  .pagina-nomina .celda-total { font-weight:bold; background:#f2f4f7; }
-  .pagina-nomina .celda-falta { font-weight:bold; color:#a32424; }
-  /* "VACACIONES" no se corta a media palabra: se deja en una sola línea y se
-     le da a la columna del día que la necesite el ancho que le falte,
-     quitándoselo a la columna Puesto (ver .col-puesto abajo) — así solo se
-     ensanchan los días que de verdad tuvieron vacación, no todos. */
-  .pagina-nomina .celda-vacacion { font-weight:bold; color:#1a6b3c; white-space:nowrap; }
-  /* En horizontal hay ~36% más ancho útil que en vertical, así que Puesto
-     puede ser menos angosta que antes y seguir dejando a los días de
-     vacación el espacio que necesitan para "VACACIONES" en una sola línea. */
-  .pagina-nomina .col-puesto { max-width:95px; word-break:break-word; }
-  .pagina-nomina .encabezado { border-bottom:1px solid #1a1a1a; }
-  .pagina-nomina .periodo { margin-bottom:10px; }
-  .pagina-nomina .pie-nomina { margin-top:16px; padding-top:16px; break-inside: avoid; page-break-inside: avoid; }
-  .pagina-nomina .pie-empresa { text-align:center; font-weight:bold; font-size:10px; margin-top:12px; }
-  .pagina-nomina .pie-nomina-contenido { display:flex; justify-content:space-between; align-items:flex-end; }
-  .pagina-nomina .autorizo { text-align:left; font-size:10.5px; width:220px; padding-top:6px; }
-  .pagina-nomina .meta-impresion { font-size:8.5px; color:#555; text-align:right; line-height:1.4; }
-
-  .barra-imprimir { text-align:center; margin:14px 0; }
-  .barra-imprimir button { padding:8px 18px; font-size:13px; cursor:pointer; }
-  @media print { .barra-imprimir { display:none; } }
-</style>
-</head>
-<body>
-  <div class="barra-imprimir"><button onclick="window.print()">Imprimir / Guardar como PDF</button></div>
-  ${paginaRH}
-  ${paginaNomina}
-</body>
-</html>`;
+    const paginaRH = construirPaginaRH({ listaHoras, mapUsuarios, viernes, jueves, numeroSemana, logoSrc });
+    const paginaNomina = construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, jueves, numeroSemana, logoSrc });
+    const html = construirHtmlReporteCompleto({ paginaRH, paginaNomina, numeroSemana });
 
     const ventana = window.open("", "_blank");
     if (!ventana) {
@@ -918,10 +485,4 @@ function exportarCSV(nombreArchivo, encabezados, filas) {
   enlace.click();
   document.body.removeChild(enlace);
   URL.revokeObjectURL(url);
-}
-
-function escapeHtml(texto) {
-  const div = document.createElement("div");
-  div.textContent = texto || "";
-  return div.innerHTML;
 }

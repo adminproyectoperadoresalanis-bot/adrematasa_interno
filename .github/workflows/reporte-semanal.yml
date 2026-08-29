@@ -1,0 +1,55 @@
+name: Reporte semanal de nómina (correo automático)
+
+# Dispara varias veces alrededor de las 6:00 pm hora de Nuevo Laredo los
+# jueves — el propio script (automatizacion/generar-y-enviar-reporte.mjs)
+# revisa la hora real y solo actúa en el disparo correcto; los demás salen
+# sin hacer nada. Esto evita tener que ajustar el cron 2 veces al año por el
+# cambio de horario de verano (Nuevo Laredo lo sigue, el cron de GitHub
+# Actions solo entiende UTC fijo) — ver el comentario al inicio del script
+# para el porqué completo.
+#   22:00 UTC jueves = 5:00 pm Nuevo Laredo en horario de verano (CDT, UTC-5)
+#   23:00 UTC jueves = 6:00 pm Nuevo Laredo en horario de verano (CDT, UTC-5)  <- el que dispara casi todo el año
+#   00:00 UTC viernes = 6:00 pm Nuevo Laredo en horario de invierno (CST, UTC-6)
+#   01:00 UTC viernes = 7:00 pm Nuevo Laredo en horario de invierno (CST, UTC-6)
+on:
+  schedule:
+    - cron: '0 22 * * 4'
+    - cron: '0 23 * * 4'
+    - cron: '0 0 * * 5'
+    - cron: '0 1 * * 5'
+  workflow_dispatch:
+    inputs:
+      forzar:
+        description: 'Enviar el reporte aunque no sean las 6pm en Nuevo Laredo (para probar)'
+        type: boolean
+        default: false
+
+jobs:
+  enviar-reporte:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el repo
+        uses: actions/checkout@v4
+
+      - name: Instalar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar dependencias
+        working-directory: automatizacion
+        run: npm install
+
+      - name: Instalar Chromium (para generar el PDF)
+        working-directory: automatizacion
+        run: npx playwright install --with-deps chromium
+
+      - name: Generar y enviar el reporte
+        working-directory: automatizacion
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
+          DESTINATARIOS_REPORTE: ${{ secrets.DESTINATARIOS_REPORTE }}
+          FORZAR_ENVIO: ${{ inputs.forzar }}
+        run: node generar-y-enviar-reporte.mjs
