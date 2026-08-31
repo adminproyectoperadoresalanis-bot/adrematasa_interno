@@ -47,7 +47,10 @@ async function destinatariosParaAviso(datosUsuario) {
 // asunto / mensaje: cuerpo del correo (HTML), ya armado por quien llama.
 // tituloBell / mensajeBell: versión corta en texto plano para la campanita
 // (opcional — si no se manda, solo se avisa por correo, como antes).
-export async function avisarNuevaSolicitud({ datosUsuario, asunto, mensaje, tituloBell, mensajeBell }) {
+// fechaEventoBell: fecha ya formateada del EVENTO (el día de las horas extra,
+// o el rango de las vacaciones) — se muestra en la campanita en vez de la
+// hora en que se mandó el aviso (ver notificaciones.js).
+export async function avisarNuevaSolicitud({ datosUsuario, asunto, mensaje, tituloBell, mensajeBell, fechaEventoBell }) {
   try {
     const destinatarios = await destinatariosParaAviso(datosUsuario);
     if (destinatarios.length === 0) {
@@ -62,7 +65,12 @@ export async function avisarNuevaSolicitud({ datosUsuario, asunto, mensaje, titu
     ));
     if (tituloBell) {
       destinatarios.forEach(d => {
-        crearNotificacion(d.id, { titulo: tituloBell, mensaje: mensajeBell || "", tipo: "solicitudNueva" });
+        crearNotificacion(d.id, {
+          titulo: tituloBell,
+          mensaje: mensajeBell || "",
+          tipo: "solicitudNueva",
+          fechaEvento: fechaEventoBell || null
+        });
       });
     }
   } catch (err) {

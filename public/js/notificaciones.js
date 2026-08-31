@@ -9,7 +9,10 @@ import {
 // cambian su horario). Nunca truena hacia quien la llama: si falla, solo se
 // registra en consola — no queremos que un error de notificación tumbe la
 // acción principal (la aprobación, el guardado del horario, etc).
-export async function crearNotificacion(destinatarioId, { titulo, mensaje, tipo } = {}) {
+// fechaEvento (opcional, solo tipo "solicitudNueva"): fecha ya formateada
+// del EVENTO (el día de las horas extra, o el rango de las vacaciones) —
+// distinta de "creadoEn", que es cuándo se mandó el aviso. Ver renderPanel.
+export async function crearNotificacion(destinatarioId, { titulo, mensaje, tipo, fechaEvento } = {}) {
   if (!destinatarioId) return;
   try {
     await addDoc(collection(db, "notificaciones"), {
@@ -17,6 +20,7 @@ export async function crearNotificacion(destinatarioId, { titulo, mensaje, tipo 
       titulo: titulo || "Notificación",
       mensaje: mensaje || "",
       tipo: tipo || "info",
+      fechaEvento: fechaEvento || null,
       leida: false,
       creadoEn: new Date().toISOString()
     });
@@ -144,7 +148,9 @@ function renderPanel(badge, lista) {
       <span class="notif-texto">
         <span class="notif-titulo">${escapeHtml(n.titulo)}${n.tipo === "solicitudNueva" ? '<span class="tag-nuevo">Nuevo</span>' : ""}</span>
         <span class="notif-mensaje">${escapeHtml(n.mensaje)}</span>
-        <span class="notif-fecha">${formatearFecha(n.creadoEn)}</span>
+        ${n.tipo === "solicitudNueva" && n.fechaEvento
+          ? `<span class="notif-fecha evento">${escapeHtml(n.fechaEvento)}</span>`
+          : `<span class="notif-fecha">${formatearFecha(n.creadoEn)}</span>`}
       </span>
     </li>
   `).join("");

@@ -733,7 +733,12 @@ body.tiene-nav main#contenido-app { padding-bottom: 104px; }
 .panel-notificaciones {
   position: absolute;
   top: calc(100% + 10px);
-  left: 0;
+  /* Anclado a la DERECHA de la campana (antes era "left:0"): con la
+     campana pegada a la orilla derecha del encabezado (desde el rediseño
+     del menú de usuario), anclar a la izquierda hacía que el panel de
+     320px se saliera de la pantalla y forzara scroll horizontal en todo
+     el sitio. */
+  right: 0;
   width: 320px;
   max-width: 90vw;
   background: #fff;
@@ -808,6 +813,11 @@ body.tiene-nav main#contenido-app { padding-bottom: 104px; }
 .notif-titulo { font-weight: 600; }
 .notif-mensaje { color: #555; }
 .notif-fecha { color: #999; font-size: 0.72rem; }
+/* En un aviso de "solicitud nueva" esta línea no es la hora en que se mandó
+   el aviso (como en el resto) sino la fecha del evento (el día de las
+   horas extra, o el rango de las vacaciones) — se resalta en azul para
+   que se note que es otro tipo de dato. */
+.notif-fecha.evento { color: #1f5aa3; font-weight: 600; font-size: 0.76rem; }
 
 .tag-nuevo {
   display: inline-block;

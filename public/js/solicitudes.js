@@ -184,7 +184,8 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
 <p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(motivo)}</p>
 <p style="margin:0;color:#555;font-size:0.9em;">Entra a Adrematasa Interno para aprobarla o rechazarla.</p>`,
           tituloBell: "Nueva solicitud de horas extra",
-          mensajeBell: `${datosUsuario.nombre} envió una solicitud para tu revisión (${fecha}, ${horaInicio}–${horaFin}).`
+          mensajeBell: `${datosUsuario.nombre} envió una solicitud para tu revisión`,
+          fechaEventoBell: `${formatearFechaLarga(fecha)}, ${horaInicio}–${horaFin}`
         });
       }
     } catch (err) {
@@ -248,4 +249,12 @@ function escapeHtml(texto) {
   const div = document.createElement("div");
   div.textContent = texto || "";
   return div.innerHTML;
+}
+
+// "yyyy-mm-dd" -> "24 de agosto" — para la "fecha del evento" de la campanita
+// (ver avisoNuevaSolicitud.js / notificaciones.js).
+function formatearFechaLarga(fechaStr) {
+  const d = new Date(fechaStr + "T00:00:00");
+  if (isNaN(d.getTime())) return fechaStr;
+  return d.toLocaleDateString("es-MX", { day: "numeric", month: "long" });
 }

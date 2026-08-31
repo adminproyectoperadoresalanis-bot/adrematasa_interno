@@ -196,7 +196,8 @@ export function iniciarVistaVacacionesEmpleado(contenedor, datosUsuario, uid) {
 ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(motivo)}</p>` : ""}
 <p style="margin:0;color:#555;font-size:0.9em;">Entra a Adrematasa Interno para aprobarla o rechazarla.</p>`,
           tituloBell: "Nueva solicitud de vacaciones",
-          mensajeBell: `${datosUsuario.nombre} envió una solicitud para tu revisión (${fechaInicio} al ${fechaFin}).`
+          mensajeBell: `${datosUsuario.nombre} envió una solicitud para tu revisión`,
+          fechaEventoBell: formatearRangoFechas(fechaInicio, fechaFin)
         });
       }
     } catch (err) {
@@ -265,4 +266,28 @@ function escapeHtml(texto) {
   const div = document.createElement("div");
   div.textContent = texto || "";
   return div.innerHTML;
+}
+
+// "yyyy-mm-dd" -> "24 de agosto" — para la "fecha del evento" de la campanita
+// (ver avisoNuevaSolicitud.js / notificaciones.js).
+function formatearFechaLarga(fechaStr) {
+  const d = new Date(fechaStr + "T00:00:00");
+  if (isNaN(d.getTime())) return fechaStr;
+  return d.toLocaleDateString("es-MX", { day: "numeric", month: "long" });
+}
+
+// Rango de dos "yyyy-mm-dd": mismo día -> "12 de noviembre"; mismo mes ->
+// "12 al 15 de noviembre"; meses distintos -> "26 sep al 3 oct".
+function formatearRangoFechas(inicioStr, finStr) {
+  if (inicioStr === finStr) return formatearFechaLarga(inicioStr);
+  const inicio = new Date(inicioStr + "T00:00:00");
+  const fin = new Date(finStr + "T00:00:00");
+  if (isNaN(inicio.getTime()) || isNaN(fin.getTime())) return `${inicioStr} al ${finStr}`;
+  const mismoMes = inicio.getMonth() === fin.getMonth() && inicio.getFullYear() === fin.getFullYear();
+  if (mismoMes) {
+    const mesLargo = fin.toLocaleDateString("es-MX", { month: "long" });
+    return `${inicio.getDate()} al ${fin.getDate()} de ${mesLargo}`;
+  }
+  const corto = (d) => d.toLocaleDateString("es-MX", { day: "numeric", month: "short" }).replace(".", "");
+  return `${corto(inicio)} al ${corto(fin)}`;
 }
