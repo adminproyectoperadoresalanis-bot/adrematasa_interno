@@ -47,6 +47,38 @@ const nombreUsuarioSpan = document.getElementById("nombre-usuario");
 const rolUsuarioSpan = document.getElementById("rol-usuario");
 const contenidoApp = document.getElementById("contenido-app");
 const notificacionesWrap = document.getElementById("notificaciones-wrap");
+const avatarUsuarioSpan = document.getElementById("avatar-usuario");
+const avatarUsuarioGrandeSpan = document.getElementById("avatar-usuario-grande");
+const btnMenuUsuario = document.getElementById("btn-menu-usuario");
+const menuUsuario = document.getElementById("menu-usuario");
+
+// Iniciales para el círculo del menú de usuario: primera letra del primer
+// y (si hay) del último nombre — "Iván Landa" -> "IL", "Daniel" -> "D".
+function iniciales(nombre) {
+  const partes = (nombre || "").trim().split(/\s+/).filter(Boolean);
+  if (partes.length === 0) return "?";
+  if (partes.length === 1) return partes[0][0].toUpperCase();
+  return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase();
+}
+
+// El botón y el menú viven en HTML estático (no se recrean al cambiar de
+// usuario), así que se enlazan una sola vez — igual que la campanita en
+// notificaciones.js.
+btnMenuUsuario?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  menuUsuario.classList.toggle("oculto");
+});
+document.addEventListener("click", (e) => {
+  if (!menuUsuario || menuUsuario.classList.contains("oculto")) return;
+  if (!menuUsuario.contains(e.target) && e.target !== btnMenuUsuario) {
+    menuUsuario.classList.add("oculto");
+  }
+});
+// Al tocar "Cambiar contraseña" o "Cerrar sesión" se cierra el menú de una
+// vez (cuentan con sus propios listeners en cuenta.js / más abajo).
+document.getElementById("btn-cambiar-contrasena")?.addEventListener("click", () => {
+  menuUsuario?.classList.add("oculto");
+});
 
 function mostrarVista(vista) {
   [vistaCargando, vistaLogin, vistaRegistro, vistaRecuperar, vistaApp].forEach(v => v.classList.add("oculto"));
@@ -145,6 +177,7 @@ formLogin?.addEventListener("submit", async (e) => {
 });
 
 btnLogout?.addEventListener("click", async () => {
+  menuUsuario?.classList.add("oculto");
   await signOut(auth);
 });
 
@@ -190,6 +223,9 @@ onAuthStateChanged(auth, async (user) => {
   const datosUsuario = snap.data();
   nombreUsuarioSpan.textContent = datosUsuario.nombre;
   rolUsuarioSpan.textContent = datosUsuario.rol;
+  const iniciales_ = iniciales(datosUsuario.nombre);
+  if (avatarUsuarioSpan) avatarUsuarioSpan.textContent = iniciales_;
+  if (avatarUsuarioGrandeSpan) avatarUsuarioGrandeSpan.textContent = iniciales_;
 
   const pantallaProximamente = (c) => {
     c.innerHTML = `<div class="panel"><p>Esta sección todavía no está lista. Muy pronto.</p></div>`;

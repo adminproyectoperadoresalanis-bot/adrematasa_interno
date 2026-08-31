@@ -139,14 +139,30 @@ service cloud.firestore {
       allow update: if isSignedIn()
         && resource.data.destinatarioId == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['leida']);
-      // Solo el admin, o el supervisor directo del destinatario, puede crearle una notificación
-      // (aprobación/rechazo de una solicitud, cambio de horario) — nunca un compañero cualquiera.
+      // El admin, o el supervisor directo del destinatario, puede crearle una notificación
+      // (aprobación/rechazo de una solicitud, cambio de horario). Además, un empleado
+      // (tipo == 'solicitudNueva') puede crearle una a SU PROPIO supervisor para avisarle
+      // que mandó una solicitud nueva — o, si no tiene supervisor asignado, a cualquier
+      // admin activo (mismo respaldo que ya usa el aviso por correo en
+      // avisoNuevaSolicitud.js). Nunca a un compañero cualquiera fuera de estos casos.
       allow create: if isSignedIn()
         && request.resource.data.destinatarioId is string
         && request.resource.data.leida == false
         && (
           esAdmin() ||
-          esSupervisorDe(get(/databases/$(database)/documents/usuarios/$(request.resource.data.destinatarioId)).data.supervisorId)
+          esSupervisorDe(get(/databases/$(database)/documents/usuarios/$(request.resource.data.destinatarioId)).data.supervisorId) ||
+          (
+            request.resource.data.tipo == 'solicitudNueva' &&
+            exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) &&
+            (
+              request.resource.data.destinatarioId == usuarioActual().supervisorId ||
+              (
+                usuarioActual().get('supervisorId', null) == null &&
+                get(/databases/$(database)/documents/usuarios/$(request.resource.data.destinatarioId)).data.rol == 'admin' &&
+                get(/databases/$(database)/documents/usuarios/$(request.resource.data.destinatarioId)).data.estatus == 'activo'
+              )
+            )
+          )
         );
       allow delete: if false;
     }

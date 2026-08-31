@@ -140,11 +140,39 @@ function renderPanel(badge, lista) {
 
   lista.innerHTML = notificacionesActuales.map(n => `
     <li class="notif-item ${n.leida ? "" : "notif-no-leida"}" data-id="${n.id}">
-      <span class="notif-titulo">${escapeHtml(n.titulo)}</span>
-      <span class="notif-mensaje">${escapeHtml(n.mensaje)}</span>
-      <span class="notif-fecha">${formatearFecha(n.creadoEn)}</span>
+      <span class="notif-icono ${claseIcono(n.tipo)}">${iconoParaTipo(n.tipo)}</span>
+      <span class="notif-texto">
+        <span class="notif-titulo">${escapeHtml(n.titulo)}${n.tipo === "solicitudNueva" ? '<span class="tag-nuevo">Nuevo</span>' : ""}</span>
+        <span class="notif-mensaje">${escapeHtml(n.mensaje)}</span>
+        <span class="notif-fecha">${formatearFecha(n.creadoEn)}</span>
+      </span>
     </li>
   `).join("");
+}
+
+// Ícono (SVG en línea) y clase de color según el tipo de aviso — "Nuevo"
+// (solicitud entrante, azul) se distingue así de un vistazo de "aprobacion"
+// (verde) / "rechazo" (rojo) / "horario" (café, el tono normal de la app).
+function claseIcono(tipo) {
+  if (tipo === "solicitudNueva") return "nueva";
+  if (tipo === "aprobacion" || tipo === "rechazo" || tipo === "horario") return tipo;
+  return "info";
+}
+
+function iconoParaTipo(tipo) {
+  if (tipo === "solicitudNueva") {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V4"/><path d="M18 10l-6-6-6 6"/></svg>';
+  }
+  if (tipo === "aprobacion") {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+  }
+  if (tipo === "rechazo") {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+  }
+  if (tipo === "horario") {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>';
 }
 
 function formatearFecha(iso) {

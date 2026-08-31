@@ -74,14 +74,90 @@ button:hover { background: #46301c; }
   color: #fff;
 }
 
-.usuario-info { display: flex; align-items: center; gap: 10px; font-size: 0.9rem; }
+.usuario-info { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
 
-#btn-logout {
-  background: transparent;
-  border: 1px solid #fff;
-  padding: 6px 12px;
-  font-size: 0.85rem;
+/* Menú de usuario del encabezado: un "chip" con las iniciales que, al
+   tocarlo, abre un menú desplegable con el nombre/rol y las dos acciones
+   (Cambiar contraseña / Cerrar sesión) — antes iban sueltas en el mismo
+   renglón que el nombre y se amontonaban en pantallas angostas. */
+.menu-usuario-wrap { position: relative; }
+
+.chip-usuario {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 999px;
+  padding: 4px 8px 4px 4px;
+  color: #fff;
 }
+.chip-usuario:hover { background: rgba(255,255,255,0.16); }
+.chip-usuario .chip-flecha { width: 13px; height: 13px; opacity: 0.85; }
+
+.avatar-usuario {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #cbbfaf;
+  color: #2c1e0f;
+  font-size: 0.7rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+.avatar-usuario-grande {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: #2c1e0f;
+  color: #fff;
+  font-size: 0.9rem;
+}
+
+.menu-usuario {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 230px;
+  max-width: 90vw;
+  background: #fff;
+  color: #2c1e0f;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.22);
+  overflow: hidden;
+  z-index: 50;
+}
+.menu-usuario-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  border-bottom: 1px solid #eee;
+}
+.menu-usuario-nombre { font-weight: 700; font-size: 0.92rem; line-height: 1.25; }
+.menu-usuario-rol { font-size: 0.78rem; color: #6b5a44; text-transform: capitalize; }
+.menu-usuario-opciones { padding: 6px; }
+.menu-usuario-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  border-radius: 8px;
+  background: transparent;
+  color: #2c1e0f;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: left;
+}
+.menu-usuario-item svg { width: 16px; height: 16px; color: #6b5a44; flex: 0 0 auto; }
+.menu-usuario-item:hover { background: #f5f3f0; }
+.menu-usuario-item-salir { color: #a32424; }
+.menu-usuario-item-salir svg { color: #a32424; }
+.menu-usuario-separador { height: 1px; background: #f0ede7; margin: 4px 6px; }
 
 main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100%; }
 
@@ -500,8 +576,14 @@ main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100
   border-top: 2px solid transparent;
   border-radius: 0;
   padding: 10px 2px 8px;
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   line-height: 1.2;
+  /* Ícono arriba, etiqueta abajo — más alto que antes (~68px) para que haya
+     aire entre pestañas y no se vea empalmado en un celular angosto. */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
   /* Con etiquetas largas ("Configuración", "Catálogo de empleados") en una
      columna angosta, hyphens:auto parte la palabra en su sílaba (como en
      un periódico) en vez de a media letra — mucho más legible que un corte
@@ -512,10 +594,11 @@ main#contenido-app { padding: 20px; max-width: 900px; margin: 0 auto; width: 100
   overflow-wrap: break-word;
   cursor: pointer;
 }
+.nav-boton svg { width: 20px; height: 20px; flex: 0 0 auto; }
 .nav-boton:hover { background: #f5f3f0; }
 .nav-boton.activo { color: #2c1e0f; font-weight: 700; border-top-color: #2c1e0f; }
 
-body.tiene-nav main#contenido-app { padding-bottom: 90px; }
+body.tiene-nav main#contenido-app { padding-bottom: 104px; }
 
 /* Los 3 toggles de "Gestión" (Horas extra / Vacaciones / Faltas): un
    segmentado tipo pastilla, mismo tono café que el resto de la nav. */
@@ -620,10 +703,13 @@ body.tiene-nav main#contenido-app { padding-bottom: 90px; }
   position: relative;
   background: transparent;
   border: 1px solid rgba(255,255,255,0.4);
-  padding: 6px 10px;
-  font-size: 1rem;
+  border-radius: 7px;
+  padding: 6px;
   line-height: 1;
+  display: inline-flex;
+  color: #fff;
 }
+.btn-notificaciones svg { width: 17px; height: 17px; }
 .btn-notificaciones:hover { background: rgba(255,255,255,0.1); }
 
 .badge-notificaciones {
@@ -688,8 +774,7 @@ body.tiene-nav main#contenido-app { padding-bottom: 90px; }
 
 .notif-item {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  gap: 10px;
   padding: 10px 14px;
   border-bottom: 1px solid #f2efea;
   cursor: pointer;
@@ -701,9 +786,42 @@ body.tiene-nav main#contenido-app { padding-bottom: 90px; }
 .notif-no-leida { background: #fbf5e9; }
 .notif-no-leida:hover { background: #f7edd8; }
 
+/* Ícono redondo a la izquierda: distingue de un vistazo un aviso de
+   "solicitud nueva" (azul) de uno de resultado (aprobada verde / rechazada
+   roja) o de cambio de horario (café, el tono normal de la app). */
+.notif-icono {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.notif-icono svg { width: 15px; height: 15px; }
+.notif-icono.nueva { background: #dbe9fa; color: #1f5aa3; }
+.notif-icono.aprobacion { background: #d9f2e3; color: #1c7a41; }
+.notif-icono.rechazo { background: #fbdcdc; color: #a32424; }
+.notif-icono.horario, .notif-icono.info { background: #ece6da; color: #6b5a44; }
+
+.notif-texto { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .notif-titulo { font-weight: 600; }
 .notif-mensaje { color: #555; }
 .notif-fecha { color: #999; font-size: 0.72rem; }
+
+.tag-nuevo {
+  display: inline-block;
+  background: #1f5aa3;
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
 
 .notif-vacia { padding: 20px 14px; text-align: center; color: #999; font-size: 0.85rem; }
 

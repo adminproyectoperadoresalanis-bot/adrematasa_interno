@@ -182,7 +182,9 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
 <p style="margin:0 0 4px;"><strong>Fecha:</strong> ${fecha}</p>
 <p style="margin:0 0 4px;"><strong>Horario:</strong> ${horaInicio}–${horaFin} (${horas} h)</p>
 <p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(motivo)}</p>
-<p style="margin:0;color:#555;font-size:0.9em;">Entra a Adrematasa Interno para aprobarla o rechazarla.</p>`
+<p style="margin:0;color:#555;font-size:0.9em;">Entra a Adrematasa Interno para aprobarla o rechazarla.</p>`,
+          tituloBell: "Nueva solicitud de horas extra",
+          mensajeBell: `${datosUsuario.nombre} envió una solicitud para tu revisión (${fecha}, ${horaInicio}–${horaFin}).`
         });
       }
     } catch (err) {

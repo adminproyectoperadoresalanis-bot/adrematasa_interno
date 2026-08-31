@@ -194,7 +194,9 @@ export function iniciarVistaVacacionesEmpleado(contenedor, datosUsuario, uid) {
           mensaje: `<p style="margin:0 0 12px;">${escapeHtml(datosUsuario.nombre)} envió una nueva solicitud de vacaciones:</p>
 <p style="margin:0 0 4px;"><strong>Del:</strong> ${fechaInicio} <strong>al:</strong> ${fechaFin} (${diasHabiles} día${diasHabiles === 1 ? "" : "s"} hábil${diasHabiles === 1 ? "" : "es"})</p>
 ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(motivo)}</p>` : ""}
-<p style="margin:0;color:#555;font-size:0.9em;">Entra a Adrematasa Interno para aprobarla o rechazarla.</p>`
+<p style="margin:0;color:#555;font-size:0.9em;">Entra a Adrematasa Interno para aprobarla o rechazarla.</p>`,
+          tituloBell: "Nueva solicitud de vacaciones",
+          mensajeBell: `${datosUsuario.nombre} envió una solicitud para tu revisión (${fechaInicio} al ${fechaFin}).`
         });
       }
     } catch (err) {
