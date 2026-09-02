@@ -23,6 +23,7 @@ import { iniciarCalendarioVacaciones } from "./calendarioVacaciones.js";
 import { iniciarCentroNotificaciones, detenerCentroNotificaciones } from "./notificaciones.js";
 import { iniciarCambioContrasena } from "./cuenta.js";
 import { iniciarOrganigrama } from "./organigrama.js";
+import { iniciarEscaneoOrigen } from "./escaneoOrigen.js";
 
 const DOMINIO_ALANIS = "@alanis.com.mx";
 
@@ -267,6 +268,7 @@ onAuthStateChanged(auth, async (user) => {
     notificacionesWrap?.classList.remove("oculto");
     iniciarCentroNotificaciones(user.uid);
     iniciarNavegacion("admin", {
+      escaneoOrigen: (c) => iniciarEscaneoOrigen(c, datosUsuario, user.uid),
       panel: (c) => iniciarPanelResumenAdmin(c),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarGestionSolicitudes(d, user.uid, datosUsuario.nombre),
@@ -287,6 +289,7 @@ onAuthStateChanged(auth, async (user) => {
     notificacionesWrap?.classList.remove("oculto");
     iniciarCentroNotificaciones(user.uid);
     iniciarNavegacion("empleado", {
+      escaneoOrigen: (c) => iniciarEscaneoOrigen(c, datosUsuario, user.uid),
       horasExtra: (c) => iniciarVistaEmpleado(c, datosUsuario, user.uid),
       vacaciones: (c) => iniciarVistaVacacionesEmpleado(c, datosUsuario, user.uid),
       faltas: (c) => iniciarVistaEmpleadoFaltas(c, datosUsuario, user.uid)
@@ -295,6 +298,7 @@ onAuthStateChanged(auth, async (user) => {
     notificacionesWrap?.classList.remove("oculto");
     iniciarCentroNotificaciones(user.uid);
     iniciarNavegacion("supervisor", {
+      escaneoOrigen: (c) => iniciarEscaneoOrigen(c, datosUsuario, user.uid),
       panel: (c) => iniciarPanelResumenSupervisor(c, user.uid),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarVistaSupervisor(d, user.uid, datosUsuario.nombre),

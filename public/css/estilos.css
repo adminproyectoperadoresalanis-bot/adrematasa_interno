@@ -899,3 +899,6 @@ body.tiene-nav main#contenido-app { padding-bottom: 104px; }
 
 .leyenda { display: flex; justify-content: center; gap: 22px; padding-top: 18px; border-top: 1px solid #eee; font-size: 0.78rem; color: #666; flex-wrap: wrap; }
 .leyenda-item { display: flex; align-items: center; gap: 6px; }
+/* Escaneo de origen (QR/CFDI) — agregar al final de estilos.css */
+#qr-reader { border-radius: 8px; overflow: hidden; }
+#qr-reader video, #qr-reader canvas { border-radius: 8px; max-width: 100%; }
