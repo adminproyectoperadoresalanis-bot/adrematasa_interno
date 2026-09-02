@@ -14,12 +14,6 @@ service cloud.firestore {
     }
 
     match /usuarios/{userId} {
-      // Además de verse a sí mismo, al admin, o (si es supervisor) a su
-      // equipo: cualquiera puede leer el doc de SU PROPIO supervisor (para
-      // saber a quién avisarle por correo al crear una solicitud) y el de
-      // cualquier admin (para el mismo aviso cuando no tiene supervisor
-      // asignado — el admin hace de respaldo). Nunca expone datos de un
-      // compañero cualquiera, solo de quien ya podría aprobarle algo.
       allow read: if isSignedIn() && (
         request.auth.uid == userId ||
         esAdmin() ||
@@ -36,8 +30,6 @@ service cloud.firestore {
                     && request.resource.data.rol == resource.data.rol
                     && request.resource.data.supervisorId == resource.data.supervisorId
                     && request.resource.data.estatus == resource.data.estatus;
-      // Un supervisor puede descontar el saldo de vacaciones de alguien de su equipo al aprobar una solicitud,
-      // y también editar su horario semanal completo desde "Mi equipo" — nada más de la cuenta.
       allow update: if isSignedIn() && esSupervisorDe(resource.data.supervisorId)
                     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['diasVacacionesDisponibles', 'diaDescanso', 'horarioSemanal', 'horasSemanales']);
       allow delete: if false;
@@ -108,43 +100,28 @@ service cloud.firestore {
         esSupervisorDe(resource.data.supervisorId) ||
         esAdmin()
       );
-
-      // El admin captura una falta y queda confirmada de inmediato (es la máxima autoridad).
       allow create: if esAdmin()
         && request.resource.data.capturadoPor == request.auth.uid
         && request.resource.data.capturadoPorRol == 'admin'
         && request.resource.data.estatus == 'aprobada'
         && request.resource.data.tipo in ['injustificada', 'justificada', 'incapacidad', 'permiso_con_goce', 'permiso_sin_goce'];
-
-      // El supervisor captura una falta de su equipo; queda pendiente de que el admin la confirme.
       allow create: if isSignedIn()
         && esSupervisorDe(request.resource.data.supervisorId)
         && request.resource.data.capturadoPor == request.auth.uid
         && request.resource.data.capturadoPorRol == 'supervisor'
         && request.resource.data.estatus == 'pendiente'
         && request.resource.data.tipo in ['injustificada', 'justificada', 'incapacidad', 'permiso_con_goce', 'permiso_sin_goce'];
-
-      // Quien la capturó puede editarla/borrarla mientras siga pendiente (corregir un error antes de que el admin la revise).
       allow update, delete: if isSignedIn()
         && resource.data.capturadoPor == request.auth.uid
         && resource.data.estatus == 'pendiente';
-
-      // El admin confirma o rechaza las que capturó un supervisor, y puede editar/borrar cualquiera en cualquier momento.
       allow update, delete: if esAdmin();
     }
 
     match /notificaciones/{notifId} {
-      // Cada quien solo lee/marca como leídas las suyas.
       allow read: if isSignedIn() && resource.data.destinatarioId == request.auth.uid;
       allow update: if isSignedIn()
         && resource.data.destinatarioId == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['leida']);
-      // El admin, o el supervisor directo del destinatario, puede crearle una notificación
-      // (aprobación/rechazo de una solicitud, cambio de horario). Además, un empleado
-      // (tipo == 'solicitudNueva') puede crearle una a SU PROPIO supervisor para avisarle
-      // que mandó una solicitud nueva — o, si no tiene supervisor asignado, a cualquier
-      // admin activo (mismo respaldo que ya usa el aviso por correo en
-      // avisoNuevaSolicitud.js). Nunca a un compañero cualquiera fuera de estos casos.
       allow create: if isSignedIn()
         && request.resource.data.destinatarioId is string
         && request.resource.data.leida == false
@@ -168,17 +145,68 @@ service cloud.firestore {
     }
 
     match /configuracion/{docId} {
-      // Cualquier usuario con sesión puede leer (ej. para calcular días de vacaciones),
-      // pero solo el admin puede definir o cambiar los umbrales.
       allow read: if isSignedIn();
       allow write: if esAdmin();
     }
 
-    // "Candado" de unicidad para el número de empleado: cada documento
-    // representa un número ya tomado (id = número, dato = quién lo tiene).
-    // Solo el admin lo usa, desde una transacción en Catálogo de empleados.
     match /numerosEmpleado/{numero} {
       allow read, write: if esAdmin();
+    }
+
+    // ------------------------------------------------------------------
+    // QR/CFDI — escaneo de origen (Opción B, sin Cloud Functions).
+    // Autorizados para escanear origen: cualquier admin/supervisor/empleado
+    // (decisión de Ivan, 2026-09-01). Corregir un escaneo ya hecho: solo
+    // admin o supervisor.
+    // ------------------------------------------------------------------
+    function esRolAutorizadoParaOrigen() {
+      return isSignedIn() && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
+        && usuarioActual().rol in ['admin', 'supervisor', 'empleado'] && usuarioActual().estatus == 'activo';
+    }
+    function esSupervisorOAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
+        && usuarioActual().rol in ['admin', 'supervisor'] && usuarioActual().estatus == 'activo';
+    }
+
+    match /verificaciones_cfdi_local/{embarqueId} {
+      allow read: if esRolAutorizadoParaOrigen();
+
+      allow create: if esRolAutorizadoParaOrigen()
+        && request.resource.data.embarqueId == embarqueId
+        && request.resource.data.uuidEsperado is string
+        && request.resource.data.uuidEsperado.size() > 0
+        && request.resource.data.receptorRFCEsperado is string
+        && request.resource.data.receptorRFCEsperado.size() > 0
+        && request.resource.data.estadoSync == 'pendiente'
+        && request.resource.data.origenEscaneo.escaneadoPor.uid == request.auth.uid
+        && request.resource.data.origenEscaneo.timestamp == request.time
+        && request.resource.data.origenEscaneo.correccion == null;
+
+      allow update: if esSupervisorOAdmin()
+        && resource.data.origenEscaneo != null
+        && request.resource.data.embarqueId == resource.data.embarqueId
+        && request.resource.data.origenEscaneo.escaneadoPor == resource.data.origenEscaneo.escaneadoPor
+        && request.resource.data.uuidEsperado is string
+        && request.resource.data.uuidEsperado.size() > 0
+        && request.resource.data.receptorRFCEsperado is string
+        && request.resource.data.receptorRFCEsperado.size() > 0
+        && request.resource.data.estadoSync == 'pendiente'
+        && request.resource.data.origenEscaneo.correccion.por.uid == request.auth.uid
+        && request.resource.data.origenEscaneo.correccion.timestamp == request.time
+        && request.resource.data.origenEscaneo.correccion.valorAnterior.uuidCfdi == resource.data.uuidEsperado
+        && request.resource.data.origenEscaneo.correccion.valorAnterior.rfcReceptor == resource.data.receptorRFCEsperado;
+
+      allow delete: if false;
+    }
+
+    match /verificaciones_cfdi_resultado/{embarqueId} {
+      allow read: if esRolAutorizadoParaOrigen();
+      allow write: if false;
+    }
+
+    match /embarques_pendientes_origen/{embarqueId} {
+      allow read: if esRolAutorizadoParaOrigen();
+      allow write: if false;
     }
   }
 }
