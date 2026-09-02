@@ -131,7 +131,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   // equipo, no solo el suyo (decisión de Ivan, 2026-09-02).
   const seccionPendientesOrigen = !puedeValidar1 ? "" : `
     <section class="panel">
-      <h2>Embarques pendientes de escanear en origen</h2>
+      <h2>Embarques pendientes de primera validación (Atención al Cliente)</h2>
       <p class="nota">Embarques de McCain sin CFDI escaneado todavía por Atención al Cliente. Esta lista se sincroniza con Alanis Operadores cada pocos minutos, así que un escaneo reciente puede tardar un momento en desaparecer de aquí.</p>
       <div id="pendientes-origen-error" class="error"></div>
       <div class="tabla-wrap">
@@ -161,6 +161,25 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     </section>
   `;
 
+  // Tercera validación (el operador, en Alanis Operadores) no se hace desde
+  // esta app — es informativa nada más, así que se muestra a cualquiera,
+  // igual que el historial.
+  const seccionPendientesValidacion3 = `
+    <section class="panel" style="margin-top:20px;">
+      <h2>Embarques pendientes de tercera validación (Operador)</h2>
+      <p class="nota">Embarques que ya pasaron las dos validaciones de aquí y ya se sincronizaron con Alanis Operadores, esperando que el operador haga su propio escaneo en el checkpoint. Esta sección es solo informativa — esa validación se hace desde Alanis Operadores, no desde aquí.</p>
+      <div id="pendientes-validacion3-error" class="error"></div>
+      <div class="tabla-wrap">
+        <table class="tabla" id="tabla-pendientes-validacion3">
+          <thead>
+            <tr><th>Embarque</th><th>Cliente</th><th>Caja</th><th>2da validación por</th><th>Estado</th></tr>
+          </thead>
+          <tbody id="tbody-pendientes-validacion3"><tr><td colspan="5">Cargando...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  `;
+
   const avisoSinPasoAsignado = (puedeValidar1 || puedeValidar2) ? "" : `
     <section class="panel">
       <p class="nota">Con tu área/puesto actual no tienes ningún paso de escaneo asignado en este módulo — puedes ver el historial abajo.</p>
@@ -170,6 +189,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   contenedor.innerHTML = `
     ${seccionPendientesOrigen}
     ${seccionPendientesValidacion2}
+    ${seccionPendientesValidacion3}
     ${avisoSinPasoAsignado}
 
     <section class="panel" style="margin-top:20px;">
@@ -261,12 +281,15 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
   let listaPendientes = [];
   let listaHistorial = [];
+  let listaResultados = [];
 
   const errorPendientesDiv = contenedor.querySelector("#pendientes-origen-error");
   const errorValidacion2Div = contenedor.querySelector("#pendientes-validacion2-error");
+  const errorValidacion3Div = contenedor.querySelector("#pendientes-validacion3-error");
   const errorHistorialDiv = contenedor.querySelector("#historial-origen-error");
   const tbodyPendientes = contenedor.querySelector("#tbody-pendientes-origen");
   const tbodyValidacion2 = contenedor.querySelector("#tbody-pendientes-validacion2");
+  const tbodyValidacion3 = contenedor.querySelector("#tbody-pendientes-validacion3");
   const tbodyHistorial = contenedor.querySelector("#tbody-historial-origen");
 
   onSnapshot(collection(db, "embarques_pendientes_origen"), (snap) => {
@@ -286,8 +309,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     renderHistorial();
     renderPendientes();
     renderPendientesValidacion2();
+    renderPendientesValidacion3();
   }, (err) => {
     errorHistorialDiv.textContent = "No se pudo cargar el historial: " + err.message;
+  });
+
+  onSnapshot(collection(db, "verificaciones_cfdi_resultado"), (snap) => {
+    listaResultados = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderPendientesValidacion3();
+  }, (err) => {
+    if (errorValidacion3Div) errorValidacion3Div.textContent = "No se pudo cargar el estado del operador: " + err.message;
   });
 
   function renderPendientes() {
@@ -365,6 +396,29 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         });
       });
     });
+  }
+
+  // Solo informativa (nadie hace clic aquí) — el operador valida desde
+  // Alanis Operadores, no desde esta app. "Pendiente" = ya se sincronizó
+  // hacia allá (estadoSync === "sincronizado") pero todavía no llega un
+  // resultado (verificaciones_cfdi_resultado) de vuelta.
+  function renderPendientesValidacion3() {
+    if (!tbodyValidacion3) return;
+    const idsConResultado = new Set(listaResultados.map(r => r.id));
+    const pendientes = listaHistorial.filter(f => f.estadoSync === "sincronizado" && !idsConResultado.has(f.id));
+    if (pendientes.length === 0) {
+      tbodyValidacion3.innerHTML = `<tr><td colspan="5">No hay embarques esperando el escaneo del operador.</td></tr>`;
+      return;
+    }
+    tbodyValidacion3.innerHTML = pendientes.map(f => `
+      <tr data-id="${f.id}">
+        <td>${escapeHtml(f.embarqueId || f.id)}</td>
+        <td>${escapeHtml(f.clienteNombre || "McCain")}</td>
+        <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—")}</td>
+        <td>${escapeHtml((f.validacion2 && f.validacion2.escaneadoPor && f.validacion2.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.validacion2 && f.validacion2.timestamp)}</td>
+        <td><span class="nota" style="margin:0;">Esperando escaneo del operador</span></td>
+      </tr>
+    `).join("");
   }
 
   function badgeSiNo(valor, etiquetaSi, etiquetaNo) {
