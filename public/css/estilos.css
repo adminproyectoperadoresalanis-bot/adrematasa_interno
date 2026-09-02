@@ -902,3 +902,34 @@ body.tiene-nav main#contenido-app { padding-bottom: 104px; }
 /* Escaneo de origen (QR/CFDI) — agregar al final de estilos.css */
 #qr-reader { border-radius: 8px; overflow: hidden; }
 #qr-reader video, #qr-reader canvas { border-radius: 8px; max-width: 100%; }
+/* Escaneo de origen (QR/CFDI) */
+#qr-reader { border-radius: 8px; overflow: hidden; }
+#qr-reader video, #qr-reader canvas { border-radius: 8px; max-width: 100%; }
+
+.resultado-escaneo-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: #fff;
+}
+.resultado-escaneo-overlay.exito { background: #1c7a41; }
+.resultado-escaneo-overlay.discrepancia { background: #a32424; }
+.resultado-escaneo-contenido { max-width: 420px; }
+.resultado-escaneo-contenido svg { width: 96px; height: 96px; margin-bottom: 16px; }
+.resultado-escaneo-contenido h2 { font-size: 1.6rem; margin: 0 0 10px; }
+.resultado-escaneo-contenido p { font-size: 1rem; margin: 0 0 8px; }
+.resultado-escaneo-registro { opacity: 0.85; font-size: 0.85rem; margin-top: 18px !important; }
+.resultado-escaneo-contenido button {
+  margin-top: 20px;
+  background: #fff;
+  color: #2c1e0f;
+  font-weight: 700;
+  padding: 12px 28px;
+  border-radius: 8px;
+  font-size: 1rem;
+}

@@ -26,6 +26,12 @@ function formatoFecha(valor) {
   return fecha.toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" });
 }
 
+// Normaliza para comparar caja/remolque sin que espacios o mayúsculas
+// hagan que algo idéntico se vea como "no coincide".
+function normalizarCaja(valor) {
+  return (valor || "").toString().trim().toUpperCase();
+}
+
 // Extrae { uuid, rfc } del QR de verificación del CFDI del SAT
 // (https://verificacfdi.facturaelectronica.sat.gob.mx/default.aspx?id=...&rr=...).
 // Devuelve null si el texto leído no es una URL de ese tipo o le falta el
@@ -43,6 +49,44 @@ function parsearQR(texto) {
   if (!/^[0-9a-fA-F-]{30,40}$/.test(uuid)) return null;
   return { uuid: uuid.toUpperCase(), rfc: rfc.toUpperCase() };
 }
+
+// Beep corto vía WebAudio — sin archivos de audio, funciona sin conexión.
+// Si el navegador no soporta AudioContext (o el usuario aún no interactuó
+// con la página, algunos navegadores lo exigen), simplemente no suena.
+function reproducirSonido(tipo) {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sine";
+    if (tipo === "exito") {
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.15);
+    } else {
+      osc.frequency.value = 220;
+      gain.gain.setValueAtTime(0.25, ctx.currentTime);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.4);
+    }
+    osc.onended = () => ctx.close().catch(() => {});
+  } catch {
+    /* sin soporte de audio en este navegador — se ignora */
+  }
+}
+
+function vibrar(tipo) {
+  if (!navigator.vibrate) return;
+  navigator.vibrate(tipo === "exito" ? [80] : [120, 80, 120]);
+}
+
+const ICONO_EXITO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12.5l2.5 2.5L16 9"/></svg>`;
+const ICONO_ALERTA = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L14.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 17h.01"/></svg>`;
 
 // contenedor: elemento donde dibujar. datosUsuario: doc de usuarios/{uid}
 // (se usa .nombre y .rol). uid: el auth.uid de quien tiene la sesión abierta.
@@ -71,7 +115,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <table class="tabla" id="tabla-historial-origen">
           <thead>
             <tr>
-              <th>Embarque</th><th>UUID CFDI</th><th>RFC receptor</th><th>Unidad</th><th>Escaneó</th><th>Sincronización</th>${puedeCorregir ? "<th>Acción</th>" : ""}
+              <th>Embarque</th><th>UUID CFDI</th><th>RFC receptor</th><th>Caja</th><th>Escaneó</th><th>Sincronización</th>${puedeCorregir ? "<th>Acción</th>" : ""}
             </tr>
           </thead>
           <tbody id="tbody-historial-origen"><tr><td colspan="${puedeCorregir ? 7 : 6}">Cargando...</td></tr></tbody>
@@ -120,11 +164,12 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
               <input type="text" id="modal-confirmar-rfc" disabled>
             </label>
           </div>
-          <div class="modal-fila" id="modal-fila-unidad">
-            <label>Unidad (opcional)
-              <input type="text" id="modal-confirmar-unidad" placeholder="Número de unidad o remolque">
+          <div class="modal-fila">
+            <label>Caja / remolque (obligatorio)
+              <input type="text" id="modal-confirmar-caja" placeholder="Número de caja o remolque" required>
             </label>
           </div>
+          <p id="modal-confirmar-aviso-caja" class="nota nota-alerta oculto"></p>
           <div id="modal-confirmar-error" class="error"></div>
           <div class="modal-acciones">
             <button type="button" class="secundario" id="modal-volver-escanear">Volver a escanear</button>
@@ -135,6 +180,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <div class="modal-acciones">
           <button type="button" class="secundario" id="modal-escaneo-cancelar">Cancelar</button>
         </div>
+      </div>
+    </div>
+
+    <div id="resultado-escaneo-origen" class="resultado-escaneo-overlay oculto">
+      <div class="resultado-escaneo-contenido">
+        <div id="resultado-escaneo-icono"></div>
+        <h2 id="resultado-escaneo-titulo"></h2>
+        <p id="resultado-escaneo-detalle"></p>
+        <p id="resultado-escaneo-registro" class="resultado-escaneo-registro"></p>
+        <button type="button" id="resultado-escaneo-continuar">Continuar</button>
       </div>
     </div>
   `;
@@ -195,7 +250,9 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         abrirModalEscaneo({
           embarqueId: id,
           modoCorreccion: false,
-          infoTexto: `Embarque ${(p && p.shipment) || id} — ${(p && p.clienteNombre) || "McCain"}`
+          infoTexto: `Embarque ${(p && p.shipment) || id} — ${(p && p.clienteNombre) || "McCain"}`,
+          cajaEsperada: p ? p.caja : null,
+          cajaPrevia: ""
         });
       });
     });
@@ -206,17 +263,23 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       tbodyHistorial.innerHTML = `<tr><td colspan="${puedeCorregir ? 7 : 6}">Todavía no hay escaneos de origen.</td></tr>`;
       return;
     }
-    tbodyHistorial.innerHTML = listaHistorial.map(f => `
+    tbodyHistorial.innerHTML = listaHistorial.map(f => {
+      const cajaTexto = escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—");
+      const cajaBadge = typeof (f.origenEscaneo && f.origenEscaneo.cajaCoincide) === "boolean"
+        ? `<span class="badge ${f.origenEscaneo.cajaCoincide ? "badge-aprobada" : "badge-rechazada"}" style="margin-left:6px;">${f.origenEscaneo.cajaCoincide ? "OK" : "No coincide"}</span>`
+        : "";
+      return `
       <tr data-id="${f.id}">
         <td>${escapeHtml(f.embarqueId || f.id)}</td>
         <td style="word-break:break-all;">${escapeHtml(f.uuidEsperado || "—")}</td>
         <td>${escapeHtml(f.receptorRFCEsperado || "—")}</td>
-        <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.unidad) || "—")}</td>
+        <td>${cajaTexto}${cajaBadge}</td>
         <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.escaneadoPor && f.origenEscaneo.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.origenEscaneo && f.origenEscaneo.timestamp)}</td>
         <td><span class="badge ${CLASES_SYNC[f.estadoSync] || "badge-pendiente"}">${ETIQUETAS_SYNC[f.estadoSync] || f.estadoSync}</span></td>
         ${puedeCorregir ? `<td class="acciones"><button type="button" class="secundario btn-corregir-origen">Corregir</button></td>` : ""}
       </tr>
-    `).join("");
+    `;
+    }).join("");
 
     if (puedeCorregir) {
       tbodyHistorial.querySelectorAll(".btn-corregir-origen").forEach(btn => {
@@ -226,7 +289,9 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
           abrirModalEscaneo({
             embarqueId: id,
             modoCorreccion: true,
-            infoTexto: `Corrigiendo embarque ${(f && f.embarqueId) || id} — valor actual: ${(f && f.uuidEsperado) || "—"} / ${(f && f.receptorRFCEsperado) || "—"}`
+            infoTexto: `Corrigiendo embarque ${(f && f.embarqueId) || id} — valor actual: ${(f && f.uuidEsperado) || "—"} / ${(f && f.receptorRFCEsperado) || "—"}`,
+            cajaEsperada: f ? f.cajaEsperada : null,
+            cajaPrevia: (f && f.origenEscaneo && f.origenEscaneo.caja) || ""
           });
         });
       });
@@ -248,16 +313,27 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const inputManualRfc = contenedor.querySelector("#modal-manual-rfc");
   const inputConfirmarUuid = contenedor.querySelector("#modal-confirmar-uuid");
   const inputConfirmarRfc = contenedor.querySelector("#modal-confirmar-rfc");
-  const inputConfirmarUnidad = contenedor.querySelector("#modal-confirmar-unidad");
-  const filaUnidad = contenedor.querySelector("#modal-fila-unidad");
+  const inputConfirmarCaja = contenedor.querySelector("#modal-confirmar-caja");
+  const avisoCaja = contenedor.querySelector("#modal-confirmar-aviso-caja");
   const confirmarErrorDiv = contenedor.querySelector("#modal-confirmar-error");
   const botonesModo = contenedor.querySelectorAll(".subnav-boton[data-modo]");
   const botonGuardar = contenedor.querySelector("#modal-confirmar-guardar");
+
+  const overlayResultado = contenedor.querySelector("#resultado-escaneo-origen");
+  const overlayIcono = contenedor.querySelector("#resultado-escaneo-icono");
+  const overlayTitulo = contenedor.querySelector("#resultado-escaneo-titulo");
+  const overlayDetalle = contenedor.querySelector("#resultado-escaneo-detalle");
+  const overlayRegistro = contenedor.querySelector("#resultado-escaneo-registro");
+  contenedor.querySelector("#resultado-escaneo-continuar").addEventListener("click", () => {
+    overlayResultado.classList.add("oculto");
+  });
 
   let embarqueActual = null;
   let modoCorreccionActual = false;
   let datosLeidos = null;
   let lectorQR = null;
+  let cajaEsperadaActual = null;
+  let advertenciaCajaAceptada = false;
 
   botonesModo.forEach(btn => {
     btn.addEventListener("click", () => cambiarModo(btn.dataset.modo));
@@ -281,6 +357,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   });
   botonGuardar.addEventListener("click", guardarEscaneo);
   contenedor.querySelector("#modal-escaneo-cancelar").addEventListener("click", cerrarModal);
+
+  // En cuanto se toca la caja, cualquier advertencia de "no coincide" ya
+  // mostrada queda obsoleta — hay que re-evaluar en el siguiente click.
+  inputConfirmarCaja.addEventListener("input", () => {
+    if (advertenciaCajaAceptada) {
+      advertenciaCajaAceptada = false;
+      avisoCaja.classList.add("oculto");
+      botonGuardar.textContent = "Confirmar y registrar";
+    }
+  });
 
   function cambiarModo(modo) {
     botonesModo.forEach(b => b.classList.toggle("activo", b.dataset.modo === modo));
@@ -333,24 +419,47 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     detenerCamara();
     inputConfirmarUuid.value = datos.uuid;
     inputConfirmarRfc.value = datos.rfc;
-    inputConfirmarUnidad.value = "";
-    filaUnidad.classList.toggle("oculto", modoCorreccionActual);
+    advertenciaCajaAceptada = false;
+    avisoCaja.classList.add("oculto");
+    botonGuardar.textContent = "Confirmar y registrar";
     confirmarErrorDiv.textContent = "";
     seccionCaptura.classList.add("oculto");
     seccionConfirmar.classList.remove("oculto");
+    inputConfirmarCaja.focus();
   }
 
   async function guardarEscaneo() {
     if (!datosLeidos || !embarqueActual) return;
     confirmarErrorDiv.textContent = "";
+
+    const cajaCapturada = inputConfirmarCaja.value.trim();
+    if (!cajaCapturada) {
+      confirmarErrorDiv.textContent = "Captura el número de caja o remolque.";
+      return;
+    }
+
+    const hayCajaEsperada = !!(cajaEsperadaActual && cajaEsperadaActual.trim());
+    const cajaCoincide = hayCajaEsperada
+      ? normalizarCaja(cajaCapturada) === normalizarCaja(cajaEsperadaActual)
+      : true; // si no hay caja registrada de origen (correo), no hay contra qué comparar — se guarda sin marcar discrepancia.
+
+    if (hayCajaEsperada && !cajaCoincide && !advertenciaCajaAceptada) {
+      avisoCaja.textContent = `La caja "${cajaCapturada}" no coincide con la registrada ("${cajaEsperadaActual}"). Revisa que sea la caja correcta. Si estás seguro de que es correcta, toca "Confirmar de todas formas" para continuar.`;
+      avisoCaja.classList.remove("oculto");
+      advertenciaCajaAceptada = true;
+      botonGuardar.textContent = "Confirmar de todas formas";
+      return;
+    }
+
     botonGuardar.disabled = true;
     try {
       if (modoCorreccionActual) {
-        await corregirEscaneo(embarqueActual, datosLeidos);
+        await corregirEscaneo(embarqueActual, { ...datosLeidos, caja: cajaCapturada, cajaCoincide });
       } else {
-        await registrarEscaneo(embarqueActual, { ...datosLeidos, unidad: inputConfirmarUnidad.value.trim() });
+        await registrarEscaneo(embarqueActual, { ...datosLeidos, caja: cajaCapturada, cajaCoincide, cajaEsperada: cajaEsperadaActual || null });
       }
       cerrarModal();
+      mostrarResultado({ cajaCoincide, caja: cajaCapturada });
     } catch (err) {
       confirmarErrorDiv.textContent = "No se pudo registrar: " + err.message;
     } finally {
@@ -358,16 +467,34 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     }
   }
 
-  function abrirModalEscaneo({ embarqueId, modoCorreccion, infoTexto }) {
+  function mostrarResultado({ cajaCoincide, caja }) {
+    const tipo = cajaCoincide ? "exito" : "discrepancia";
+    overlayResultado.classList.remove("oculto", "exito", "discrepancia");
+    overlayResultado.classList.add(tipo);
+    overlayIcono.innerHTML = cajaCoincide ? ICONO_EXITO : ICONO_ALERTA;
+    overlayTitulo.textContent = cajaCoincide ? "Escaneo registrado" : "Escaneo registrado con discrepancia";
+    overlayDetalle.textContent = cajaCoincide
+      ? `Caja/remolque ${caja} coincide con lo registrado.`
+      : `Caja/remolque ${caja} NO coincide con lo registrado — queda marcado para revisión.`;
+    overlayRegistro.textContent = `Registrado por ${datosUsuario.nombre || "—"} · ${new Date().toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" })}`;
+    reproducirSonido(tipo);
+    vibrar(tipo);
+  }
+
+  function abrirModalEscaneo({ embarqueId, modoCorreccion, infoTexto, cajaEsperada, cajaPrevia }) {
     embarqueActual = embarqueId;
     modoCorreccionActual = modoCorreccion;
     datosLeidos = null;
+    cajaEsperadaActual = cajaEsperada || null;
+    advertenciaCajaAceptada = false;
     modalTitulo.textContent = modoCorreccion ? "Corregir CFDI de origen" : "Escanear CFDI de origen";
     modalInfo.textContent = infoTexto || "";
     modalErrorDiv.textContent = "";
     confirmarErrorDiv.textContent = "";
+    avisoCaja.classList.add("oculto");
     inputManualUuid.value = "";
     inputManualRfc.value = "";
+    inputConfirmarCaja.value = cajaPrevia || "";
     seccionConfirmar.classList.add("oculto");
     seccionCaptura.classList.remove("oculto");
     botonesModo.forEach(b => b.classList.toggle("activo", b.dataset.modo === "camara"));
@@ -384,14 +511,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     datosLeidos = null;
   }
 
-  async function registrarEscaneo(embarqueId, { uuid, rfc, unidad }) {
+  async function registrarEscaneo(embarqueId, { uuid, rfc, caja, cajaCoincide, cajaEsperada }) {
     await setDoc(doc(db, "verificaciones_cfdi_local", embarqueId), {
       embarqueId,
       uuidEsperado: uuid,
       receptorRFCEsperado: rfc,
       estadoSync: "pendiente",
+      cajaEsperada: cajaEsperada || null,
       origenEscaneo: {
-        unidad: unidad || null,
+        caja: caja || null,
+        cajaCoincide,
         escaneadoPor: { uid, nombre: datosUsuario.nombre || null, rol: datosUsuario.rol },
         timestamp: serverTimestamp(),
         correccion: null
@@ -399,7 +528,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     });
   }
 
-  async function corregirEscaneo(embarqueId, { uuid, rfc }) {
+  async function corregirEscaneo(embarqueId, { uuid, rfc, caja, cajaCoincide }) {
     const snap = await getDoc(doc(db, "verificaciones_cfdi_local", embarqueId));
     if (!snap.exists()) throw new Error("No se encontró el escaneo original.");
     const datosPrevios = snap.data();
@@ -410,6 +539,8 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       estadoSync: "pendiente",
       origenEscaneo: {
         ...datosPrevios.origenEscaneo,
+        caja: caja || null,
+        cajaCoincide,
         correccion: {
           por: { uid, rol: datosUsuario.rol },
           timestamp: serverTimestamp(),
