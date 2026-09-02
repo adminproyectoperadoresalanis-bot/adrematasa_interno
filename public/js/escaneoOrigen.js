@@ -75,7 +75,13 @@ function parsearQR(texto) {
   return { uuid: uuid.toUpperCase(), rfc: rfc.toUpperCase() };
 }
 
-// Beep corto vía WebAudio — sin archivos de audio, funciona sin conexión.
+// Beep vía WebAudio — sin archivos de audio, funciona sin conexión. OJO: en
+// iPhone (Safari/PWA) esto SIGUE sin sonar si el switch de silencio físico
+// está activado, o si el volumen del celular está en 0 — eso lo controla el
+// sistema operativo y ningún sitio web lo puede saltar (ver nota junto a
+// mostrarAdvertenciaDiscrepancia). Aquí solo se sube el volumen al máximo
+// que permite la Web Audio API y, para discrepancias, se hacen 3 tonos
+// (no 1) para que sea más difícil no notarlo cuando SÍ hay algo de volumen.
 // Si el navegador no soporta AudioContext (o el usuario aún no interactuó
 // con la página, algunos navegadores lo exigen), simplemente no suena.
 function reproducirSonido(tipo) {
@@ -83,31 +89,49 @@ function reproducirSonido(tipo) {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return;
     const ctx = new Ctx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.type = "sine";
     if (tipo === "exito") {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
       osc.frequency.value = 880;
-      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
       osc.start();
       osc.stop(ctx.currentTime + 0.15);
+      osc.onended = () => ctx.close().catch(() => {});
     } else {
-      osc.frequency.value = 220;
-      gain.gain.setValueAtTime(0.25, ctx.currentTime);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.4);
+      // Alarma de discrepancia: 3 tonos graves cortos en vez de 1, a
+      // volumen máximo (gain 1.0) — más insistente que el beep de éxito.
+      const tiemposInicio = [0, 0.22, 0.44];
+      tiemposInicio.forEach((offset) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = "square";
+        osc.frequency.value = 220;
+        gain.gain.setValueAtTime(1.0, ctx.currentTime + offset);
+        osc.start(ctx.currentTime + offset);
+        osc.stop(ctx.currentTime + offset + 0.16);
+      });
+      setTimeout(() => ctx.close().catch(() => {}), 800);
     }
-    osc.onended = () => ctx.close().catch(() => {});
   } catch {
     /* sin soporte de audio en este navegador — se ignora */
   }
 }
 
+// OJO (importante para iPhone): la Vibration API (navigator.vibrate) NO
+// está implementada en Safari/iOS — ni en el navegador ni en la app
+// instalada a la pantalla de inicio (limitación de Apple/WebKit, no de este
+// código). En esos celulares esta función simplemente no hace nada, sin
+// error. En Android sí funciona, y normalmente es independiente del
+// volumen de medios (no se apaga solo porque el volumen esté en 0),
+// aunque puede desactivarse a nivel de sistema.
 function vibrar(tipo) {
   if (!navigator.vibrate) return;
-  navigator.vibrate(tipo === "exito" ? [80] : [120, 80, 120]);
+  navigator.vibrate(tipo === "exito" ? [80] : [200, 100, 200, 100, 200]);
 }
 
 const ICONO_EXITO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12.5l2.5 2.5L16 9"/></svg>`;
@@ -188,19 +212,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
   contenedor.innerHTML = `
     <style>
-      .aviso-discrepancia {
-        display: flex;
-        align-items: flex-start;
-        gap: 10px;
-        background: #a32424;
-        color: #fff;
-        padding: 14px 16px;
-        border-radius: 8px;
-        margin: 10px 0;
-        font-weight: 600;
-        font-size: 0.95rem;
-      }
-      .aviso-discrepancia svg { width: 28px; height: 28px; flex: none; }
+      .resultado-escaneo-botonera { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
     </style>
     ${seccionPendientesOrigen}
     ${seccionPendientesValidacion2}
@@ -268,7 +280,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
               <input type="text" id="modal-confirmar-caja" placeholder="Número de caja o remolque" required>
             </label>
           </div>
-          <div id="modal-confirmar-aviso-caja" class="aviso-discrepancia oculto"></div>
           <div id="modal-confirmar-error" class="error"></div>
           <div class="modal-acciones">
             <button type="button" class="secundario" id="modal-volver-escanear">Volver a escanear</button>
@@ -289,7 +300,11 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <p id="resultado-escaneo-detalle"></p>
         <p id="resultado-escaneo-detalle2" class="oculto"></p>
         <p id="resultado-escaneo-registro" class="resultado-escaneo-registro"></p>
-        <button type="button" id="resultado-escaneo-continuar">Continuar</button>
+        <div class="resultado-escaneo-botonera">
+          <button type="button" id="resultado-escaneo-continuar">Continuar</button>
+          <button type="button" id="resultado-escaneo-volver" class="secundario oculto">Volver a escanear</button>
+          <button type="button" id="resultado-escaneo-confirmar-todas" class="oculto">Confirmar de todas formas</button>
+        </div>
       </div>
     </div>
   `;
@@ -510,7 +525,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const inputConfirmarUuid = contenedor.querySelector("#modal-confirmar-uuid");
   const inputConfirmarRfc = contenedor.querySelector("#modal-confirmar-rfc");
   const inputConfirmarCaja = contenedor.querySelector("#modal-confirmar-caja");
-  const avisoCaja = contenedor.querySelector("#modal-confirmar-aviso-caja");
   const confirmarErrorDiv = contenedor.querySelector("#modal-confirmar-error");
   const botonesModo = contenedor.querySelectorAll(".subnav-boton[data-modo]");
   const botonGuardar = contenedor.querySelector("#modal-confirmar-guardar");
@@ -521,8 +535,24 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const overlayDetalle = contenedor.querySelector("#resultado-escaneo-detalle");
   const overlayDetalle2 = contenedor.querySelector("#resultado-escaneo-detalle2");
   const overlayRegistro = contenedor.querySelector("#resultado-escaneo-registro");
-  contenedor.querySelector("#resultado-escaneo-continuar").addEventListener("click", () => {
+  const botonOverlayContinuar = contenedor.querySelector("#resultado-escaneo-continuar");
+  const botonOverlayVolver = contenedor.querySelector("#resultado-escaneo-volver");
+  const botonOverlayConfirmarTodas = contenedor.querySelector("#resultado-escaneo-confirmar-todas");
+
+  botonOverlayContinuar.addEventListener("click", () => {
+    detenerAlarmaDiscrepancia();
     overlayResultado.classList.add("oculto");
+  });
+  botonOverlayVolver.addEventListener("click", () => {
+    detenerAlarmaDiscrepancia();
+    overlayResultado.classList.add("oculto");
+    advertenciaCajaAceptada = false;
+    volverAEscanear();
+  });
+  botonOverlayConfirmarTodas.addEventListener("click", () => {
+    detenerAlarmaDiscrepancia();
+    overlayResultado.classList.add("oculto");
+    guardarEscaneo();
   });
 
   let embarqueActual = null;
@@ -533,6 +563,8 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   let uuidEsperadoActual = null;
   let rfcEsperadoActual = null;
   let advertenciaCajaAceptada = false;
+  let intervaloAlarmaDiscrepancia = null;
+  let wakeLockCentinela = null;
 
   botonesModo.forEach(btn => {
     btn.addEventListener("click", () => cambiarModo(btn.dataset.modo));
@@ -547,13 +579,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     modalErrorDiv.textContent = "";
     mostrarConfirmacion({ uuid: uuid.toUpperCase(), rfc: rfc.toUpperCase() });
   });
-  contenedor.querySelector("#modal-volver-escanear").addEventListener("click", () => {
-    seccionConfirmar.classList.add("oculto");
-    seccionCaptura.classList.remove("oculto");
-    confirmarErrorDiv.textContent = "";
-    const modoCamaraActivo = contenedor.querySelector('.subnav-boton[data-modo="camara"]').classList.contains("activo");
-    if (modoCamaraActivo) iniciarCamara();
-  });
+  contenedor.querySelector("#modal-volver-escanear").addEventListener("click", volverAEscanear);
   botonGuardar.addEventListener("click", guardarEscaneo);
   contenedor.querySelector("#modal-escaneo-cancelar").addEventListener("click", cerrarModal);
 
@@ -562,10 +588,17 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   inputConfirmarCaja.addEventListener("input", () => {
     if (advertenciaCajaAceptada) {
       advertenciaCajaAceptada = false;
-      avisoCaja.classList.add("oculto");
       botonGuardar.textContent = "Confirmar y registrar";
     }
   });
+
+  function volverAEscanear() {
+    seccionConfirmar.classList.add("oculto");
+    seccionCaptura.classList.remove("oculto");
+    confirmarErrorDiv.textContent = "";
+    const modoCamaraActivo = contenedor.querySelector('.subnav-boton[data-modo="camara"]').classList.contains("activo");
+    if (modoCamaraActivo) iniciarCamara();
+  }
 
   function cambiarModo(modo) {
     botonesModo.forEach(b => b.classList.toggle("activo", b.dataset.modo === modo));
@@ -619,7 +652,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     inputConfirmarUuid.value = datos.uuid;
     inputConfirmarRfc.value = datos.rfc;
     advertenciaCajaAceptada = false;
-    avisoCaja.classList.add("oculto");
     botonGuardar.textContent = "Confirmar y registrar";
     confirmarErrorDiv.textContent = "";
     seccionCaptura.classList.add("oculto");
@@ -652,16 +684,12 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     const hayDiscrepancia = (hayCajaEsperada && !cajaCoincide) || !uuidCoincide || !rfcCoincide;
 
     if (hayDiscrepancia && !advertenciaCajaAceptada) {
+      advertenciaCajaAceptada = true;
       const partes = [];
       if (!uuidCoincide) partes.push("el UUID del CFDI no coincide con el registrado por Atención al Cliente");
       if (!rfcCoincide) partes.push("el RFC receptor no coincide con el registrado por Atención al Cliente");
-      if (hayCajaEsperada && !cajaCoincide) partes.push(`la caja "${escapeHtml(cajaCapturada)}" no coincide con la registrada ("${escapeHtml(cajaEsperadaActual)}")`);
-      avisoCaja.innerHTML = `${ICONO_ALERTA}<span>Ojo: ${partes.join("; ")}. Revisa que sea el documento correcto. Si estás seguro de que es correcto, toca "Confirmar de todas formas" para continuar (queda marcado para revisión).</span>`;
-      avisoCaja.classList.remove("oculto");
-      reproducirSonido("discrepancia");
-      vibrar("discrepancia");
-      advertenciaCajaAceptada = true;
-      botonGuardar.textContent = "Confirmar de todas formas";
+      if (hayCajaEsperada && !cajaCoincide) partes.push(`la caja "${cajaCapturada}" no coincide con la registrada ("${cajaEsperadaActual}")`);
+      mostrarAdvertenciaDiscrepancia(partes);
       return;
     }
 
@@ -683,12 +711,84 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     }
   }
 
+  // Advertencia de discrepancia ANTES de guardar — usa la MISMA pantalla
+  // completa (roja, con ícono, sonido y vibración) que el resultado final,
+  // no un simple textito adentro del modal, para que sea igual de evidente
+  // (o más) que la pantalla verde de éxito. No bloquea: solo exige un toque
+  // consciente en "Confirmar de todas formas" para seguir (o "Volver a
+  // escanear" para corregir). Nada se guarda todavía en este punto.
+  //
+  // Límite real de plataforma (no es un bug de este código): ningún sitio
+  // web puede saltarse el switch de silencio físico de iPhone ni forzar
+  // sonido cuando el volumen del celular está en 0 — eso lo controla el
+  // sistema operativo. Y en iPhone (Safari o la app agregada a pantalla de
+  // inicio) la vibración del navegador simplemente no existe (no la
+  // implementa Apple). Por eso esta pantalla se apoya sobre todo en lo
+  // visual — rojo, parpadeo de ícono, texto grande — que es el único canal
+  // garantizado en cualquier celular pase lo que pase con el volumen.
+  function mostrarAdvertenciaDiscrepancia(partes) {
+    overlayResultado.classList.remove("oculto", "exito", "discrepancia");
+    overlayResultado.classList.add("discrepancia");
+    overlayIcono.innerHTML = ICONO_ALERTA;
+    overlayTitulo.textContent = "¡Alto! No coincide";
+    overlayDetalle.textContent = "Antes de guardar, revisa que sea el documento correcto:";
+    overlayDetalle2.classList.remove("oculto");
+    overlayDetalle2.textContent = partes.join(" · ");
+    overlayRegistro.classList.add("oculto");
+    overlayRegistro.textContent = "";
+    botonOverlayContinuar.classList.add("oculto");
+    botonOverlayVolver.classList.remove("oculto");
+    botonOverlayConfirmarTodas.classList.remove("oculto");
+
+    detenerAlarmaDiscrepancia();
+    reproducirSonido("discrepancia");
+    vibrar("discrepancia");
+    // Repite el sonido/vibración cada 1.4s mientras la pantalla siga
+    // abierta — para que, si el volumen está bajo (no en 0), sea más
+    // difícil no notarlo. Se detiene en cuanto tocan cualquiera de los dos
+    // botones (ver arriba).
+    intervaloAlarmaDiscrepancia = setInterval(() => {
+      reproducirSonido("discrepancia");
+      vibrar("discrepancia");
+    }, 1400);
+  }
+
+  function detenerAlarmaDiscrepancia() {
+    if (intervaloAlarmaDiscrepancia) {
+      clearInterval(intervaloAlarmaDiscrepancia);
+      intervaloAlarmaDiscrepancia = null;
+    }
+  }
+
+  async function pedirWakeLock() {
+    try {
+      if ("wakeLock" in navigator) {
+        wakeLockCentinela = await navigator.wakeLock.request("screen");
+      }
+    } catch {
+      /* si no se puede (batería baja, navegador sin soporte, pestaña no
+         visible, etc.) no es crítico — se ignora */
+    }
+  }
+
+  function soltarWakeLock() {
+    if (wakeLockCentinela) {
+      wakeLockCentinela.release().catch(() => {});
+      wakeLockCentinela = null;
+    }
+  }
+
   function mostrarResultado({ modo, cajaCoincide, uuidCoincide, rfcCoincide, caja }) {
+    detenerAlarmaDiscrepancia();
     const todoBien = cajaCoincide && uuidCoincide && rfcCoincide;
     const tipo = todoBien ? "exito" : "discrepancia";
     overlayResultado.classList.remove("oculto", "exito", "discrepancia");
     overlayResultado.classList.add(tipo);
     overlayIcono.innerHTML = todoBien ? ICONO_EXITO : ICONO_ALERTA;
+    overlayRegistro.classList.remove("oculto");
+    botonOverlayContinuar.classList.remove("oculto");
+    botonOverlayVolver.classList.add("oculto");
+    botonOverlayConfirmarTodas.classList.add("oculto");
 
     if (modo === "validacion2") {
       overlayTitulo.textContent = todoBien ? "Segunda validación registrada" : "Segunda validación con discrepancia";
@@ -722,13 +822,13 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     uuidEsperadoActual = uuidEsperado || null;
     rfcEsperadoActual = rfcEsperado || null;
     advertenciaCajaAceptada = false;
+    pedirWakeLock(); // evita que la pantalla se apague sola mientras escanean — best-effort
     modalTitulo.textContent = modo === "correccion"
       ? "Corregir CFDI de origen"
       : (modo === "validacion2" ? "Segunda validación (Operaciones)" : "Escanear CFDI de origen");
     modalInfo.textContent = infoTexto || "";
     modalErrorDiv.textContent = "";
     confirmarErrorDiv.textContent = "";
-    avisoCaja.classList.add("oculto");
     inputManualUuid.value = "";
     inputManualRfc.value = "";
     // Solo se prellena en modo "correccion" (ahí sí mostramos el valor
@@ -748,6 +848,8 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
   function cerrarModal() {
     detenerCamara();
+    detenerAlarmaDiscrepancia();
+    soltarWakeLock();
     modal.classList.add("oculto");
     embarqueActual = null;
     datosLeidos = null;
