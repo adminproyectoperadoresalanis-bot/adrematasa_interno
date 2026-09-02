@@ -124,11 +124,15 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     datosUsuario.area === AREA_OPERACIONES && PUESTOS_VALIDADOR2.includes(datosUsuario.puesto)
   );
 
-  contenedor.innerHTML = `
+  // Cada quien ve solo el paso que le toca hacer (Atención al Cliente ve
+  // pendientes de origen, Operaciones ve pendientes de 2da validación);
+  // un admin ve las dos secciones. El historial, en cambio, es visible
+  // para todos por igual — así cualquiera ve el trabajo del resto del
+  // equipo, no solo el suyo (decisión de Ivan, 2026-09-02).
+  const seccionPendientesOrigen = !puedeValidar1 ? "" : `
     <section class="panel">
       <h2>Embarques pendientes de escanear en origen</h2>
       <p class="nota">Embarques de McCain sin CFDI escaneado todavía por Atención al Cliente. Esta lista se sincroniza con Alanis Operadores cada pocos minutos, así que un escaneo reciente puede tardar un momento en desaparecer de aquí.</p>
-      ${puedeValidar1 ? "" : `<p class="nota nota-alerta">Este paso lo hace Atención al Cliente — con tu área/puesto actual solo puedes ver la lista.</p>`}
       <div id="pendientes-origen-error" class="error"></div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-pendientes-origen">
@@ -139,11 +143,12 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         </table>
       </div>
     </section>
+  `;
 
+  const seccionPendientesValidacion2 = !puedeValidar2 ? "" : `
     <section class="panel" style="margin-top:20px;">
       <h2>Embarques pendientes de segunda validación (Operaciones)</h2>
       <p class="nota">Embarques que Atención al Cliente ya escaneó, esperando que Operaciones (Coordinador, Supervisor, Auxiliar o Despachador) los vuelva a escanear de forma independiente. Hasta que esto pase, el operador no puede ver el embarque en Alanis Operadores.</p>
-      ${puedeValidar2 ? "" : `<p class="nota nota-alerta">Este paso lo hace Operaciones MEX (Coordinador/Supervisor/Auxiliar/Despachador) — con tu área/puesto actual solo puedes ver la lista.</p>`}
       <div id="pendientes-validacion2-error" class="error"></div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-pendientes-validacion2">
@@ -154,6 +159,18 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         </table>
       </div>
     </section>
+  `;
+
+  const avisoSinPasoAsignado = (puedeValidar1 || puedeValidar2) ? "" : `
+    <section class="panel">
+      <p class="nota">Con tu área/puesto actual no tienes ningún paso de escaneo asignado en este módulo — puedes ver el historial abajo.</p>
+    </section>
+  `;
+
+  contenedor.innerHTML = `
+    ${seccionPendientesOrigen}
+    ${seccionPendientesValidacion2}
+    ${avisoSinPasoAsignado}
 
     <section class="panel" style="margin-top:20px;">
       <h2>Historial de escaneos</h2>
@@ -256,7 +273,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     listaPendientes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderPendientes();
   }, (err) => {
-    errorPendientesDiv.textContent = "No se pudieron cargar los embarques pendientes: " + err.message;
+    if (errorPendientesDiv) errorPendientesDiv.textContent = "No se pudieron cargar los embarques pendientes: " + err.message;
   });
 
   onSnapshot(collection(db, "verificaciones_cfdi_local"), (snap) => {
@@ -274,6 +291,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   });
 
   function renderPendientes() {
+    if (!tbodyPendientes) return; // esta sección no se dibujó para este usuario
     if (listaPendientes.length === 0) {
       tbodyPendientes.innerHTML = `<tr><td colspan="6">No hay embarques pendientes.</td></tr>`;
       return;
@@ -312,6 +330,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   }
 
   function renderPendientesValidacion2() {
+    if (!tbodyValidacion2) return; // esta sección no se dibujó para este usuario
     const pendientes = listaHistorial.filter(f => f.origenEscaneo && !f.validacion2);
     if (pendientes.length === 0) {
       tbodyValidacion2.innerHTML = `<tr><td colspan="5">No hay embarques esperando segunda validación.</td></tr>`;
