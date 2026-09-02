@@ -135,7 +135,9 @@ function vibrar(tipo) {
 }
 
 const ICONO_EXITO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12.5l2.5 2.5L16 9"/></svg>`;
-const ICONO_ALERTA = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L14.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 17h.01"/></svg>`;
+// Triángulo simétrico a mano (centrado en x=12) — el ícono anterior venía
+// de una librería y se veía un poco chueco/descentrado en pantalla.
+const ICONO_ALERTA = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3L22.5 20.5H1.5L12 3Z"/><path d="M12 9.5v5"/><path d="M12 18h.01"/></svg>`;
 
 // contenedor: elemento donde dibujar. datosUsuario: doc de usuarios/{uid}
 // (se usa .nombre, .rol, .area y .puesto). uid: el auth.uid de quien tiene
@@ -302,8 +304,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <p id="resultado-escaneo-registro" class="resultado-escaneo-registro"></p>
         <div class="resultado-escaneo-botonera">
           <button type="button" id="resultado-escaneo-continuar">Continuar</button>
-          <button type="button" id="resultado-escaneo-volver" class="secundario oculto">Volver a escanear</button>
-          <button type="button" id="resultado-escaneo-confirmar-todas" class="oculto">Confirmar de todas formas</button>
+          <button type="button" id="resultado-escaneo-volver" class="oculto">Volver a escanear</button>
         </div>
       </div>
     </div>
@@ -537,7 +538,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const overlayRegistro = contenedor.querySelector("#resultado-escaneo-registro");
   const botonOverlayContinuar = contenedor.querySelector("#resultado-escaneo-continuar");
   const botonOverlayVolver = contenedor.querySelector("#resultado-escaneo-volver");
-  const botonOverlayConfirmarTodas = contenedor.querySelector("#resultado-escaneo-confirmar-todas");
 
   botonOverlayContinuar.addEventListener("click", () => {
     detenerAlarmaDiscrepancia();
@@ -546,13 +546,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   botonOverlayVolver.addEventListener("click", () => {
     detenerAlarmaDiscrepancia();
     overlayResultado.classList.add("oculto");
-    advertenciaCajaAceptada = false;
     volverAEscanear();
-  });
-  botonOverlayConfirmarTodas.addEventListener("click", () => {
-    detenerAlarmaDiscrepancia();
-    overlayResultado.classList.add("oculto");
-    guardarEscaneo();
   });
 
   let embarqueActual = null;
@@ -562,7 +556,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   let cajaEsperadaActual = null;
   let uuidEsperadoActual = null;
   let rfcEsperadoActual = null;
-  let advertenciaCajaAceptada = false;
   let intervaloAlarmaDiscrepancia = null;
   let wakeLockCentinela = null;
 
@@ -582,15 +575,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   contenedor.querySelector("#modal-volver-escanear").addEventListener("click", volverAEscanear);
   botonGuardar.addEventListener("click", guardarEscaneo);
   contenedor.querySelector("#modal-escaneo-cancelar").addEventListener("click", cerrarModal);
-
-  // En cuanto se toca la caja, cualquier advertencia ya mostrada queda
-  // obsoleta — hay que re-evaluar en el siguiente click.
-  inputConfirmarCaja.addEventListener("input", () => {
-    if (advertenciaCajaAceptada) {
-      advertenciaCajaAceptada = false;
-      botonGuardar.textContent = "Confirmar y registrar";
-    }
-  });
 
   function volverAEscanear() {
     seccionConfirmar.classList.add("oculto");
@@ -651,8 +635,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     detenerCamara();
     inputConfirmarUuid.value = datos.uuid;
     inputConfirmarRfc.value = datos.rfc;
-    advertenciaCajaAceptada = false;
-    botonGuardar.textContent = "Confirmar y registrar";
     confirmarErrorDiv.textContent = "";
     seccionCaptura.classList.add("oculto");
     seccionConfirmar.classList.remove("oculto");
@@ -683,12 +665,14 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
     const hayDiscrepancia = (hayCajaEsperada && !cajaCoincide) || !uuidCoincide || !rfcCoincide;
 
-    if (hayDiscrepancia && !advertenciaCajaAceptada) {
-      advertenciaCajaAceptada = true;
+    // Bloqueo real (decisión de Ivan, 2026-09-02): si hay discrepancia, NO
+    // se guarda — no existe "confirmar de todas formas". Hay que corregir
+    // el escaneo o avisar a un supervisor antes de poder continuar.
+    if (hayDiscrepancia) {
       const partes = [];
-      if (!uuidCoincide) partes.push("el UUID del CFDI no coincide con el registrado por Atención al Cliente");
-      if (!rfcCoincide) partes.push("el RFC receptor no coincide con el registrado por Atención al Cliente");
-      if (hayCajaEsperada && !cajaCoincide) partes.push(`la caja "${cajaCapturada}" no coincide con la registrada ("${cajaEsperadaActual}")`);
+      if (hayCajaEsperada && !cajaCoincide) partes.push("El remolque capturado no coincide con el asignado para la factura. Revise si capturó un número de caja incorrecto e informe a un supervisor.");
+      if (!uuidCoincide) partes.push("El UUID del CFDI escaneado no coincide con el que registró Atención al Cliente. Revise que sea la factura correcta e informe a un supervisor.");
+      if (!rfcCoincide) partes.push("El RFC receptor del CFDI escaneado no coincide con el que registró Atención al Cliente. Revise que sea la factura correcta e informe a un supervisor.");
       mostrarAdvertenciaDiscrepancia(partes);
       return;
     }
@@ -714,9 +698,10 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   // Advertencia de discrepancia ANTES de guardar — usa la MISMA pantalla
   // completa (roja, con ícono, sonido y vibración) que el resultado final,
   // no un simple textito adentro del modal, para que sea igual de evidente
-  // (o más) que la pantalla verde de éxito. No bloquea: solo exige un toque
-  // consciente en "Confirmar de todas formas" para seguir (o "Volver a
-  // escanear" para corregir). Nada se guarda todavía en este punto.
+  // (o más) que la pantalla verde de éxito. Bloquea de verdad (decisión de
+  // Ivan, 2026-09-02): no existe "confirmar de todas formas" — si hay
+  // discrepancia, no se guarda nada; solo queda "Volver a escanear" para
+  // corregir o para ir a avisarle a un supervisor.
   //
   // Límite real de plataforma (no es un bug de este código): ningún sitio
   // web puede saltarse el switch de silencio físico de iPhone ni forzar
@@ -731,14 +716,13 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     overlayResultado.classList.add("discrepancia");
     overlayIcono.innerHTML = ICONO_ALERTA;
     overlayTitulo.textContent = "¡Alto! No coincide";
-    overlayDetalle.textContent = "Antes de guardar, revisa que sea el documento correcto:";
-    overlayDetalle2.classList.remove("oculto");
-    overlayDetalle2.textContent = partes.join(" · ");
+    overlayDetalle.textContent = partes[0] || "";
+    overlayDetalle2.classList.toggle("oculto", partes.length < 2);
+    overlayDetalle2.textContent = partes.slice(1).join(" ");
     overlayRegistro.classList.add("oculto");
     overlayRegistro.textContent = "";
     botonOverlayContinuar.classList.add("oculto");
     botonOverlayVolver.classList.remove("oculto");
-    botonOverlayConfirmarTodas.classList.remove("oculto");
 
     detenerAlarmaDiscrepancia();
     reproducirSonido("discrepancia");
@@ -788,7 +772,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     overlayRegistro.classList.remove("oculto");
     botonOverlayContinuar.classList.remove("oculto");
     botonOverlayVolver.classList.add("oculto");
-    botonOverlayConfirmarTodas.classList.add("oculto");
 
     if (modo === "validacion2") {
       overlayTitulo.textContent = todoBien ? "Segunda validación registrada" : "Segunda validación con discrepancia";
@@ -821,7 +804,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     cajaEsperadaActual = cajaEsperada || null;
     uuidEsperadoActual = uuidEsperado || null;
     rfcEsperadoActual = rfcEsperado || null;
-    advertenciaCajaAceptada = false;
     pedirWakeLock(); // evita que la pantalla se apague sola mientras escanean — best-effort
     modalTitulo.textContent = modo === "correccion"
       ? "Corregir CFDI de origen"
