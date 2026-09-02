@@ -187,6 +187,21 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   `;
 
   contenedor.innerHTML = `
+    <style>
+      .aviso-discrepancia {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        background: #a32424;
+        color: #fff;
+        padding: 14px 16px;
+        border-radius: 8px;
+        margin: 10px 0;
+        font-weight: 600;
+        font-size: 0.95rem;
+      }
+      .aviso-discrepancia svg { width: 28px; height: 28px; flex: none; }
+    </style>
     ${seccionPendientesOrigen}
     ${seccionPendientesValidacion2}
     ${seccionPendientesValidacion3}
@@ -253,7 +268,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
               <input type="text" id="modal-confirmar-caja" placeholder="Número de caja o remolque" required>
             </label>
           </div>
-          <p id="modal-confirmar-aviso-caja" class="nota nota-alerta oculto"></p>
+          <div id="modal-confirmar-aviso-caja" class="aviso-discrepancia oculto"></div>
           <div id="modal-confirmar-error" class="error"></div>
           <div class="modal-acciones">
             <button type="button" class="secundario" id="modal-volver-escanear">Volver a escanear</button>
@@ -640,9 +655,11 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       const partes = [];
       if (!uuidCoincide) partes.push("el UUID del CFDI no coincide con el registrado por Atención al Cliente");
       if (!rfcCoincide) partes.push("el RFC receptor no coincide con el registrado por Atención al Cliente");
-      if (hayCajaEsperada && !cajaCoincide) partes.push(`la caja "${cajaCapturada}" no coincide con la registrada ("${cajaEsperadaActual}")`);
-      avisoCaja.textContent = `Ojo: ${partes.join("; ")}. Revisa que sea el documento correcto. Si estás seguro de que es correcto, toca "Confirmar de todas formas" para continuar (queda marcado para revisión).`;
+      if (hayCajaEsperada && !cajaCoincide) partes.push(`la caja "${escapeHtml(cajaCapturada)}" no coincide con la registrada ("${escapeHtml(cajaEsperadaActual)}")`);
+      avisoCaja.innerHTML = `${ICONO_ALERTA}<span>Ojo: ${partes.join("; ")}. Revisa que sea el documento correcto. Si estás seguro de que es correcto, toca "Confirmar de todas formas" para continuar (queda marcado para revisión).</span>`;
       avisoCaja.classList.remove("oculto");
+      reproducirSonido("discrepancia");
+      vibrar("discrepancia");
       advertenciaCajaAceptada = true;
       botonGuardar.textContent = "Confirmar de todas formas";
       return;
@@ -714,7 +731,12 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     avisoCaja.classList.add("oculto");
     inputManualUuid.value = "";
     inputManualRfc.value = "";
-    inputConfirmarCaja.value = cajaPrevia || "";
+    // Solo se prellena en modo "correccion" (ahí sí mostramos el valor
+    // anterior para poder corregirlo). En "origen" y "validacion2" la caja
+    // SIEMPRE debe capturarse a mano — si llega ya escrita, deja de servir
+    // como punto de comparación independiente (así fue como se detectó:
+    // Daniel la vio precargada al hacer la 2da validación).
+    inputConfirmarCaja.value = (modo === "correccion") ? (cajaPrevia || "") : "";
     seccionConfirmar.classList.add("oculto");
     seccionCaptura.classList.remove("oculto");
     botonesModo.forEach(b => b.classList.toggle("activo", b.dataset.modo === "camara"));
