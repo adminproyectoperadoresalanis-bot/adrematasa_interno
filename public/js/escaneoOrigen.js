@@ -3,17 +3,42 @@ import {
   collection, doc, setDoc, getDoc, onSnapshot, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
+// ----------------------------------------------------------------------
+// Cadena de 3 validaciones (decidida por Ivan, 2026-09-02):
+//   1) Atención al Cliente escanea el CFDI real (origenEscaneo).
+//   2) Alguien de Operaciones MEX (Coordinador/Supervisor/Auxiliar/
+//      Despachador) vuelve a escanear el MISMO CFDI de forma
+//      independiente y lo compara contra lo que registró Atención al
+//      Cliente (validacion2).
+//   3) Solo hasta que las dos existen, el Apps Script sincroniza
+//      uuidEsperado/receptorRFCEsperado hacia alanis-operadores — el
+//      operador (checkpoints de recepción/pre-entrega) no encuentra nada
+//      contra qué comparar hasta que las dos validaciones ya pasaron.
+//
+// Área/puesto son los mismos valores EXACTOS que usan Organigrama y
+// Catálogo de empleados (usuarios/{uid}.area, usuarios/{uid}.puesto) —
+// no el "rol" de permisos del sistema. Un admin siempre puede hacer
+// cualquiera de las dos validaciones, como respaldo.
+// ----------------------------------------------------------------------
+const AREA_ATENCION_CLIENTE = "Atención al cliente";
+const AREA_OPERACIONES = "Operaciones MEX";
+const PUESTOS_VALIDADOR2 = ["Coordinador", "Supervisor", "Auxiliar", "Despachador"];
+
 // Solo admin/supervisor pueden corregir un escaneo de origen ya registrado
 // (así lo exige también firestore.rules — esto solo evita mostrar un botón
-// que igual sería rechazado).
+// que igual sería rechazado). La corrección de la validación 2 todavía no
+// existe (no se pidió) — si algo sale mal ahí, hay que corregirlo a mano
+// en la consola de Firebase por ahora.
 const ROLES_QUE_CORRIGEN = ["admin", "supervisor"];
 
 const ETIQUETAS_SYNC = {
+  esperando_validacion2: "Esperando 2da validación",
   pendiente: "Sincronizando…",
   sincronizado: "Sincronizado",
   error: "Error de sync"
 };
 const CLASES_SYNC = {
+  esperando_validacion2: "badge-pendiente",
   pendiente: "badge-pendiente",
   sincronizado: "badge-aprobada",
   error: "badge-rechazada"
@@ -89,14 +114,21 @@ const ICONO_EXITO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" 
 const ICONO_ALERTA = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L14.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 17h.01"/></svg>`;
 
 // contenedor: elemento donde dibujar. datosUsuario: doc de usuarios/{uid}
-// (se usa .nombre y .rol). uid: el auth.uid de quien tiene la sesión abierta.
+// (se usa .nombre, .rol, .area y .puesto). uid: el auth.uid de quien tiene
+// la sesión abierta.
 export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
+  const esAdmin = datosUsuario.rol === "admin";
   const puedeCorregir = ROLES_QUE_CORRIGEN.includes(datosUsuario.rol);
+  const puedeValidar1 = esAdmin || datosUsuario.area === AREA_ATENCION_CLIENTE;
+  const puedeValidar2 = esAdmin || (
+    datosUsuario.area === AREA_OPERACIONES && PUESTOS_VALIDADOR2.includes(datosUsuario.puesto)
+  );
 
   contenedor.innerHTML = `
     <section class="panel">
       <h2>Embarques pendientes de escanear en origen</h2>
-      <p class="nota">Embarques de McCain sin CFDI escaneado todavía. Esta lista se sincroniza con Alanis Operadores cada pocos minutos, así que un escaneo reciente puede tardar un momento en desaparecer de aquí.</p>
+      <p class="nota">Embarques de McCain sin CFDI escaneado todavía por Atención al Cliente. Esta lista se sincroniza con Alanis Operadores cada pocos minutos, así que un escaneo reciente puede tardar un momento en desaparecer de aquí.</p>
+      ${puedeValidar1 ? "" : `<p class="nota nota-alerta">Este paso lo hace Atención al Cliente — con tu área/puesto actual solo puedes ver la lista.</p>`}
       <div id="pendientes-origen-error" class="error"></div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-pendientes-origen">
@@ -109,16 +141,31 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     </section>
 
     <section class="panel" style="margin-top:20px;">
-      <h2>Historial de escaneos de origen</h2>
+      <h2>Embarques pendientes de segunda validación (Operaciones)</h2>
+      <p class="nota">Embarques que Atención al Cliente ya escaneó, esperando que Operaciones (Coordinador, Supervisor, Auxiliar o Despachador) los vuelva a escanear de forma independiente. Hasta que esto pase, el operador no puede ver el embarque en Alanis Operadores.</p>
+      ${puedeValidar2 ? "" : `<p class="nota nota-alerta">Este paso lo hace Operaciones MEX (Coordinador/Supervisor/Auxiliar/Despachador) — con tu área/puesto actual solo puedes ver la lista.</p>`}
+      <div id="pendientes-validacion2-error" class="error"></div>
+      <div class="tabla-wrap">
+        <table class="tabla" id="tabla-pendientes-validacion2">
+          <thead>
+            <tr><th>Embarque</th><th>Cliente</th><th>Caja</th><th>Escaneado por</th><th>Acción</th></tr>
+          </thead>
+          <tbody id="tbody-pendientes-validacion2"><tr><td colspan="5">Cargando...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-top:20px;">
+      <h2>Historial de escaneos</h2>
       <div id="historial-origen-error" class="error"></div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-historial-origen">
           <thead>
             <tr>
-              <th>Embarque</th><th>UUID CFDI</th><th>RFC receptor</th><th>Caja</th><th>Escaneó</th><th>Sincronización</th>${puedeCorregir ? "<th>Acción</th>" : ""}
+              <th>Embarque</th><th>UUID CFDI</th><th>RFC receptor</th><th>Caja origen</th><th>Atención al Cliente</th><th>2da validación (Operaciones)</th><th>Sincronización</th>${puedeCorregir ? "<th>Acción</th>" : ""}
             </tr>
           </thead>
-          <tbody id="tbody-historial-origen"><tr><td colspan="${puedeCorregir ? 7 : 6}">Cargando...</td></tr></tbody>
+          <tbody id="tbody-historial-origen"><tr><td colspan="${puedeCorregir ? 8 : 7}">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -188,6 +235,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <div id="resultado-escaneo-icono"></div>
         <h2 id="resultado-escaneo-titulo"></h2>
         <p id="resultado-escaneo-detalle"></p>
+        <p id="resultado-escaneo-detalle2" class="oculto"></p>
         <p id="resultado-escaneo-registro" class="resultado-escaneo-registro"></p>
         <button type="button" id="resultado-escaneo-continuar">Continuar</button>
       </div>
@@ -198,8 +246,10 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   let listaHistorial = [];
 
   const errorPendientesDiv = contenedor.querySelector("#pendientes-origen-error");
+  const errorValidacion2Div = contenedor.querySelector("#pendientes-validacion2-error");
   const errorHistorialDiv = contenedor.querySelector("#historial-origen-error");
   const tbodyPendientes = contenedor.querySelector("#tbody-pendientes-origen");
+  const tbodyValidacion2 = contenedor.querySelector("#tbody-pendientes-validacion2");
   const tbodyHistorial = contenedor.querySelector("#tbody-historial-origen");
 
   onSnapshot(collection(db, "embarques_pendientes_origen"), (snap) => {
@@ -218,13 +268,14 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     });
     renderHistorial();
     renderPendientes();
+    renderPendientesValidacion2();
   }, (err) => {
     errorHistorialDiv.textContent = "No se pudo cargar el historial: " + err.message;
   });
 
   function renderPendientes() {
     if (listaPendientes.length === 0) {
-      tbodyPendientes.innerHTML = `<tr><td colspan="6">No hay embarques pendientes de escanear.</td></tr>`;
+      tbodyPendientes.innerHTML = `<tr><td colspan="6">No hay embarques pendientes.</td></tr>`;
       return;
     }
     const idsEscaneados = new Set(listaHistorial.map(f => f.id));
@@ -237,8 +288,10 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <td>${escapeHtml(p.fechaEntrega || "—")}</td>
         <td class="acciones">
           ${idsEscaneados.has(p.id)
-            ? `<span class="nota" style="margin:0;">Ya escaneado, sincronizando…</span>`
-            : `<button type="button" class="btn-escanear-origen">Escanear</button>`}
+            ? `<span class="nota" style="margin:0;">Ya escaneado</span>`
+            : (puedeValidar1
+                ? `<button type="button" class="btn-escanear-origen">Escanear</button>`
+                : `<span class="nota" style="margin:0;">Requiere Atención al Cliente</span>`)}
         </td>
       </tr>
     `).join("");
@@ -249,7 +302,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         const p = listaPendientes.find(x => x.id === id);
         abrirModalEscaneo({
           embarqueId: id,
-          modoCorreccion: false,
+          modo: "origen",
           infoTexto: `Embarque ${(p && p.shipment) || id} — ${(p && p.clienteNombre) || "McCain"}`,
           cajaEsperada: p ? p.caja : null,
           cajaPrevia: ""
@@ -258,25 +311,80 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     });
   }
 
+  function renderPendientesValidacion2() {
+    const pendientes = listaHistorial.filter(f => f.origenEscaneo && !f.validacion2);
+    if (pendientes.length === 0) {
+      tbodyValidacion2.innerHTML = `<tr><td colspan="5">No hay embarques esperando segunda validación.</td></tr>`;
+      return;
+    }
+    tbodyValidacion2.innerHTML = pendientes.map(f => `
+      <tr data-id="${f.id}">
+        <td>${escapeHtml(f.embarqueId || f.id)}</td>
+        <td>${escapeHtml(f.clienteNombre || "McCain")}</td>
+        <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—")}</td>
+        <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.escaneadoPor && f.origenEscaneo.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.origenEscaneo && f.origenEscaneo.timestamp)}</td>
+        <td class="acciones">
+          ${puedeValidar2
+            ? `<button type="button" class="btn-validar2">Validar</button>`
+            : `<span class="nota" style="margin:0;">Requiere Operaciones</span>`}
+        </td>
+      </tr>
+    `).join("");
+
+    tbodyValidacion2.querySelectorAll(".btn-validar2").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.closest("tr").dataset.id;
+        const f = listaHistorial.find(x => x.id === id);
+        abrirModalEscaneo({
+          embarqueId: id,
+          modo: "validacion2",
+          infoTexto: `Segunda validación — embarque ${(f && f.embarqueId) || id} — ${(f && f.clienteNombre) || "McCain"}. Escanea el MISMO CFDI que ya validó Atención al Cliente.`,
+          cajaEsperada: f ? f.cajaEsperada : null,
+          cajaPrevia: (f && f.origenEscaneo && f.origenEscaneo.caja) || "",
+          uuidEsperado: f ? f.uuidEsperado : null,
+          rfcEsperado: f ? f.receptorRFCEsperado : null
+        });
+      });
+    });
+  }
+
+  function badgeSiNo(valor, etiquetaSi, etiquetaNo) {
+    if (typeof valor !== "boolean") return "";
+    return `<span class="badge ${valor ? "badge-aprobada" : "badge-rechazada"}" style="margin-left:6px;">${valor ? etiquetaSi : etiquetaNo}</span>`;
+  }
+
   function renderHistorial() {
     if (listaHistorial.length === 0) {
-      tbodyHistorial.innerHTML = `<tr><td colspan="${puedeCorregir ? 7 : 6}">Todavía no hay escaneos de origen.</td></tr>`;
+      tbodyHistorial.innerHTML = `<tr><td colspan="${puedeCorregir ? 8 : 7}">Todavía no hay escaneos de origen.</td></tr>`;
       return;
     }
     tbodyHistorial.innerHTML = listaHistorial.map(f => {
       const cajaTexto = escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—");
-      const cajaBadge = typeof (f.origenEscaneo && f.origenEscaneo.cajaCoincide) === "boolean"
-        ? `<span class="badge ${f.origenEscaneo.cajaCoincide ? "badge-aprobada" : "badge-rechazada"}" style="margin-left:6px;">${f.origenEscaneo.cajaCoincide ? "OK" : "No coincide"}</span>`
-        : "";
+      const cajaBadge = badgeSiNo(f.origenEscaneo && f.origenEscaneo.cajaCoincide, "OK", "No coincide");
+
+      const celdaAtencion = `${escapeHtml((f.origenEscaneo && f.origenEscaneo.escaneadoPor && f.origenEscaneo.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.origenEscaneo && f.origenEscaneo.timestamp)}`;
+
+      let celdaValidacion2 = `<span class="nota" style="margin:0;">Pendiente</span>`;
+      if (f.validacion2) {
+        const v2 = f.validacion2;
+        celdaValidacion2 = `
+          ${escapeHtml((v2.escaneadoPor && v2.escaneadoPor.nombre) || "—")} · ${formatoFecha(v2.timestamp)}
+          ${badgeSiNo(v2.uuidCoincide, "UUID OK", "UUID no coincide")}
+          ${badgeSiNo(v2.rfcCoincide, "RFC OK", "RFC no coincide")}
+          ${badgeSiNo(v2.cajaCoincide, "Caja OK", "Caja no coincide")}
+        `;
+      }
+
       return `
       <tr data-id="${f.id}">
         <td>${escapeHtml(f.embarqueId || f.id)}</td>
         <td style="word-break:break-all;">${escapeHtml(f.uuidEsperado || "—")}</td>
         <td>${escapeHtml(f.receptorRFCEsperado || "—")}</td>
         <td>${cajaTexto}${cajaBadge}</td>
-        <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.escaneadoPor && f.origenEscaneo.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.origenEscaneo && f.origenEscaneo.timestamp)}</td>
+        <td>${celdaAtencion}</td>
+        <td>${celdaValidacion2}</td>
         <td><span class="badge ${CLASES_SYNC[f.estadoSync] || "badge-pendiente"}">${ETIQUETAS_SYNC[f.estadoSync] || f.estadoSync}</span></td>
-        ${puedeCorregir ? `<td class="acciones"><button type="button" class="secundario btn-corregir-origen">Corregir</button></td>` : ""}
+        ${puedeCorregir ? `<td class="acciones"><button type="button" class="secundario btn-corregir-origen">Corregir origen</button></td>` : ""}
       </tr>
     `;
     }).join("");
@@ -288,7 +396,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
           const f = listaHistorial.find(x => x.id === id);
           abrirModalEscaneo({
             embarqueId: id,
-            modoCorreccion: true,
+            modo: "correccion",
             infoTexto: `Corrigiendo embarque ${(f && f.embarqueId) || id} — valor actual: ${(f && f.uuidEsperado) || "—"} / ${(f && f.receptorRFCEsperado) || "—"}`,
             cajaEsperada: f ? f.cajaEsperada : null,
             cajaPrevia: (f && f.origenEscaneo && f.origenEscaneo.caja) || ""
@@ -298,7 +406,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     }
   }
 
-  // ---- Modal de escaneo (compartido entre "Escanear" y "Corregir") ----
+  // ---- Modal de escaneo (compartido entre origen / corrección / validación 2) ----
 
   const modal = contenedor.querySelector("#modal-escaneo-origen");
   const modalTitulo = contenedor.querySelector("#modal-escaneo-titulo");
@@ -323,16 +431,19 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const overlayIcono = contenedor.querySelector("#resultado-escaneo-icono");
   const overlayTitulo = contenedor.querySelector("#resultado-escaneo-titulo");
   const overlayDetalle = contenedor.querySelector("#resultado-escaneo-detalle");
+  const overlayDetalle2 = contenedor.querySelector("#resultado-escaneo-detalle2");
   const overlayRegistro = contenedor.querySelector("#resultado-escaneo-registro");
   contenedor.querySelector("#resultado-escaneo-continuar").addEventListener("click", () => {
     overlayResultado.classList.add("oculto");
   });
 
   let embarqueActual = null;
-  let modoCorreccionActual = false;
+  let modoActual = "origen"; // "origen" | "correccion" | "validacion2"
   let datosLeidos = null;
   let lectorQR = null;
   let cajaEsperadaActual = null;
+  let uuidEsperadoActual = null;
+  let rfcEsperadoActual = null;
   let advertenciaCajaAceptada = false;
 
   botonesModo.forEach(btn => {
@@ -358,8 +469,8 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   botonGuardar.addEventListener("click", guardarEscaneo);
   contenedor.querySelector("#modal-escaneo-cancelar").addEventListener("click", cerrarModal);
 
-  // En cuanto se toca la caja, cualquier advertencia de "no coincide" ya
-  // mostrada queda obsoleta — hay que re-evaluar en el siguiente click.
+  // En cuanto se toca la caja, cualquier advertencia ya mostrada queda
+  // obsoleta — hay que re-evaluar en el siguiente click.
   inputConfirmarCaja.addEventListener("input", () => {
     if (advertenciaCajaAceptada) {
       advertenciaCajaAceptada = false;
@@ -441,10 +552,23 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     const hayCajaEsperada = !!(cajaEsperadaActual && cajaEsperadaActual.trim());
     const cajaCoincide = hayCajaEsperada
       ? normalizarCaja(cajaCapturada) === normalizarCaja(cajaEsperadaActual)
-      : true; // si no hay caja registrada de origen (correo), no hay contra qué comparar — se guarda sin marcar discrepancia.
+      : true; // si no hay caja de referencia (correo), no hay contra qué comparar.
 
-    if (hayCajaEsperada && !cajaCoincide && !advertenciaCajaAceptada) {
-      avisoCaja.textContent = `La caja "${cajaCapturada}" no coincide con la registrada ("${cajaEsperadaActual}"). Revisa que sea la caja correcta. Si estás seguro de que es correcta, toca "Confirmar de todas formas" para continuar.`;
+    let uuidCoincide = true;
+    let rfcCoincide = true;
+    if (modoActual === "validacion2") {
+      uuidCoincide = datosLeidos.uuid === uuidEsperadoActual;
+      rfcCoincide = datosLeidos.rfc === rfcEsperadoActual;
+    }
+
+    const hayDiscrepancia = (hayCajaEsperada && !cajaCoincide) || !uuidCoincide || !rfcCoincide;
+
+    if (hayDiscrepancia && !advertenciaCajaAceptada) {
+      const partes = [];
+      if (!uuidCoincide) partes.push("el UUID del CFDI no coincide con el registrado por Atención al Cliente");
+      if (!rfcCoincide) partes.push("el RFC receptor no coincide con el registrado por Atención al Cliente");
+      if (hayCajaEsperada && !cajaCoincide) partes.push(`la caja "${cajaCapturada}" no coincide con la registrada ("${cajaEsperadaActual}")`);
+      avisoCaja.textContent = `Ojo: ${partes.join("; ")}. Revisa que sea el documento correcto. Si estás seguro de que es correcto, toca "Confirmar de todas formas" para continuar (queda marcado para revisión).`;
       avisoCaja.classList.remove("oculto");
       advertenciaCajaAceptada = true;
       botonGuardar.textContent = "Confirmar de todas formas";
@@ -453,13 +577,15 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
     botonGuardar.disabled = true;
     try {
-      if (modoCorreccionActual) {
+      if (modoActual === "correccion") {
         await corregirEscaneo(embarqueActual, { ...datosLeidos, caja: cajaCapturada, cajaCoincide });
+      } else if (modoActual === "validacion2") {
+        await registrarValidacion2(embarqueActual, { ...datosLeidos, caja: cajaCapturada, cajaCoincide, uuidCoincide, rfcCoincide });
       } else {
         await registrarEscaneo(embarqueActual, { ...datosLeidos, caja: cajaCapturada, cajaCoincide, cajaEsperada: cajaEsperadaActual || null });
       }
       cerrarModal();
-      mostrarResultado({ cajaCoincide, caja: cajaCapturada });
+      mostrarResultado({ modo: modoActual, cajaCoincide, uuidCoincide, rfcCoincide, caja: cajaCapturada });
     } catch (err) {
       confirmarErrorDiv.textContent = "No se pudo registrar: " + err.message;
     } finally {
@@ -467,27 +593,48 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     }
   }
 
-  function mostrarResultado({ cajaCoincide, caja }) {
-    const tipo = cajaCoincide ? "exito" : "discrepancia";
+  function mostrarResultado({ modo, cajaCoincide, uuidCoincide, rfcCoincide, caja }) {
+    const todoBien = cajaCoincide && uuidCoincide && rfcCoincide;
+    const tipo = todoBien ? "exito" : "discrepancia";
     overlayResultado.classList.remove("oculto", "exito", "discrepancia");
     overlayResultado.classList.add(tipo);
-    overlayIcono.innerHTML = cajaCoincide ? ICONO_EXITO : ICONO_ALERTA;
-    overlayTitulo.textContent = cajaCoincide ? "Escaneo registrado" : "Escaneo registrado con discrepancia";
-    overlayDetalle.textContent = cajaCoincide
-      ? `Caja/remolque ${caja} coincide con lo registrado.`
-      : `Caja/remolque ${caja} NO coincide con lo registrado — queda marcado para revisión.`;
+    overlayIcono.innerHTML = todoBien ? ICONO_EXITO : ICONO_ALERTA;
+
+    if (modo === "validacion2") {
+      overlayTitulo.textContent = todoBien ? "Segunda validación registrada" : "Segunda validación con discrepancia";
+      overlayDetalle.textContent = todoBien
+        ? "El CFDI y la caja coinciden con lo registrado por Atención al Cliente."
+        : "Hay diferencias contra lo registrado por Atención al Cliente — revisa el historial.";
+      overlayDetalle2.classList.remove("oculto");
+      overlayDetalle2.textContent = [
+        !uuidCoincide ? "UUID no coincide" : null,
+        !rfcCoincide ? "RFC no coincide" : null,
+        !cajaCoincide ? `Caja "${caja}" no coincide` : null
+      ].filter(Boolean).join(" · ") || "";
+    } else {
+      overlayTitulo.textContent = todoBien ? "Escaneo registrado" : "Escaneo registrado con discrepancia";
+      overlayDetalle.textContent = todoBien
+        ? `Caja/remolque ${caja} coincide con lo registrado.`
+        : `Caja/remolque ${caja} NO coincide con lo registrado — queda marcado para revisión.`;
+      overlayDetalle2.classList.add("oculto");
+    }
+
     overlayRegistro.textContent = `Registrado por ${datosUsuario.nombre || "—"} · ${new Date().toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" })}`;
     reproducirSonido(tipo);
     vibrar(tipo);
   }
 
-  function abrirModalEscaneo({ embarqueId, modoCorreccion, infoTexto, cajaEsperada, cajaPrevia }) {
+  function abrirModalEscaneo({ embarqueId, modo, infoTexto, cajaEsperada, cajaPrevia, uuidEsperado, rfcEsperado }) {
     embarqueActual = embarqueId;
-    modoCorreccionActual = modoCorreccion;
+    modoActual = modo;
     datosLeidos = null;
     cajaEsperadaActual = cajaEsperada || null;
+    uuidEsperadoActual = uuidEsperado || null;
+    rfcEsperadoActual = rfcEsperado || null;
     advertenciaCajaAceptada = false;
-    modalTitulo.textContent = modoCorreccion ? "Corregir CFDI de origen" : "Escanear CFDI de origen";
+    modalTitulo.textContent = modo === "correccion"
+      ? "Corregir CFDI de origen"
+      : (modo === "validacion2" ? "Segunda validación (Operaciones)" : "Escanear CFDI de origen");
     modalInfo.textContent = infoTexto || "";
     modalErrorDiv.textContent = "";
     confirmarErrorDiv.textContent = "";
@@ -516,7 +663,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       embarqueId,
       uuidEsperado: uuid,
       receptorRFCEsperado: rfc,
-      estadoSync: "pendiente",
+      estadoSync: "esperando_validacion2",
       cajaEsperada: cajaEsperada || null,
       origenEscaneo: {
         caja: caja || null,
@@ -536,7 +683,9 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       ...datosPrevios,
       uuidEsperado: uuid,
       receptorRFCEsperado: rfc,
-      estadoSync: "pendiente",
+      // Si la 2da validación ya existía, hay que re-sincronizar todo con el
+      // valor corregido; si no, sigue esperando esa 2da validación primero.
+      estadoSync: datosPrevios.validacion2 ? "pendiente" : "esperando_validacion2",
       origenEscaneo: {
         ...datosPrevios.origenEscaneo,
         caja: caja || null,
@@ -549,6 +698,26 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
             rfcReceptor: datosPrevios.receptorRFCEsperado
           }
         }
+      }
+    });
+  }
+
+  async function registrarValidacion2(embarqueId, { uuid, rfc, caja, cajaCoincide, uuidCoincide, rfcCoincide }) {
+    const snap = await getDoc(doc(db, "verificaciones_cfdi_local", embarqueId));
+    if (!snap.exists()) throw new Error("No se encontró el embarque.");
+    const datosPrevios = snap.data();
+    await setDoc(doc(db, "verificaciones_cfdi_local", embarqueId), {
+      ...datosPrevios,
+      estadoSync: "pendiente",
+      validacion2: {
+        uuidLeido: uuid,
+        rfcLeido: rfc,
+        uuidCoincide,
+        rfcCoincide,
+        caja: caja || null,
+        cajaCoincide,
+        escaneadoPor: { uid, nombre: datosUsuario.nombre || null, rol: datosUsuario.rol, area: datosUsuario.area || null, puesto: datosUsuario.puesto || null },
+        timestamp: serverTimestamp()
       }
     });
   }

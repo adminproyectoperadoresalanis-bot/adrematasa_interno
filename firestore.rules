@@ -154,34 +154,67 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------------
-    // QR/CFDI — escaneo de origen (Opción B, sin Cloud Functions).
-    // Autorizados para escanear origen: cualquier admin/supervisor/empleado
-    // (decisión de Ivan, 2026-09-01). Corregir un escaneo ya hecho: solo
-    // admin o supervisor.
+    // QR/CFDI — cadena de 3 validaciones (decidida por Ivan, 2026-09-02):
+    //   1) Atención al Cliente escanea el CFDI real (origenEscaneo).
+    //   2) Alguien de Operaciones MEX (Coordinador/Supervisor/Auxiliar/
+    //      Despachador) vuelve a escanear el MISMO CFDI de forma
+    //      independiente y lo compara contra lo que registró Atención al
+    //      Cliente (validacion2).
+    //   3) Solo hasta que las dos existen, el Apps Script sincroniza
+    //      uuidEsperado/receptorRFCEsperado hacia alanis-operadores — el
+    //      operador (checkpoints de recepción/pre-entrega) no encuentra
+    //      nada contra qué comparar hasta que las dos validaciones ya
+    //      pasaron. Por eso estadoSync arranca en 'esperando_validacion2'
+    //      y solo pasa a 'pendiente' (que es lo que sincroniza el Apps
+    //      Script) cuando la validación 2 se escribe.
+    //
+    // esValidador1()/esValidador2() usan Área + Puesto reales del catálogo
+    // de empleados (los mismos valores que usan Organigrama y Catálogo de
+    // empleados: usuarios/{uid}.area, usuarios/{uid}.puesto) — no el "rol"
+    // de permisos del sistema. Un admin siempre puede hacer cualquiera de
+    // las dos, como respaldo.
     // ------------------------------------------------------------------
-    function esRolAutorizadoParaOrigen() {
+    function usuarioActivoValido() {
       return isSignedIn() && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
         && usuarioActual().rol in ['admin', 'supervisor', 'empleado'] && usuarioActual().estatus == 'activo';
     }
+    function esValidador1() {
+      return usuarioActivoValido() && (
+        usuarioActual().rol == 'admin' ||
+        usuarioActual().get('area', '') == 'Atención al cliente'
+      );
+    }
+    function esValidador2() {
+      return usuarioActivoValido() && (
+        usuarioActual().rol == 'admin' ||
+        (
+          usuarioActual().get('area', '') == 'Operaciones MEX' &&
+          usuarioActual().get('puesto', '') in ['Coordinador', 'Supervisor', 'Auxiliar', 'Despachador']
+        )
+      );
+    }
     function esSupervisorOAdmin() {
-      return isSignedIn() && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
-        && usuarioActual().rol in ['admin', 'supervisor'] && usuarioActual().estatus == 'activo';
+      return usuarioActivoValido() && usuarioActual().rol in ['admin', 'supervisor'];
     }
 
     match /verificaciones_cfdi_local/{embarqueId} {
-      allow read: if esRolAutorizadoParaOrigen();
+      allow read: if usuarioActivoValido();
 
-      allow create: if esRolAutorizadoParaOrigen()
+      // Validación 1 — Atención al Cliente escanea el CFDI de origen.
+      allow create: if esValidador1()
         && request.resource.data.embarqueId == embarqueId
         && request.resource.data.uuidEsperado is string
         && request.resource.data.uuidEsperado.size() > 0
         && request.resource.data.receptorRFCEsperado is string
         && request.resource.data.receptorRFCEsperado.size() > 0
-        && request.resource.data.estadoSync == 'pendiente'
+        && request.resource.data.estadoSync == 'esperando_validacion2'
         && request.resource.data.origenEscaneo.escaneadoPor.uid == request.auth.uid
         && request.resource.data.origenEscaneo.timestamp == request.time
         && request.resource.data.origenEscaneo.correccion == null;
 
+      // Corrección de la validación 1 (solo supervisor/admin). Si la
+      // validación 2 todavía no existía, el embarque sigue esperándola; si
+      // ya existía, se re-sincroniza todo de nuevo con el valor corregido.
       allow update: if esSupervisorOAdmin()
         && resource.data.origenEscaneo != null
         && request.resource.data.embarqueId == resource.data.embarqueId
@@ -190,22 +223,40 @@ service cloud.firestore {
         && request.resource.data.uuidEsperado.size() > 0
         && request.resource.data.receptorRFCEsperado is string
         && request.resource.data.receptorRFCEsperado.size() > 0
-        && request.resource.data.estadoSync == 'pendiente'
+        && request.resource.data.estadoSync == (resource.data.get('validacion2', null) == null ? 'esperando_validacion2' : 'pendiente')
         && request.resource.data.origenEscaneo.correccion.por.uid == request.auth.uid
         && request.resource.data.origenEscaneo.correccion.timestamp == request.time
         && request.resource.data.origenEscaneo.correccion.valorAnterior.uuidCfdi == resource.data.uuidEsperado
-        && request.resource.data.origenEscaneo.correccion.valorAnterior.rfcReceptor == resource.data.receptorRFCEsperado;
+        && request.resource.data.origenEscaneo.correccion.valorAnterior.rfcReceptor == resource.data.receptorRFCEsperado
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uuidEsperado', 'receptorRFCEsperado', 'origenEscaneo', 'estadoSync']);
+
+      // Validación 2 — alguien de Operaciones vuelve a escanear el mismo
+      // CFDI de forma independiente. Solo se permite una vez (mientras no
+      // exista todavía) y solo si la validación 1 ya existe.
+      allow update: if esValidador2()
+        && resource.data.origenEscaneo != null
+        && resource.data.get('validacion2', null) == null
+        && request.resource.data.embarqueId == resource.data.embarqueId
+        && request.resource.data.uuidEsperado == resource.data.uuidEsperado
+        && request.resource.data.receptorRFCEsperado == resource.data.receptorRFCEsperado
+        && request.resource.data.origenEscaneo == resource.data.origenEscaneo
+        && request.resource.data.estadoSync == 'pendiente'
+        && request.resource.data.validacion2.escaneadoPor.uid == request.auth.uid
+        && request.resource.data.validacion2.timestamp == request.time
+        && request.resource.data.validacion2.uuidCoincide == (request.resource.data.validacion2.uuidLeido == resource.data.uuidEsperado)
+        && request.resource.data.validacion2.rfcCoincide == (request.resource.data.validacion2.rfcLeido == resource.data.receptorRFCEsperado)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['validacion2', 'estadoSync']);
 
       allow delete: if false;
     }
 
     match /verificaciones_cfdi_resultado/{embarqueId} {
-      allow read: if esRolAutorizadoParaOrigen();
+      allow read: if usuarioActivoValido();
       allow write: if false;
     }
 
     match /embarques_pendientes_origen/{embarqueId} {
-      allow read: if esRolAutorizadoParaOrigen();
+      allow read: if usuarioActivoValido();
       allow write: if false;
     }
   }
