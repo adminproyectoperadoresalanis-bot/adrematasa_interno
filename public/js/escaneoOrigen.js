@@ -640,9 +640,52 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     }
   }
 
+  // Compara el UUID (y, en 2da validación, el RFC receptor) del CFDI recién
+  // leído contra lo que ya se conocía ANTES de escanear — uuidEsperado del
+  // registro de Atención al Cliente en modo "validacion2", o la Cadena
+  // Original del SAT capturada por el VBA (uuidFactura) en modo "origen".
+  // Si uuidEsperadoActual llega vacío (sin referencia todavía) no se
+  // bloquea nada — no hay contra qué comparar.
+  function evaluarCoincidenciaCfdi(datos) {
+    let uuidCoincide = true;
+    let rfcCoincide = true;
+    if (modoActual === "validacion2") {
+      uuidCoincide = datos.uuid === uuidEsperadoActual;
+      rfcCoincide = datos.rfc === rfcEsperadoActual;
+    } else if (modoActual === "origen" && uuidEsperadoActual) {
+      uuidCoincide = datos.uuid === uuidEsperadoActual;
+    }
+    return { uuidCoincide, rfcCoincide };
+  }
+
+  function mensajesCoincidenciaCfdi({ uuidCoincide, rfcCoincide }) {
+    const partes = [];
+    if (!uuidCoincide) {
+      partes.push(
+        modoActual === "origen"
+          ? "El UUID del CFDI escaneado no coincide con el de la factura de este embarque (según el correo original). Es posible que haya escaneado o adjuntado la factura de otro embarque. Revise e informe a un supervisor."
+          : "El UUID del CFDI escaneado no coincide con el que registró Atención al Cliente. Revise que sea la factura correcta e informe a un supervisor."
+      );
+    }
+    if (!rfcCoincide) partes.push("El RFC receptor del CFDI escaneado no coincide con el que registró Atención al Cliente. Revise que sea la factura correcta e informe a un supervisor.");
+    return partes;
+  }
+
   function mostrarConfirmacion(datos) {
     datosLeidos = datos;
     detenerCamara();
+
+    // Rechazo inmediato (propuesta de Ivan, 2026-09-03): si el UUID (y RFC,
+    // en 2da validación) ya no coinciden con lo que se esperaba, no tiene
+    // caso pedir la caja y hacer avanzar un paso más — ya se sabe, desde el
+    // momento mismo del escaneo, que esto no va a pasar. Se bloquea aquí,
+    // antes de mostrar la pantalla de captura de caja.
+    const coincidenciaAdelantada = evaluarCoincidenciaCfdi(datos);
+    if (!coincidenciaAdelantada.uuidCoincide || !coincidenciaAdelantada.rfcCoincide) {
+      mostrarAdvertenciaDiscrepancia(mensajesCoincidenciaCfdi(coincidenciaAdelantada));
+      return;
+    }
+
     inputConfirmarUuid.value = datos.uuid;
     inputConfirmarRfc.value = datos.rfc;
     confirmarErrorDiv.textContent = "";
@@ -666,23 +709,10 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       ? normalizarCaja(cajaCapturada) === normalizarCaja(cajaEsperadaActual)
       : true; // si no hay caja de referencia (correo), no hay contra qué comparar.
 
-    let uuidCoincide = true;
-    let rfcCoincide = true;
-    if (modoActual === "validacion2") {
-      uuidCoincide = datosLeidos.uuid === uuidEsperadoActual;
-      rfcCoincide = datosLeidos.rfc === rfcEsperadoActual;
-    } else if (modoActual === "origen" && uuidEsperadoActual) {
-      // Cadena Original del SAT capturada por el VBA desde el PDF real del
-      // correo (uuidFactura en repositorio_mccain) — si no coincide con lo
-      // escaneado, es que Atención al Cliente usó la factura de OTRO
-      // embarque que reutiliza el mismo número de caja/remolque (motivación
-      // real de Ivan, 2026-09-03: no es evitar falsificación, es cachar
-      // cuando se adjunta/imprime por error un PDF de un embarque viejo).
-      // Si uuidEsperadoActual llega vacío (el correo no traía PDF legible,
-      // o es un embarque de antes de este cambio), no hay nada contra qué
-      // comparar todavía y no se bloquea nada.
-      uuidCoincide = datosLeidos.uuid === uuidEsperadoActual;
-    }
+    // El UUID/RFC ya se revisó (y, si fallaba, ya se bloqueó) en cuanto se
+    // leyó el QR — ver mostrarConfirmacion(). Esto de aquí es un respaldo,
+    // no el chequeo principal: en circunstancias normales ya llega true.
+    const { uuidCoincide, rfcCoincide } = evaluarCoincidenciaCfdi(datosLeidos);
 
     const hayDiscrepancia = (hayCajaEsperada && !cajaCoincide) || !uuidCoincide || !rfcCoincide;
 
@@ -692,14 +722,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     if (hayDiscrepancia) {
       const partes = [];
       if (hayCajaEsperada && !cajaCoincide) partes.push("El remolque capturado no coincide con el asignado para la factura. Revise si capturó un número de caja incorrecto e informe a un supervisor.");
-      if (!uuidCoincide) {
-        partes.push(
-          modoActual === "origen"
-            ? "El UUID del CFDI escaneado no coincide con el de la factura de este embarque (según el correo original). Es posible que haya escaneado o adjuntado la factura de otro embarque. Revise e informe a un supervisor."
-            : "El UUID del CFDI escaneado no coincide con el que registró Atención al Cliente. Revise que sea la factura correcta e informe a un supervisor."
-        );
-      }
-      if (!rfcCoincide) partes.push("El RFC receptor del CFDI escaneado no coincide con el que registró Atención al Cliente. Revise que sea la factura correcta e informe a un supervisor.");
+      partes.push(...mensajesCoincidenciaCfdi({ uuidCoincide, rfcCoincide }));
       mostrarAdvertenciaDiscrepancia(partes);
       return;
     }
