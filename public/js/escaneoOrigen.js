@@ -671,9 +671,46 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     return partes;
   }
 
-  function mostrarConfirmacion(datos) {
+  async function mostrarConfirmacion(datos) {
     datosLeidos = datos;
     detenerCamara();
+    modalErrorDiv.textContent = "";
+
+    // Caso real detectado el 2026-09-03: en modo "origen" el valor de
+    // referencia (uuidEsperadoActual) se cachea al ABRIR el modal, pero
+    // llega desde Alanis Operadores vía Apps Script (hasta 5 minutos en
+    // teoría — en ese caso real, casi 5 horas). Si solo confiáramos en el
+    // valor cacheado, el candado se queda CALLADO justo cuando más se
+    // necesita: un embarque recién sincronizado, con su factura de
+    // referencia todavía en camino, deja pasar cualquier CFDI sin avisar
+    // (fue exactamente como se coló un intercambio real de documentos
+    // entre dos embarques en una prueba). Por eso aquí se relee fresco
+    // directo de Firestore antes de comparar — y si sigue sin haber nada
+    // contra qué comparar, se bloquea el guardado (con opción de
+    // reintentar) en vez de dejarlo pasar en silencio.
+    if (modoActual === "origen") {
+      let lectura;
+      try {
+        const snap = await getDoc(doc(db, "embarques_pendientes_origen", embarqueActual));
+        lectura = { ok: true, uuid: snap.exists() ? (snap.data().uuidFactura || null) : null };
+      } catch (err) {
+        lectura = { ok: false };
+      }
+
+      if (!lectura.ok) {
+        modalErrorDiv.textContent = "No se pudo verificar la factura de referencia (error de conexión). Vuelve a intentar.";
+        iniciarCamara();
+        return;
+      }
+
+      if (!lectura.uuid) {
+        modalErrorDiv.textContent = "Todavía no está disponible la factura de referencia para este embarque — puede tardar unos minutos en sincronizar desde el correo. Espera un momento e intenta de nuevo; si después de varios intentos sigue sin aparecer, avisa a un supervisor.";
+        iniciarCamara();
+        return;
+      }
+
+      uuidEsperadoActual = lectura.uuid;
+    }
 
     // Rechazo inmediato (propuesta de Ivan, 2026-09-03): si el UUID (y RFC,
     // en 2da validación) ya no coinciden con lo que se esperaba, no tiene
