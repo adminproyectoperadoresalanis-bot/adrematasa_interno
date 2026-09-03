@@ -385,7 +385,13 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
           modo: "origen",
           infoTexto: `Embarque ${(p && p.shipment) || id} — ${(p && p.clienteNombre) || "McCain"}`,
           cajaEsperada: p ? p.caja : null,
-          cajaPrevia: ""
+          cajaPrevia: "",
+          // Cadena Original del SAT capturada por el VBA desde el PDF real
+          // del correo (repositorio_mccain.uuidFactura, vía Apps Script). Si
+          // el correo no traía un PDF legible, llega vacío y simplemente no
+          // hay nada contra qué comparar todavía — no bloquea nada en ese
+          // caso (decisión de Ivan, 2026-09-03).
+          uuidEsperado: p ? p.uuidFactura : null
         });
       });
     });
@@ -465,8 +471,12 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     tbodyHistorial.innerHTML = listaHistorial.map(f => {
       const cajaTexto = escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—");
       const cajaBadge = badgeSiNo(f.origenEscaneo && f.origenEscaneo.cajaCoincide, "OK", "No coincide");
+      // facturaUuidCoincide es null (sin badge) cuando no había Cadena
+      // Original del SAT capturada del correo todavía — no confundir con
+      // "coincide" ni con "no coincide".
+      const facturaBadge = badgeSiNo(f.origenEscaneo && f.origenEscaneo.facturaUuidCoincide, "Factura OK", "Factura no coincide");
 
-      const celdaAtencion = `${escapeHtml((f.origenEscaneo && f.origenEscaneo.escaneadoPor && f.origenEscaneo.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.origenEscaneo && f.origenEscaneo.timestamp)}`;
+      const celdaAtencion = `${escapeHtml((f.origenEscaneo && f.origenEscaneo.escaneadoPor && f.origenEscaneo.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.origenEscaneo && f.origenEscaneo.timestamp)}${facturaBadge}`;
 
       let celdaValidacion2 = `<span class="nota" style="margin:0;">Pendiente</span>`;
       if (f.validacion2) {
@@ -661,6 +671,17 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     if (modoActual === "validacion2") {
       uuidCoincide = datosLeidos.uuid === uuidEsperadoActual;
       rfcCoincide = datosLeidos.rfc === rfcEsperadoActual;
+    } else if (modoActual === "origen" && uuidEsperadoActual) {
+      // Cadena Original del SAT capturada por el VBA desde el PDF real del
+      // correo (uuidFactura en repositorio_mccain) — si no coincide con lo
+      // escaneado, es que Atención al Cliente usó la factura de OTRO
+      // embarque que reutiliza el mismo número de caja/remolque (motivación
+      // real de Ivan, 2026-09-03: no es evitar falsificación, es cachar
+      // cuando se adjunta/imprime por error un PDF de un embarque viejo).
+      // Si uuidEsperadoActual llega vacío (el correo no traía PDF legible,
+      // o es un embarque de antes de este cambio), no hay nada contra qué
+      // comparar todavía y no se bloquea nada.
+      uuidCoincide = datosLeidos.uuid === uuidEsperadoActual;
     }
 
     const hayDiscrepancia = (hayCajaEsperada && !cajaCoincide) || !uuidCoincide || !rfcCoincide;
@@ -671,7 +692,13 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     if (hayDiscrepancia) {
       const partes = [];
       if (hayCajaEsperada && !cajaCoincide) partes.push("El remolque capturado no coincide con el asignado para la factura. Revise si capturó un número de caja incorrecto e informe a un supervisor.");
-      if (!uuidCoincide) partes.push("El UUID del CFDI escaneado no coincide con el que registró Atención al Cliente. Revise que sea la factura correcta e informe a un supervisor.");
+      if (!uuidCoincide) {
+        partes.push(
+          modoActual === "origen"
+            ? "El UUID del CFDI escaneado no coincide con el de la factura de este embarque (según el correo original). Es posible que haya escaneado o adjuntado la factura de otro embarque. Revise e informe a un supervisor."
+            : "El UUID del CFDI escaneado no coincide con el que registró Atención al Cliente. Revise que sea la factura correcta e informe a un supervisor."
+        );
+      }
       if (!rfcCoincide) partes.push("El RFC receptor del CFDI escaneado no coincide con el que registró Atención al Cliente. Revise que sea la factura correcta e informe a un supervisor.");
       mostrarAdvertenciaDiscrepancia(partes);
       return;
@@ -684,7 +711,11 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       } else if (modoActual === "validacion2") {
         await registrarValidacion2(embarqueActual, { ...datosLeidos, caja: cajaCapturada, cajaCoincide, uuidCoincide, rfcCoincide });
       } else {
-        await registrarEscaneo(embarqueActual, { ...datosLeidos, caja: cajaCapturada, cajaCoincide, cajaEsperada: cajaEsperadaActual || null });
+        await registrarEscaneo(embarqueActual, {
+          ...datosLeidos, caja: cajaCapturada, cajaCoincide, cajaEsperada: cajaEsperadaActual || null,
+          facturaUuidEsperado: uuidEsperadoActual || null,
+          facturaUuidCoincide: uuidEsperadoActual ? uuidCoincide : null
+        });
       }
       cerrarModal();
       mostrarResultado({ modo: modoActual, cajaCoincide, uuidCoincide, rfcCoincide, caja: cajaCapturada });
@@ -837,7 +868,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     datosLeidos = null;
   }
 
-  async function registrarEscaneo(embarqueId, { uuid, rfc, caja, cajaCoincide, cajaEsperada }) {
+  async function registrarEscaneo(embarqueId, { uuid, rfc, caja, cajaCoincide, cajaEsperada, facturaUuidEsperado, facturaUuidCoincide }) {
     await setDoc(doc(db, "verificaciones_cfdi_local", embarqueId), {
       embarqueId,
       uuidEsperado: uuid,
@@ -847,6 +878,12 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       origenEscaneo: {
         caja: caja || null,
         cajaCoincide,
+        // facturaUuidCoincide queda en null cuando no había Cadena Original
+        // del SAT capturada todavía (correo sin PDF legible, o embarque de
+        // antes del 2026-09-03) — no significa que se haya comparado y
+        // fallado, significa que no había nada contra qué comparar.
+        facturaUuidEsperado: facturaUuidEsperado || null,
+        facturaUuidCoincide: facturaUuidCoincide === undefined ? null : facturaUuidCoincide,
         escaneadoPor: { uid, nombre: datosUsuario.nombre || null, rol: datosUsuario.rol },
         timestamp: serverTimestamp(),
         correccion: null
