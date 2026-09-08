@@ -159,14 +159,19 @@ service cloud.firestore {
     //   2) Alguien de Operaciones MEX (Coordinador/Supervisor/Auxiliar/
     //      Despachador) vuelve a escanear el MISMO CFDI de forma
     //      independiente y lo compara contra lo que registró Atención al
-    //      Cliente (validacion2).
+    //      Cliente (validacion2). En el MISMO movimiento asigna al operador
+    //      que va a recoger el embarque (operadorAsignado — nuevo,
+    //      2026-09-07: obligatorio, no se puede dejar pendiente, y vive
+    //      aquí en vez del sistema de asignación de viajes de Alanis
+    //      Operadores porque ese todavía está en pruebas).
     //   3) Solo hasta que las dos existen, el Apps Script sincroniza
-    //      uuidEsperado/receptorRFCEsperado hacia alanis-operadores — el
-    //      operador (checkpoints de recepción/pre-entrega) no encuentra
-    //      nada contra qué comparar hasta que las dos validaciones ya
-    //      pasaron. Por eso estadoSync arranca en 'esperando_validacion2'
-    //      y solo pasa a 'pendiente' (que es lo que sincroniza el Apps
-    //      Script) cuando la validación 2 se escribe.
+    //      uuidEsperado/receptorRFCEsperado/operadorAsignado hacia
+    //      alanis-operadores — el operador (checkpoints de recepción/
+    //      pre-entrega) no encuentra nada contra qué comparar hasta que
+    //      las dos validaciones ya pasaron. Por eso estadoSync arranca en
+    //      'esperando_validacion2' y solo pasa a 'pendiente' (que es lo
+    //      que sincroniza el Apps Script) cuando la validación 2 se
+    //      escribe.
     //
     // esValidador1()/esValidador2() usan Área + Puesto reales del catálogo
     // de empleados (los mismos valores que usan Organigrama y Catálogo de
@@ -231,8 +236,13 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uuidEsperado', 'receptorRFCEsperado', 'origenEscaneo', 'estadoSync']);
 
       // Validación 2 — alguien de Operaciones vuelve a escanear el mismo
-      // CFDI de forma independiente. Solo se permite una vez (mientras no
-      // exista todavía) y solo si la validación 1 ya existe.
+      // CFDI de forma independiente, y en el mismo paso asigna al operador
+      // que va a recoger el embarque. Solo se permite una vez (mientras no
+      // exista todavía) y solo si la validación 1 ya existe. operadorAsignado
+      // es obligatorio (no hay "confirmar sin asignar") y su uid debe
+      // corresponder a un operador real y activo del catálogo sincronizado
+      // desde Alanis Operadores (operadores_alanis) — así no se puede
+      // "inventar" un uid que no existe.
       allow update: if esValidador2()
         && resource.data.origenEscaneo != null
         && resource.data.get('validacion2', null) == null
@@ -245,7 +255,13 @@ service cloud.firestore {
         && request.resource.data.validacion2.timestamp == request.time
         && request.resource.data.validacion2.uuidCoincide == (request.resource.data.validacion2.uuidLeido == resource.data.uuidEsperado)
         && request.resource.data.validacion2.rfcCoincide == (request.resource.data.validacion2.rfcLeido == resource.data.receptorRFCEsperado)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['validacion2', 'estadoSync']);
+        && request.resource.data.operadorAsignado.uid is string
+        && request.resource.data.operadorAsignado.uid.size() > 0
+        && exists(/databases/$(database)/documents/operadores_alanis/$(request.resource.data.operadorAsignado.uid))
+        && request.resource.data.operadorAsignado.nombre is string
+        && request.resource.data.operadorAsignado.asignadoPor == request.auth.uid
+        && request.resource.data.operadorAsignado.timestamp == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['validacion2', 'estadoSync', 'operadorAsignado']);
 
       allow delete: if false;
     }
@@ -258,6 +274,36 @@ service cloud.firestore {
     match /embarques_pendientes_origen/{embarqueId} {
       allow read: if usuarioActivoValido();
       allow write: if false;
+    }
+
+    // Catálogo de operadores de Alanis Operadores (uid, nombre, numero de
+    // unidad), sincronizado de solo lectura por el Apps Script cada pocos
+    // minutos (nuevo, 2026-09-07) — usado por el selector obligatorio de
+    // "operador asignado" en la 2da validación de arriba. Nadie escribe
+    // aquí desde el navegador: lo llena el Apps Script con su propia
+    // cuenta de servicio, que no pasa por estas reglas.
+    match /operadores_alanis/{uid} {
+      allow read: if usuarioActivoValido();
+      allow write: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // Borrado de prueba — TEMPORAL, solo mientras dure esta fase de
+    // pruebas con McCain en pausa (2026-09-08). El botón de admin en
+    // ADREMATASA únicamente crea esta solicitud; quien borra de verdad (en
+    // los dos proyectos) es el Apps Script, con su propia cuenta de
+    // servicio — repositorio_mccain (alanis-operadores) y
+    // verificaciones_cfdi_local (aquí) siguen con "allow delete: if false"
+    // para cualquier navegador, sin excepción, ni siquiera admin.
+    //
+    // QUITAR este bloque completo cuando termine la fase de pruebas.
+    // ------------------------------------------------------------------
+    match /solicitudes_borrado_prueba/{embarqueId} {
+      allow read: if esAdmin();
+      allow create: if esAdmin()
+        && request.resource.data.solicitadoPor == request.auth.uid
+        && request.resource.data.timestamp == request.time;
+      allow update, delete: if false;
     }
   }
 }

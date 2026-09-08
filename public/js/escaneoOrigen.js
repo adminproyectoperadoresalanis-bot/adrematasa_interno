@@ -282,6 +282,13 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
               <input type="text" id="modal-confirmar-caja" placeholder="Número de caja o remolque" required>
             </label>
           </div>
+          <div class="modal-fila oculto" id="modal-operador-wrap">
+            <label>Operador asignado a este embarque (obligatorio)
+              <select id="modal-confirmar-operador">
+                <option value="">Selecciona un operador…</option>
+              </select>
+            </label>
+          </div>
           <div id="modal-confirmar-error" class="error"></div>
           <div class="modal-acciones">
             <button type="button" class="secundario" id="modal-volver-escanear">Volver a escanear</button>
@@ -313,6 +320,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   let listaPendientes = [];
   let listaHistorial = [];
   let listaResultados = [];
+  let listaOperadores = [];
 
   const errorPendientesDiv = contenedor.querySelector("#pendientes-origen-error");
   const errorValidacion2Div = contenedor.querySelector("#pendientes-validacion2-error");
@@ -350,6 +358,19 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     renderPendientesValidacion3();
   }, (err) => {
     if (errorValidacion3Div) errorValidacion3Div.textContent = "No se pudo cargar el estado del operador: " + err.message;
+  });
+
+  // Catálogo de operadores de Alanis Operadores (uid, nombre, numero de
+  // unidad), reflejado aquí de solo lectura por el Apps Script cada pocos
+  // minutos — se usa para el selector obligatorio de "operador asignado" en
+  // la segunda validación (decisión de Ivan, 2026-09-07): la asignación de
+  // viajes de Alanis Operadores todavía está en pruebas, así que esto vive
+  // aquí en vez de depender de ese sistema.
+  onSnapshot(collection(db, "operadores_alanis"), (snap) => {
+    listaOperadores = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderSelectorOperador();
+  }, (err) => {
+    if (modalErrorDiv) modalErrorDiv.textContent = "No se pudo cargar el catálogo de operadores: " + err.message;
   });
 
   function renderPendientes() {
@@ -498,7 +519,10 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <td>${celdaAtencion}</td>
         <td>${celdaValidacion2}</td>
         <td><span class="badge ${CLASES_SYNC[f.estadoSync] || "badge-pendiente"}">${ETIQUETAS_SYNC[f.estadoSync] || f.estadoSync}</span></td>
-        ${puedeCorregir ? `<td class="acciones"><button type="button" class="secundario btn-corregir-origen">Corregir origen</button></td>` : ""}
+        ${puedeCorregir ? `<td class="acciones">
+              <button type="button" class="secundario btn-corregir-origen">Corregir origen</button>
+              ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. Solo para pruebas.">Borrar (prueba)</button>` : ""}
+            </td>` : ""}
       </tr>
     `;
     }).join("");
@@ -515,6 +539,51 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
             cajaEsperada: f ? f.cajaEsperada : null,
             cajaPrevia: (f && f.origenEscaneo && f.origenEscaneo.caja) || ""
           });
+        });
+      });
+    }
+
+    // ------------------------------------------------------------------
+    // Borrado de prueba — TEMPORAL, solo mientras dure esta fase de
+    // pruebas con McCain en pausa (2026-09-08). Solo admin lo ve. Este
+    // botón NO borra nada directamente (las reglas de Firestore siguen sin
+    // permitir el delete a ningún navegador, en ninguno de los dos
+    // proyectos) — solo escribe una solicitud en solicitudes_borrado_prueba
+    // que el Apps Script procesa en su siguiente ciclo (o de inmediato si
+    // alguien corre sync() a mano), borrando el embarque completo tanto
+    // aquí (verificaciones_cfdi_local / embarques_pendientes_origen) como
+    // en repositorio_mccain (Alanis Operadores).
+    //
+    // QUITAR este bloque cuando termine la fase de pruebas: este listener,
+    // el botón de arriba, la función procesarSolicitudesBorradoPrueba_() en
+    // Codigo.gs y el match /solicitudes_borrado_prueba/ de firestore.rules.
+    // ------------------------------------------------------------------
+    if (esAdmin) {
+      tbodyHistorial.querySelectorAll(".btn-borrar-prueba").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const id = btn.closest("tr").dataset.id;
+          const f = listaHistorial.find(x => x.id === id);
+          const etiqueta = (f && f.embarqueId) || id;
+          const confirmado = window.confirm(
+            `¿Borrar por completo el embarque ${etiqueta}?\n\n` +
+            `Esto lo elimina de ADREMATASA y de Alanis Operadores (repositorio_mccain). ` +
+            `No es reversible, y no es instantáneo: se ejecuta en el siguiente ciclo de ` +
+            `sincronización (o de inmediato si alguien corre sync() a mano).\n\n` +
+            `Úsalo solo con embarques de prueba, nunca con un embarque real.`
+          );
+          if (!confirmado) return;
+          btn.disabled = true;
+          try {
+            await setDoc(doc(db, "solicitudes_borrado_prueba", id), {
+              embarqueId: id,
+              solicitadoPor: uid,
+              timestamp: serverTimestamp()
+            });
+            btn.textContent = "Solicitado ✓";
+          } catch (e) {
+            btn.disabled = false;
+            window.alert("No se pudo solicitar el borrado: " + e.message);
+          }
         });
       });
     }
@@ -536,6 +605,8 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const inputConfirmarUuid = contenedor.querySelector("#modal-confirmar-uuid");
   const inputConfirmarRfc = contenedor.querySelector("#modal-confirmar-rfc");
   const inputConfirmarCaja = contenedor.querySelector("#modal-confirmar-caja");
+  const operadorWrapDiv = contenedor.querySelector("#modal-operador-wrap");
+  const selectOperador = contenedor.querySelector("#modal-confirmar-operador");
   const confirmarErrorDiv = contenedor.querySelector("#modal-confirmar-error");
   const botonesModo = contenedor.querySelectorAll(".subnav-boton[data-modo]");
   const botonGuardar = contenedor.querySelector("#modal-confirmar-guardar");
@@ -585,6 +656,20 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   contenedor.querySelector("#modal-volver-escanear").addEventListener("click", volverAEscanear);
   botonGuardar.addEventListener("click", guardarEscaneo);
   contenedor.querySelector("#modal-escaneo-cancelar").addEventListener("click", cerrarModal);
+
+  // Dibuja las opciones del selector de operador a partir del catálogo
+  // sincronizado (operadores_alanis) — se llama tanto cuando llega/cambia el
+  // catálogo como al abrir el modal, para que siempre esté al día. Conserva
+  // la selección previa si el operador elegido sigue en la lista (por
+  // ejemplo, si el catálogo se actualiza mientras el modal ya está abierto).
+  function renderSelectorOperador() {
+    if (!selectOperador) return;
+    const valorPrevio = selectOperador.value;
+    const ordenados = listaOperadores.slice().sort((a, b) => (a.nombre || "").localeCompare(b.nombre || "", "es"));
+    selectOperador.innerHTML = '<option value="">Selecciona un operador…</option>' +
+      ordenados.map(o => `<option value="${o.id}">${escapeHtml((o.numero ? o.numero + " — " : "") + (o.nombre || o.id))}</option>`).join("");
+    if (ordenados.some(o => o.id === valorPrevio)) selectOperador.value = valorPrevio;
+  }
 
   function volverAEscanear() {
     seccionConfirmar.classList.add("oculto");
@@ -746,6 +831,26 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       ? normalizarCaja(cajaCapturada) === normalizarCaja(cajaEsperadaActual)
       : true; // si no hay caja de referencia (correo), no hay contra qué comparar.
 
+    // Operador asignado (obligatorio solo en 2da validación — decisión de
+    // Ivan, 2026-09-07): quien hace la segunda validación ya sabe en ese
+    // momento qué operador va a recoger el embarque, así que se captura en
+    // el mismo movimiento. No se puede dejar pendiente — sin esto, no se
+    // guarda nada (mismo criterio de "bloqueo real" que la caja y el CFDI).
+    let operadorAsignado = null;
+    if (modoActual === "validacion2") {
+      const uidOperador = selectOperador ? selectOperador.value : "";
+      if (!uidOperador) {
+        confirmarErrorDiv.textContent = "Selecciona el operador asignado a este embarque — es obligatorio para poder continuar.";
+        return;
+      }
+      const op = listaOperadores.find(o => o.id === uidOperador);
+      if (!op) {
+        confirmarErrorDiv.textContent = "Ese operador ya no aparece en el catálogo (¿se desactivó?). Actualiza la lista e intenta de nuevo.";
+        return;
+      }
+      operadorAsignado = { uid: op.id, nombre: op.nombre || null, numero: op.numero || null };
+    }
+
     // El UUID/RFC ya se revisó (y, si fallaba, ya se bloqueó) en cuanto se
     // leyó el QR — ver mostrarConfirmacion(). Esto de aquí es un respaldo,
     // no el chequeo principal: en circunstancias normales ya llega true.
@@ -769,7 +874,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       if (modoActual === "correccion") {
         await corregirEscaneo(embarqueActual, { ...datosLeidos, caja: cajaCapturada, cajaCoincide });
       } else if (modoActual === "validacion2") {
-        await registrarValidacion2(embarqueActual, { ...datosLeidos, caja: cajaCapturada, cajaCoincide, uuidCoincide, rfcCoincide });
+        await registrarValidacion2(embarqueActual, { ...datosLeidos, caja: cajaCapturada, cajaCoincide, uuidCoincide, rfcCoincide, operadorAsignado });
       } else {
         await registrarEscaneo(embarqueActual, {
           ...datosLeidos, caja: cajaCapturada, cajaCoincide, cajaEsperada: cajaEsperadaActual || null,
@@ -910,6 +1015,9 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     // como punto de comparación independiente (así fue como se detectó:
     // Daniel la vio precargada al hacer la 2da validación).
     inputConfirmarCaja.value = (modo === "correccion") ? (cajaPrevia || "") : "";
+    if (operadorWrapDiv) operadorWrapDiv.classList.toggle("oculto", modo !== "validacion2");
+    if (selectOperador) selectOperador.value = "";
+    if (modo === "validacion2") renderSelectorOperador();
     seccionConfirmar.classList.add("oculto");
     seccionCaptura.classList.remove("oculto");
     botonesModo.forEach(b => b.classList.toggle("activo", b.dataset.modo === "camara"));
@@ -978,7 +1086,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     });
   }
 
-  async function registrarValidacion2(embarqueId, { uuid, rfc, caja, cajaCoincide, uuidCoincide, rfcCoincide }) {
+  async function registrarValidacion2(embarqueId, { uuid, rfc, caja, cajaCoincide, uuidCoincide, rfcCoincide, operadorAsignado }) {
     const snap = await getDoc(doc(db, "verificaciones_cfdi_local", embarqueId));
     if (!snap.exists()) throw new Error("No se encontró el embarque.");
     const datosPrevios = snap.data();
@@ -993,6 +1101,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         caja: caja || null,
         cajaCoincide,
         escaneadoPor: { uid, nombre: datosUsuario.nombre || null, rol: datosUsuario.rol, area: datosUsuario.area || null, puesto: datosUsuario.puesto || null },
+        timestamp: serverTimestamp()
+      },
+      // Operador que va a recoger este embarque (nuevo, 2026-09-07) — viaja
+      // junto con validacion2/estadoSync hacia repositorio_mccain, y es lo
+      // que Checkpoint 1 en Alanis Operadores compara contra quien escanea.
+      operadorAsignado: {
+        uid: operadorAsignado.uid,
+        nombre: operadorAsignado.nombre,
+        numero: operadorAsignado.numero,
+        asignadoPor: uid,
         timestamp: serverTimestamp()
       }
     });
