@@ -234,9 +234,21 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       .semaforo-warn { background: #fef3c7; color: #92400e; } .semaforo-warn .semaforo-dot { background: #d97706; }
       .semaforo-bad { background: #fee2e2; color: #991b1b; } .semaforo-bad .semaforo-dot { background: #dc2626; }
       .semaforo-pend { background: #f1f2f4; color: #4b5563; } .semaforo-pend .semaforo-dot { background: #9ca3af; }
+
+      .semaforo-titulo-fila { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .semaforo-titulo-fila h2 { margin: 0; }
+      .semaforo-chip-espera {
+        display: inline-flex; align-items: center; gap: 6px;
+        background: #eef2ff; color: #3730a3; font-size: 12.5px; font-weight: 600;
+        padding: 4px 11px; border-radius: 999px;
+      }
+      .semaforo-chip-espera .semaforo-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: #6366f1; }
     </style>
     <section class="panel">
-      <h2>Seguimiento de embarques</h2>
+      <div class="semaforo-titulo-fila">
+        <h2>Seguimiento de embarques</h2>
+        <span class="semaforo-chip-espera oculto" id="semaforo-chip-espera"><span class="semaforo-chip-dot"></span><span id="semaforo-chip-espera-texto"></span></span>
+      </div>
       <p class="nota">Vista rápida del avance de cada embarque por las 5 etapas del proceso — de un vistazo, sin tener que abrir cada tabla de abajo.</p>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-semaforo">
@@ -246,7 +258,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
               <th>Atención<br>al Cliente</th>
               <th>2da<br>Validación</th>
               <th>Sincroni-<br>zación</th>
-              <th>Checkpoint 1<br>Recepción</th>
+              <th>Checkpoint 1<br>Despacho</th>
               <th>Checkpoint 2<br>Entrega</th>
             </tr>
           </thead>
@@ -370,6 +382,8 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const tbodyValidacion3 = contenedor.querySelector("#tbody-pendientes-validacion3");
   const tbodyHistorial = contenedor.querySelector("#tbody-historial-origen");
   const tbodySemaforo = contenedor.querySelector("#tbody-semaforo");
+  const chipEsperaSpan = contenedor.querySelector("#semaforo-chip-espera");
+  const chipEsperaTexto = contenedor.querySelector("#semaforo-chip-espera-texto");
 
   onSnapshot(collection(db, "embarques_pendientes_origen"), (snap) => {
     listaPendientes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -415,7 +429,25 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     if (modalErrorDiv) modalErrorDiv.textContent = "No se pudo cargar el catálogo de operadores: " + err.message;
   });
 
+  // Chip "N esperando iniciar" junto al título del semáforo (pedido de
+  // Ivan, 2026-09-08): da el número de un vistazo sin meter esos embarques
+  // como filas grises dentro del semáforo mismo — eso ya lo cubre la tabla
+  // de "Pendientes de primera validación" de abajo, a la que apunta.
+  // Se actualiza aquí (no en renderSemaforo) porque depende de
+  // listaPendientes, no de listaHistorial/listaResultados.
+  function renderChipEsperaInicio() {
+    if (!chipEsperaSpan || !chipEsperaTexto) return;
+    const n = listaPendientes.length;
+    if (n === 0) {
+      chipEsperaSpan.classList.add("oculto");
+      return;
+    }
+    chipEsperaTexto.textContent = n === 1 ? "1 esperando iniciar" : `${n} esperando iniciar`;
+    chipEsperaSpan.classList.remove("oculto");
+  }
+
   function renderPendientes() {
+    renderChipEsperaInicio();
     if (!tbodyPendientes) return; // esta sección no se dibujó para este usuario
     if (listaPendientes.length === 0) {
       tbodyPendientes.innerHTML = `<tr><td colspan="6">No hay embarques pendientes.</td></tr>`;
