@@ -215,7 +215,46 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   contenedor.innerHTML = `
     <style>
       .resultado-escaneo-botonera { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+      /* Seguimiento de embarques (semáforo) — pedido de Ivan, 2026-09-08:
+         una fila por embarque, una píldora de color por etapa, columnas
+         angostas con encabezado a 2 líneas para verse bien de un vistazo
+         (pensado incluso para una pantalla en el área de Operaciones). */
+      #tabla-semaforo th, #tabla-semaforo td { padding: 6px 8px; text-align: center; white-space: nowrap; }
+      #tabla-semaforo th:first-child, #tabla-semaforo td:first-child { text-align: left; }
+      #tabla-semaforo th { font-size: 11.5px; line-height: 1.25; font-weight: 600; }
+      #tabla-semaforo td { font-size: 13px; }
+      #tabla-semaforo .semaforo-meta { display: block; font-size: 10.5px; color: #6b7280; margin-top: 2px; white-space: normal; }
+      .semaforo-pill {
+        display: inline-flex; align-items: center; gap: 5px;
+        padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap;
+      }
+      .semaforo-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+      .semaforo-ok { background: #dcfce7; color: #166534; } .semaforo-ok .semaforo-dot { background: #16a34a; }
+      .semaforo-warn { background: #fef3c7; color: #92400e; } .semaforo-warn .semaforo-dot { background: #d97706; }
+      .semaforo-bad { background: #fee2e2; color: #991b1b; } .semaforo-bad .semaforo-dot { background: #dc2626; }
+      .semaforo-pend { background: #f1f2f4; color: #4b5563; } .semaforo-pend .semaforo-dot { background: #9ca3af; }
     </style>
+    <section class="panel">
+      <h2>Seguimiento de embarques</h2>
+      <p class="nota">Vista rápida del avance de cada embarque por las 5 etapas del proceso — de un vistazo, sin tener que abrir cada tabla de abajo.</p>
+      <div class="tabla-wrap">
+        <table class="tabla" id="tabla-semaforo">
+          <thead>
+            <tr>
+              <th>Embarque</th>
+              <th>Atención<br>al Cliente</th>
+              <th>2da<br>Validación</th>
+              <th>Sincroni-<br>zación</th>
+              <th>Checkpoint 1<br>Recepción</th>
+              <th>Checkpoint 2<br>Entrega</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-semaforo"><tr><td colspan="6">Cargando...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
     ${seccionPendientesOrigen}
     ${seccionPendientesValidacion2}
     ${seccionPendientesValidacion3}
@@ -330,6 +369,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const tbodyValidacion2 = contenedor.querySelector("#tbody-pendientes-validacion2");
   const tbodyValidacion3 = contenedor.querySelector("#tbody-pendientes-validacion3");
   const tbodyHistorial = contenedor.querySelector("#tbody-historial-origen");
+  const tbodySemaforo = contenedor.querySelector("#tbody-semaforo");
 
   onSnapshot(collection(db, "embarques_pendientes_origen"), (snap) => {
     listaPendientes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -349,6 +389,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     renderPendientes();
     renderPendientesValidacion2();
     renderPendientesValidacion3();
+    renderSemaforo();
   }, (err) => {
     errorHistorialDiv.textContent = "No se pudo cargar el historial: " + err.message;
   });
@@ -356,6 +397,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   onSnapshot(collection(db, "verificaciones_cfdi_resultado"), (snap) => {
     listaResultados = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderPendientesValidacion3();
+    renderSemaforo();
   }, (err) => {
     if (errorValidacion3Div) errorValidacion3Div.textContent = "No se pudo cargar el estado del operador: " + err.message;
   });
@@ -483,6 +525,69 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <td><span class="nota" style="margin:0;">Esperando escaneo del operador</span></td>
       </tr>
     `).join("");
+  }
+
+  // Píldora de color para una celda del semáforo. estado: 'ok' (verde),
+  // 'warn' (ámbar, requiere revisión pero no es necesariamente un error),
+  // 'bad' (rojo, discrepancia real) o 'pend' (gris, no ha llegado a esta
+  // etapa todavía o sigue esperando).
+  function pillEtapa(estado, texto, meta) {
+    return `<span class="semaforo-pill semaforo-${estado}"><span class="semaforo-dot"></span>${escapeHtml(texto)}</span>` +
+      (meta ? `<span class="semaforo-meta">${escapeHtml(meta)}</span>` : "");
+  }
+
+  // "Seguimiento de embarques" — vista de un vistazo, pedida por Ivan
+  // (2026-09-08), de las 5 etapas del proceso por embarque. Se arma
+  // combinando listaHistorial (etapas 1/2/sync, aquí en ADREMATASA) con
+  // listaResultados (etapas de checkpoint 1 y 2, que vienen reflejadas
+  // desde Alanis Operadores por sincronizarResultados_/
+  // sincronizarResultadoRecepcion_ en Codigo.gs). Es solo informativa, no
+  // tiene botones — para actuar se usan las tablas de abajo.
+  function renderSemaforo() {
+    if (!tbodySemaforo) return;
+    if (listaHistorial.length === 0) {
+      tbodySemaforo.innerHTML = `<tr><td colspan="6">Todavía no hay embarques en proceso.</td></tr>`;
+      return;
+    }
+    const resultadosPorId = new Map(listaResultados.map(r => [r.id, r]));
+
+    tbodySemaforo.innerHTML = listaHistorial.map(f => {
+      const r = resultadosPorId.get(f.id);
+
+      const colAtencion = f.origenEscaneo ? pillEtapa("ok", "OK") : pillEtapa("pend", "—");
+      const colOperaciones = f.validacion2 ? pillEtapa("ok", "OK") : pillEtapa("pend", "Pendiente");
+
+      let colSync;
+      if (f.estadoSync === "sincronizado") colSync = pillEtapa("ok", "Listo");
+      else if (f.estadoSync === "pendiente") colSync = pillEtapa("pend", "En proceso");
+      else if (f.estadoSync === "esperando_validacion2") colSync = pillEtapa("pend", "Esperando 2da");
+      else if (f.estadoSync === "error") colSync = pillEtapa("bad", "Error");
+      else colSync = pillEtapa("pend", "—");
+
+      let colCheckpoint1;
+      if (r && r.recepcionResultado === "COINCIDE") colCheckpoint1 = pillEtapa("ok", "Coincide", r.recepcionOperadorNombre);
+      else if (r && r.recepcionResultado === "NO_COINCIDE_DOCUMENTO") colCheckpoint1 = pillEtapa("bad", "Documento", r.recepcionOperadorNombre);
+      else if (r && r.recepcionResultado === "NO_COINCIDE_OPERADOR") colCheckpoint1 = pillEtapa("warn", "Operador", r.recepcionOperadorNombre);
+      else if (f.estadoSync === "sincronizado") colCheckpoint1 = pillEtapa("pend", "Pendiente");
+      else colCheckpoint1 = pillEtapa("pend", "—");
+
+      let colCheckpoint2;
+      if (r && r.estatusValidacion === "VALIDADO") colCheckpoint2 = pillEtapa("ok", "Validado");
+      else if (r && r.estatusValidacion === "DISCREPANCIA") colCheckpoint2 = pillEtapa("bad", "Discrepancia");
+      else if (r && r.recepcionResultado) colCheckpoint2 = pillEtapa("pend", "En tránsito");
+      else colCheckpoint2 = pillEtapa("pend", "—");
+
+      return `
+        <tr data-id="${f.id}">
+          <td><strong>${escapeHtml(f.embarqueId || f.id)}</strong><span class="semaforo-meta">${escapeHtml(f.clienteNombre || "McCain")}${f.origenEscaneo && f.origenEscaneo.caja ? " · Caja " + escapeHtml(f.origenEscaneo.caja) : ""}</span></td>
+          <td>${colAtencion}</td>
+          <td>${colOperaciones}</td>
+          <td>${colSync}</td>
+          <td>${colCheckpoint1}</td>
+          <td>${colCheckpoint2}</td>
+        </tr>
+      `;
+    }).join("");
   }
 
   function badgeSiNo(valor, etiquetaSi, etiquetaNo) {
