@@ -235,7 +235,15 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       .semaforo-bad { background: #fee2e2; color: #991b1b; } .semaforo-bad .semaforo-dot { background: #dc2626; }
       .semaforo-pend { background: #f1f2f4; color: #4b5563; } .semaforo-pend .semaforo-dot { background: #9ca3af; }
 
-      .semaforo-titulo-fila { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      /* Punto de sincronización junto al nombre del embarque (opción 2,
+         2026-09-08) — reemplaza la columna "Sincronización" para no
+         competir visualmente con las píldoras de las demás columnas. */
+      .semaforo-punto-sync { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; vertical-align: middle; flex: none; }
+      .semaforo-punto-verde { background: #16a34a; }
+      .semaforo-punto-gris { background: #9ca3af; }
+      .semaforo-punto-rojo { background: #dc2626; }
+
+      .semaforo-titulo-fila { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
       .semaforo-titulo-fila h2 { margin: 0; }
       .semaforo-chip-espera {
         display: inline-flex; align-items: center; gap: 6px;
@@ -249,20 +257,19 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <h2>Seguimiento de embarques</h2>
         <span class="semaforo-chip-espera oculto" id="semaforo-chip-espera"><span class="semaforo-chip-dot"></span><span id="semaforo-chip-espera-texto"></span></span>
       </div>
-      <p class="nota">Vista rápida del avance de cada embarque por las 5 etapas del proceso — de un vistazo, sin tener que abrir cada tabla de abajo.</p>
+      <p class="nota">Vista rápida del avance de cada embarque por las 4 etapas del proceso — de un vistazo, sin tener que abrir cada tabla de abajo. El punto junto al embarque indica si ya sincronizó con Alanis Operadores (verde = sí, gris = en camino o esperando su turno, rojo = error).</p>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-semaforo">
           <thead>
             <tr>
               <th>Embarque</th>
               <th>Atención<br>al Cliente</th>
-              <th>2da<br>Validación</th>
-              <th>Sincroni-<br>zación</th>
-              <th>Checkpoint 1<br>Despacho</th>
-              <th>Checkpoint 2<br>Entrega</th>
+              <th>Despacho y<br>Asignación</th>
+              <th>Operador<br>Despacho</th>
+              <th>Operador<br>Pre Entrega</th>
             </tr>
           </thead>
-          <tbody id="tbody-semaforo"><tr><td colspan="6">Cargando...</td></tr></tbody>
+          <tbody id="tbody-semaforo"><tr><td colspan="5">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -568,17 +575,35 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       (meta ? `<span class="semaforo-meta">${escapeHtml(meta)}</span>` : "");
   }
 
+  // Punto de sincronización (opción 2, 2026-09-08) — reemplaza lo que antes
+  // era una columna completa de "Sincronización". Va pegado al nombre del
+  // embarque en vez de pintar la fila entera, para no competir visualmente
+  // con las píldoras de las demás columnas. Verde = ya sincronizó, rojo =
+  // error real (esto es lo que no se quería perder al simplificar), gris =
+  // cualquier otro caso normal de "todavía no le toca" (esperando 2da
+  // validación o en camino hacia Alanis).
+  function puntoSync(estadoSync) {
+    const clase = estadoSync === "sincronizado" ? "semaforo-punto-verde"
+      : estadoSync === "error" ? "semaforo-punto-rojo"
+      : "semaforo-punto-gris";
+    const titulo = estadoSync === "sincronizado" ? "Sincronizado con Alanis Operadores"
+      : estadoSync === "error" ? "Error de sincronización — revisar Apps Script"
+      : ETIQUETAS_SYNC[estadoSync] || "Esperando su turno para sincronizar";
+    return `<span class="semaforo-punto-sync ${clase}" title="${escapeHtml(titulo)}"></span>`;
+  }
+
   // "Seguimiento de embarques" — vista de un vistazo, pedida por Ivan
-  // (2026-09-08), de las 5 etapas del proceso por embarque. Se arma
-  // combinando listaHistorial (etapas 1/2/sync, aquí en ADREMATASA) con
-  // listaResultados (etapas de checkpoint 1 y 2, que vienen reflejadas
-  // desde Alanis Operadores por sincronizarResultados_/
-  // sincronizarResultadoRecepcion_ en Codigo.gs). Es solo informativa, no
-  // tiene botones — para actuar se usan las tablas de abajo.
+  // (2026-09-08), de las 4 etapas del proceso por embarque (más el punto de
+  // sincronización junto al nombre). Se arma combinando listaHistorial
+  // (etapas 1/2/sync, aquí en ADREMATASA) con listaResultados (etapas de
+  // checkpoint 1 y 2, que vienen reflejadas desde Alanis Operadores por
+  // sincronizarResultados_/sincronizarResultadoRecepcion_ en Codigo.gs). Es
+  // solo informativa, no tiene botones — para actuar se usan las tablas de
+  // abajo.
   function renderSemaforo() {
     if (!tbodySemaforo) return;
     if (listaHistorial.length === 0) {
-      tbodySemaforo.innerHTML = `<tr><td colspan="6">Todavía no hay embarques en proceso.</td></tr>`;
+      tbodySemaforo.innerHTML = `<tr><td colspan="5">Todavía no hay embarques en proceso.</td></tr>`;
       return;
     }
     const resultadosPorId = new Map(listaResultados.map(r => [r.id, r]));
@@ -588,13 +613,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
       const colAtencion = f.origenEscaneo ? pillEtapa("ok", "OK") : pillEtapa("pend", "—");
       const colOperaciones = f.validacion2 ? pillEtapa("ok", "OK") : pillEtapa("pend", "Pendiente");
-
-      let colSync;
-      if (f.estadoSync === "sincronizado") colSync = pillEtapa("ok", "Listo");
-      else if (f.estadoSync === "pendiente") colSync = pillEtapa("pend", "En proceso");
-      else if (f.estadoSync === "esperando_validacion2") colSync = pillEtapa("pend", "Esperando 2da");
-      else if (f.estadoSync === "error") colSync = pillEtapa("bad", "Error");
-      else colSync = pillEtapa("pend", "—");
 
       let colCheckpoint1;
       if (r && r.recepcionResultado === "COINCIDE") colCheckpoint1 = pillEtapa("ok", "Coincide", r.recepcionOperadorNombre);
@@ -611,10 +629,9 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
       return `
         <tr data-id="${f.id}">
-          <td><strong>${escapeHtml(f.embarqueId || f.id)}</strong><span class="semaforo-meta">${escapeHtml(f.clienteNombre || "McCain")}${f.origenEscaneo && f.origenEscaneo.caja ? " · Caja " + escapeHtml(f.origenEscaneo.caja) : ""}</span></td>
+          <td>${puntoSync(f.estadoSync)}<strong>${escapeHtml(f.embarqueId || f.id)}</strong><span class="semaforo-meta" style="margin-left:15px;">${escapeHtml(f.clienteNombre || "McCain")}${f.origenEscaneo && f.origenEscaneo.caja ? " · Caja " + escapeHtml(f.origenEscaneo.caja) : ""}</span></td>
           <td>${colAtencion}</td>
           <td>${colOperaciones}</td>
-          <td>${colSync}</td>
           <td>${colCheckpoint1}</td>
           <td>${colCheckpoint2}</td>
         </tr>
