@@ -393,6 +393,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
             : (puedeValidar1
                 ? `<button type="button" class="btn-escanear-origen">Escanear</button>`
                 : `<span class="nota" style="margin:0;">Requiere Atención al Cliente</span>`)}
+          ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. Solo para pruebas.">Borrar (prueba)</button>` : ""}
         </td>
       </tr>
     `).join("");
@@ -416,6 +417,11 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         });
       });
     });
+
+    // Borrado de prueba — TEMPORAL (ver nota completa en renderHistorial).
+    // Aquí también aplica porque un embarque puede estar sin escanear
+    // todavía (sin Historial) y aun así ser puro dato de prueba a limpiar.
+    if (esAdmin) wireBorrarPrueba(tbodyPendientes, () => listaPendientes);
   }
 
   function renderPendientesValidacion2() {
@@ -554,39 +560,46 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     // aquí (verificaciones_cfdi_local / embarques_pendientes_origen) como
     // en repositorio_mccain (Alanis Operadores).
     //
-    // QUITAR este bloque cuando termine la fase de pruebas: este listener,
-    // el botón de arriba, la función procesarSolicitudesBorradoPrueba_() en
+    // QUITAR este bloque cuando termine la fase de pruebas: wireBorrarPrueba(),
+    // sus llamadas en renderHistorial/renderPendientesOrigen, los botones
+    // correspondientes, la función procesarSolicitudesBorradoPrueba_() en
     // Codigo.gs y el match /solicitudes_borrado_prueba/ de firestore.rules.
     // ------------------------------------------------------------------
-    if (esAdmin) {
-      tbodyHistorial.querySelectorAll(".btn-borrar-prueba").forEach(btn => {
-        btn.addEventListener("click", async () => {
-          const id = btn.closest("tr").dataset.id;
-          const f = listaHistorial.find(x => x.id === id);
-          const etiqueta = (f && f.embarqueId) || id;
-          const confirmado = window.confirm(
-            `¿Borrar por completo el embarque ${etiqueta}?\n\n` +
-            `Esto lo elimina de ADREMATASA y de Alanis Operadores (repositorio_mccain). ` +
-            `No es reversible, y no es instantáneo: se ejecuta en el siguiente ciclo de ` +
-            `sincronización (o de inmediato si alguien corre sync() a mano).\n\n` +
-            `Úsalo solo con embarques de prueba, nunca con un embarque real.`
-          );
-          if (!confirmado) return;
-          btn.disabled = true;
-          try {
-            await setDoc(doc(db, "solicitudes_borrado_prueba", id), {
-              embarqueId: id,
-              solicitadoPor: uid,
-              timestamp: serverTimestamp()
-            });
-            btn.textContent = "Solicitado ✓";
-          } catch (e) {
-            btn.disabled = false;
-            window.alert("No se pudo solicitar el borrado: " + e.message);
-          }
-        });
+    if (esAdmin) wireBorrarPrueba(tbodyHistorial, () => listaHistorial);
+  }
+
+  // Engancha el botón "Borrar (prueba)" dentro de un <tbody> ya dibujado.
+  // listaFn() debe devolver el arreglo de embarques de esa tabla en ESE
+  // momento (no una copia vieja), para poder mostrar el embarqueId en la
+  // confirmación aunque la tabla se haya vuelto a dibujar entre medio.
+  function wireBorrarPrueba(tbody, listaFn) {
+    tbody.querySelectorAll(".btn-borrar-prueba").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.closest("tr").dataset.id;
+        const item = listaFn().find(x => x.id === id);
+        const etiqueta = (item && (item.embarqueId || item.shipment)) || id;
+        const confirmado = window.confirm(
+          `¿Borrar por completo el embarque ${etiqueta}?\n\n` +
+          `Esto lo elimina de ADREMATASA y de Alanis Operadores (repositorio_mccain). ` +
+          `No es reversible, y no es instantáneo: se ejecuta en el siguiente ciclo de ` +
+          `sincronización (o de inmediato si alguien corre sync() a mano).\n\n` +
+          `Úsalo solo con embarques de prueba, nunca con un embarque real.`
+        );
+        if (!confirmado) return;
+        btn.disabled = true;
+        try {
+          await setDoc(doc(db, "solicitudes_borrado_prueba", id), {
+            embarqueId: id,
+            solicitadoPor: uid,
+            timestamp: serverTimestamp()
+          });
+          btn.textContent = "Solicitado ✓";
+        } catch (e) {
+          btn.disabled = false;
+          window.alert("No se pudo solicitar el borrado: " + e.message);
+        }
       });
-    }
+    });
   }
 
   // ---- Modal de escaneo (compartido entre origen / corrección / validación 2) ----
