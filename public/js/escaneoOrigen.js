@@ -251,6 +251,84 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         padding: 4px 11px; border-radius: 999px;
       }
       .semaforo-chip-espera .semaforo-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: #6366f1; }
+
+      /* --------------------------------------------------------------
+         Corrección de McCain (nuevo, 2026-09-09, pedido de Ivan):
+         "no puede ser nada más que cambie de color, debe ser algo más
+         contundente". Dos tratamientos:
+         1) Banner en la fila de pendientes cuando NADIE ha validado
+            todavía — bloquea el botón de escanear hasta que alguien
+            reconoce explícitamente la corrección.
+         2) Fila con chip rojo + overlay de pantalla completa que
+            INTERRUMPE, cuando la corrección llegó DESPUÉS de que ya
+            había una validación — no se cierra solo, solo con el botón.
+         -------------------------------------------------------------- */
+      .correccion-banner {
+        background: #fdeceb;
+        border: 1px solid #f3c9c5;
+        border-radius: 10px;
+        padding: 12px 14px;
+        margin: 6px 0;
+      }
+      .correccion-banner-titulo {
+        display: flex; align-items: center; gap: 8px;
+        font-size: 12.5px; font-weight: 700; color: #c8362a; letter-spacing: 0.02em;
+        margin-bottom: 8px;
+      }
+      .correccion-banner-titulo svg { width: 16px; height: 16px; flex: none; }
+      .correccion-banner-datos {
+        display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+        font-size: 13px; color: #1c1a17; margin-bottom: 8px;
+      }
+      .correccion-caja-cambio { display: inline-flex; align-items: center; gap: 8px; }
+      .correccion-caja-anterior { text-decoration: line-through; color: #9c9c9c; }
+      .correccion-caja-nueva { color: #c8362a; font-weight: 700; }
+      .correccion-banner-correo {
+        background: #fff; border: 1px solid #f3c9c5; border-radius: 8px;
+        padding: 8px 10px; font-size: 11.5px; color: #6b6558; margin-bottom: 10px; line-height: 1.5;
+      }
+      .correccion-banner-acciones { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .correccion-banner-acciones button[disabled] { opacity: 0.5; cursor: not-allowed; }
+      .fila-correccion-post td { background: #fff8f7; }
+      .correccion-chip-post {
+        display: inline-block; margin-top: 3px; background: #fdeceb; color: #c8362a;
+        font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; letter-spacing: 0.02em;
+      }
+
+      .correccion-critica-overlay {
+        position: fixed; inset: 0; z-index: 9999;
+        display: flex; align-items: center; justify-content: center; padding: 20px;
+      }
+      .correccion-critica-fondo { position: absolute; inset: 0; background: rgba(20,16,12,0.6); }
+      .correccion-critica-tarjeta {
+        position: relative; background: #fff; border-radius: 16px; max-width: 480px; width: 100%;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.35); overflow: hidden;
+      }
+      .correccion-critica-header {
+        background: #c8362a; padding: 24px 28px 18px; display: flex; flex-direction: column;
+        align-items: center; text-align: center; gap: 10px; color: #fff;
+      }
+      .correccion-critica-header svg { width: 26px; height: 26px; }
+      .correccion-critica-header-icono {
+        width: 48px; height: 48px; border-radius: 50%; background: rgba(255,255,255,0.16);
+        display: flex; align-items: center; justify-content: center;
+      }
+      .correccion-critica-header-titulo { font-size: 17px; font-weight: 800; letter-spacing: 0.01em; line-height: 1.3; }
+      .correccion-critica-cuerpo { padding: 22px 28px 26px; }
+      .correccion-critica-texto { font-size: 13.5px; color: #3a362f; line-height: 1.7; margin-bottom: 16px; }
+      .correccion-critica-cambio {
+        background: #fdeceb; border: 1px solid #f3c9c5; border-radius: 10px;
+        padding: 12px 14px; margin-bottom: 16px; display: flex; align-items: center;
+        justify-content: center; gap: 12px; font-size: 13px;
+      }
+      .correccion-critica-cambio .correccion-caja-nueva { font-size: 15px; }
+      .correccion-critica-nota { font-size: 12.5px; color: #6b6558; line-height: 1.6; margin-bottom: 18px; }
+      .correccion-critica-boton {
+        background: #1c1a17; color: #fff; text-align: center; padding: 13px; border-radius: 10px;
+        font-size: 13.5px; font-weight: 700; letter-spacing: 0.01em; border: none; width: 100%; cursor: pointer;
+      }
+      .correccion-critica-boton:hover { background: #000; }
+      .correccion-critica-pie { text-align: center; font-size: 11px; color: #9c9895; margin-top: 10px; line-height: 1.5; }
     </style>
     <section class="panel">
       <div class="semaforo-titulo-fila">
@@ -373,12 +451,45 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         </div>
       </div>
     </div>
+
+    <div id="overlay-correccion-critica" class="correccion-critica-overlay oculto" data-abierto="0">
+      <div class="correccion-critica-fondo"></div>
+      <div class="correccion-critica-tarjeta">
+        <div class="correccion-critica-header">
+          <div class="correccion-critica-header-icono">${ICONO_ALERTA}</div>
+          <div class="correccion-critica-header-titulo">CORRECCIÓN DE MCCAIN<br>REQUIERE ATENCIÓN</div>
+        </div>
+        <div class="correccion-critica-cuerpo">
+          <div class="correccion-critica-texto" id="correccion-critica-texto"></div>
+          <div class="correccion-critica-cambio">
+            <span class="correccion-caja-anterior" id="correccion-critica-caja-anterior"></span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c8362a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+            <span class="correccion-caja-nueva" id="correccion-critica-caja-nueva"></span>
+          </div>
+          <div class="correccion-critica-nota">La validación anterior de Atención al Cliente ya no es válida. El embarque regresó a "pendientes de origen" — hay que volver a escanear el CFDI contra la caja correcta antes de continuar.</div>
+          <button type="button" class="correccion-critica-boton" id="correccion-critica-entendido">Entendido — ir a re-validar</button>
+          <div class="correccion-critica-pie">Este aviso vuelve a aparecer si recargas la página mientras el embarque siga sin re-validarse.</div>
+        </div>
+      </div>
+    </div>
   `;
 
   let listaPendientes = [];
   let listaHistorial = [];
   let listaResultados = [];
   let listaOperadores = [];
+
+  // Corrección de McCain (2026-09-09):
+  // - correccionesReconocidas: ids de embarques cuyo banner de corrección
+  //   (caso "nadie ha validado todavía") ya fue revisado en esta sesión —
+  //   desbloquea el botón de Escanear para ese embarque.
+  // - correccionesCriticasVistas / colaCorreccionesCriticas: manejo del
+  //   overlay de pantalla completa (caso "ya había validación") — se
+  //   muestra una vez por embarque por carga de página (no en cada
+  //   re-render, sería insoportable), y en cola si llegan varias a la vez.
+  let correccionesReconocidas = new Set();
+  let correccionesCriticasVistas = new Set();
+  let colaCorreccionesCriticas = [];
 
   const errorPendientesDiv = contenedor.querySelector("#pendientes-origen-error");
   const errorValidacion2Div = contenedor.querySelector("#pendientes-validacion2-error");
@@ -442,9 +553,8 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   // de "Pendientes de primera validación" de abajo, a la que apunta.
   // Se actualiza aquí (no en renderSemaforo) porque depende de
   // listaPendientes, no de listaHistorial/listaResultados.
-  function renderChipEsperaInicio() {
+  function renderChipEsperaInicio(n) {
     if (!chipEsperaSpan || !chipEsperaTexto) return;
-    const n = listaPendientes.length;
     if (n === 0) {
       chipEsperaSpan.classList.add("oculto");
       return;
@@ -453,31 +563,168 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     chipEsperaSpan.classList.remove("oculto");
   }
 
-  function renderPendientes() {
-    renderChipEsperaInicio();
-    if (!tbodyPendientes) return; // esta sección no se dibujó para este usuario
-    if (listaPendientes.length === 0) {
-      tbodyPendientes.innerHTML = `<tr><td colspan="6">No hay embarques pendientes.</td></tr>`;
-      return;
-    }
-    const idsEscaneados = new Set(listaHistorial.map(f => f.id));
-    tbodyPendientes.innerHTML = listaPendientes.map(p => `
+  // Fila de "Escanear (prueba)" (borrar) reutilizable en las 3 variantes de
+  // fila de abajo.
+  function accionesPendiente(p, escanearHtml) {
+    return `
+      <td class="acciones">
+        ${escanearHtml}
+        ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. Solo para pruebas.">Borrar (prueba)</button>` : ""}
+      </td>
+    `;
+  }
+
+  function botonEscanearHtml() {
+    return puedeValidar1
+      ? `<button type="button" class="btn-escanear-origen">Escanear</button>`
+      : `<span class="nota" style="margin:0;">Requiere Atención al Cliente</span>`;
+  }
+
+  function filaPendienteNormal(p) {
+    return `
       <tr data-id="${p.id}">
         <td>${escapeHtml(p.shipment || "—")}</td>
         <td>${escapeHtml(p.ocCliente || "—")}</td>
         <td>${escapeHtml(p.clienteNombre || "—")}</td>
         <td>${escapeHtml(p.caja || "—")}</td>
         <td>${escapeHtml(p.fechaEntrega || "—")}</td>
-        <td class="acciones">
-          ${idsEscaneados.has(p.id)
-            ? `<span class="nota" style="margin:0;">Ya escaneado</span>`
-            : (puedeValidar1
-                ? `<button type="button" class="btn-escanear-origen">Escanear</button>`
-                : `<span class="nota" style="margin:0;">Requiere Atención al Cliente</span>`)}
-          ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. Solo para pruebas.">Borrar (prueba)</button>` : ""}
+        ${accionesPendiente(p, botonEscanearHtml())}
+      </tr>
+    `;
+  }
+
+  // Caso 1 (pedido de Ivan, 2026-09-09): McCain corrigió la caja/remolque y
+  // TODAVÍA NADIE había validado este embarque. No basta con cambiar de
+  // color — el botón de Escanear queda bloqueado hasta que alguien haga
+  // clic en "Revisar corrección" (correccionesReconocidas), forzando a que
+  // se detengan a ver cuál es el dato correcto antes de poder avanzar.
+  function filaCorreccionPreValidacion(p) {
+    const reconocida = correccionesReconocidas.has(p.id);
+    const correo = p.correccionAsuntoCorreo ? escapeHtml(p.correccionAsuntoCorreo) : "";
+    const escanearHtml = puedeValidar1
+      ? `<button type="button" class="btn-escanear-origen" ${reconocida ? "" : "disabled"}>Escanear</button>`
+      : `<span class="nota" style="margin:0;">Requiere Atención al Cliente</span>`;
+    return `
+      <tr data-id="${p.id}">
+        <td colspan="6" style="padding:0;">
+          <div class="correccion-banner">
+            <div class="correccion-banner-titulo">${ICONO_ALERTA} MCCAIN CORRIGIÓ ESTE EMBARQUE — VERIFICA ANTES DE CONTINUAR</div>
+            <div class="correccion-banner-datos">
+              <span>${escapeHtml(p.shipment || p.ocCliente || p.id)} · ${escapeHtml(p.clienteNombre || "McCain")}</span>
+              <span class="correccion-caja-cambio">
+                <span class="correccion-caja-anterior">${escapeHtml(p.correccionCajaAnterior || "—")}</span>
+                →
+                <span class="correccion-caja-nueva">${escapeHtml(p.correccionCajaNueva || p.caja || "—")}</span>
+              </span>
+            </div>
+            ${correo ? `<div class="correccion-banner-correo">Corrección recibida${p.correccionDetectadaEn ? " · " + formatoFecha(p.correccionDetectadaEn) : ""}: "${correo}"</div>` : ""}
+            <div class="correccion-banner-acciones">
+              ${escanearHtml}
+              ${puedeValidar1
+                ? (reconocida
+                    ? `<span class="nota" style="margin:0;">Corrección revisada — ya puedes escanear</span>`
+                    : `<button type="button" class="peligro btn-revisar-correccion">Revisar corrección</button>`)
+                : ""}
+              ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. Solo para pruebas.">Borrar (prueba)</button>` : ""}
+            </div>
+          </div>
         </td>
       </tr>
-    `).join("");
+    `;
+  }
+
+  // Caso 2: McCain corrigió DESPUÉS de que ya había al menos una
+  // validación hecha — el Apps Script/VBA ya forzó que este embarque
+  // regresara a pendientes (ver Codigo.gs, correccionPostValidacion). Aquí
+  // ya no hace falta bloquear el botón (el overlay de pantalla completa,
+  // más abajo, ya se encargó de interrumpir al usuario) — pero la fila
+  // sigue marcada en rojo con un chip para que quede claro que es un
+  // RE-escaneo por corrección, no un embarque nuevo.
+  function filaCorreccionPostValidacion(p) {
+    const cajaHtml = p.correccionCajaAnterior
+      ? `<span class="correccion-caja-anterior">${escapeHtml(p.correccionCajaAnterior)}</span> <span class="correccion-caja-nueva">→ ${escapeHtml(p.caja || p.correccionCajaNueva || "—")}</span>`
+      : escapeHtml(p.caja || "—");
+    return `
+      <tr data-id="${p.id}" class="fila-correccion-post">
+        <td>${escapeHtml(p.shipment || "—")}</td>
+        <td>${escapeHtml(p.ocCliente || "—")}</td>
+        <td>${escapeHtml(p.clienteNombre || "—")}<br><span class="correccion-chip-post">CORRECCIÓN — RE-VALIDAR</span></td>
+        <td>${cajaHtml}</td>
+        <td>${escapeHtml(p.fechaEntrega || "—")}</td>
+        ${accionesPendiente(p, botonEscanearHtml())}
+      </tr>
+    `;
+  }
+
+  // Revisa si hay correcciones "fuertes" (post-validación) nuevas que
+  // todavía no se le muestren al usuario esta sesión, y encola el overlay
+  // de pantalla completa para cada una. Se llama en cada render de
+  // pendientes — pero solo agrega a la cola una vez por id (no reabre el
+  // overlay si el usuario ya lo cerró en esta sesión), y solo mientras el
+  // embarque SIGA necesitando corrección (si ya se re-validó y desapareció
+  // de pendientesVisibles, se saca de la cola sin mostrarlo).
+  function verificarCorreccionesPostValidacion(pendientesVisibles) {
+    if (!overlayCorreccionCritica) return;
+    const criticos = pendientesVisibles.filter(p => p.correccionPostValidacion);
+    const idsActivos = new Set(criticos.map(p => p.id));
+    colaCorreccionesCriticas = colaCorreccionesCriticas.filter(id => idsActivos.has(id));
+    criticos.forEach(p => {
+      if (!correccionesCriticasVistas.has(p.id) && !colaCorreccionesCriticas.includes(p.id)) {
+        colaCorreccionesCriticas.push(p.id);
+      }
+    });
+    mostrarSiguienteCorreccionCritica();
+  }
+
+  function mostrarSiguienteCorreccionCritica() {
+    if (!overlayCorreccionCritica) return;
+    if (overlayCorreccionCritica.dataset.abierto === "1") return; // ya hay uno mostrándose, no interrumpir
+    if (colaCorreccionesCriticas.length === 0) {
+      overlayCorreccionCritica.classList.add("oculto");
+      return;
+    }
+    const id = colaCorreccionesCriticas[0];
+    const p = listaPendientes.find(x => x.id === id);
+    if (!p) {
+      // ya no está en pendientes (se resolvió entre medio) — lo quitamos y probamos con el siguiente
+      colaCorreccionesCriticas.shift();
+      mostrarSiguienteCorreccionCritica();
+      return;
+    }
+    overlayCorreccionCritica.dataset.abierto = "1";
+    overlayCorreccionCritica.dataset.idActual = id;
+    const nombreEmbarque = p.shipment || p.ocCliente || id;
+    textoCorreccionCritica.textContent = `El embarque ${nombreEmbarque} ya fue validado con la caja ${p.correccionCajaAnterior || "anterior"}. McCain corrigió esa información — la caja correcta ahora es ${p.correccionCajaNueva || p.caja || "—"}.`;
+    cajaAnteriorCorreccionCritica.textContent = p.correccionCajaAnterior || "—";
+    cajaNuevaCorreccionCritica.textContent = p.correccionCajaNueva || p.caja || "—";
+    overlayCorreccionCritica.classList.remove("oculto");
+  }
+
+  function renderPendientes() {
+    // Un embarque desaparece de esta tabla en cuanto ya tiene un registro
+    // en el historial (igual que en segunda y tercera validación) — SALVO
+    // que McCain lo haya corregido DESPUÉS de esa validación
+    // (correccionPostValidacion), en cuyo caso Codigo.gs/el VBA ya lo
+    // regresaron aquí a propósito y no debe desaparecer hasta re-validarse
+    // (pedido de Ivan, 2026-09-09: "mejor que desaparezcan como lo hacen
+    // los registros en las secciones de la segunda y tercera validación").
+    const idsEscaneados = new Set(listaHistorial.map(f => f.id));
+    const pendientesVisibles = listaPendientes.filter(p => !idsEscaneados.has(p.id) || p.correccionPostValidacion);
+
+    renderChipEsperaInicio(pendientesVisibles.filter(p => !p.correccionPostValidacion).length);
+    if (puedeValidar1) verificarCorreccionesPostValidacion(pendientesVisibles);
+
+    if (!tbodyPendientes) return; // esta sección no se dibujó para este usuario
+    if (pendientesVisibles.length === 0) {
+      tbodyPendientes.innerHTML = `<tr><td colspan="6">No hay embarques pendientes.</td></tr>`;
+      return;
+    }
+
+    tbodyPendientes.innerHTML = pendientesVisibles.map(p => {
+      if (p.correccionPostValidacion) return filaCorreccionPostValidacion(p);
+      if (p.correccionCajaAnterior || p.correccionCajaNueva) return filaCorreccionPreValidacion(p);
+      return filaPendienteNormal(p);
+    }).join("");
 
     tbodyPendientes.querySelectorAll(".btn-escanear-origen").forEach(btn => {
       btn.addEventListener("click", () => {
@@ -499,10 +746,18 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       });
     });
 
+    tbodyPendientes.querySelectorAll(".btn-revisar-correccion").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.closest("tr").dataset.id;
+        correccionesReconocidas.add(id);
+        renderPendientes();
+      });
+    });
+
     // Borrado de prueba — TEMPORAL (ver nota completa en renderHistorial).
     // Aquí también aplica porque un embarque puede estar sin escanear
     // todavía (sin Historial) y aun así ser puro dato de prueba a limpiar.
-    if (esAdmin) wireBorrarPrueba(tbodyPendientes, () => listaPendientes);
+    if (esAdmin) wireBorrarPrueba(tbodyPendientes, () => pendientesVisibles);
   }
 
   function renderPendientesValidacion2() {
@@ -784,6 +1039,12 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const botonOverlayContinuar = contenedor.querySelector("#resultado-escaneo-continuar");
   const botonOverlayVolver = contenedor.querySelector("#resultado-escaneo-volver");
 
+  const overlayCorreccionCritica = contenedor.querySelector("#overlay-correccion-critica");
+  const textoCorreccionCritica = contenedor.querySelector("#correccion-critica-texto");
+  const cajaAnteriorCorreccionCritica = contenedor.querySelector("#correccion-critica-caja-anterior");
+  const cajaNuevaCorreccionCritica = contenedor.querySelector("#correccion-critica-caja-nueva");
+  const botonCorreccionCriticaEntendido = contenedor.querySelector("#correccion-critica-entendido");
+
   botonOverlayContinuar.addEventListener("click", () => {
     detenerAlarmaDiscrepancia();
     overlayResultado.classList.add("oculto");
@@ -793,6 +1054,26 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     overlayResultado.classList.add("oculto");
     volverAEscanear();
   });
+
+  // "Entendido — ir a re-validar": única forma de cerrar este aviso (no hay
+  // clic-afuera ni ESC) — pedido explícito de Ivan ("debe intervenirse el
+  // proceso"). Al cerrarlo, marca ese embarque como ya visto en esta
+  // sesión, pasa al siguiente de la cola si hay más, y lleva la vista hasta
+  // su fila en la tabla de pendientes para que sea obvio qué re-escanear.
+  if (botonCorreccionCriticaEntendido) {
+    botonCorreccionCriticaEntendido.addEventListener("click", () => {
+      const id = overlayCorreccionCritica.dataset.idActual;
+      if (id) correccionesCriticasVistas.add(id);
+      overlayCorreccionCritica.dataset.abierto = "0";
+      colaCorreccionesCriticas.shift();
+      overlayCorreccionCritica.classList.add("oculto");
+      if (id && tbodyPendientes) {
+        const fila = tbodyPendientes.querySelector('tr[data-id="' + id + '"]');
+        if (fila && fila.scrollIntoView) fila.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      mostrarSiguienteCorreccionCritica();
+    });
+  }
 
   let embarqueActual = null;
   let modoActual = "origen"; // "origen" | "correccion" | "validacion2"
