@@ -858,7 +858,24 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     }
     const resultadosPorId = new Map(listaResultados.map(r => [r.id, r]));
 
-    tbodySemaforo.innerHTML = listaHistorial.map(f => {
+    // Pedido de Ivan (2026-09-09): los embarques que YA completaron las 4
+    // etapas (Checkpoint 2 / Operador Pre Entrega ya con VALIDADO o
+    // DISCREPANCIA) se van al fondo de la tabla — arriba se quedan los que
+    // todavía necesitan que alguien haga algo (cualquier etapa pendiente,
+    // incluyendo "En tránsito"). Dentro de cada grupo se conserva el orden
+    // de listaHistorial (más reciente primero) — Array.prototype.sort es
+    // estable en los navegadores modernos, así que basta con ordenar por
+    // "completado" sin tocar el resto del criterio.
+    const historialOrdenado = listaHistorial.slice().sort((a, b) => {
+      const ra = resultadosPorId.get(a.id);
+      const rb = resultadosPorId.get(b.id);
+      const completadoA = !!(ra && (ra.estatusValidacion === "VALIDADO" || ra.estatusValidacion === "DISCREPANCIA"));
+      const completadoB = !!(rb && (rb.estatusValidacion === "VALIDADO" || rb.estatusValidacion === "DISCREPANCIA"));
+      if (completadoA === completadoB) return 0;
+      return completadoA ? 1 : -1;
+    });
+
+    tbodySemaforo.innerHTML = historialOrdenado.map(f => {
       const r = resultadosPorId.get(f.id);
 
       const colAtencion = f.origenEscaneo ? pillEtapa("ok", "OK") : pillEtapa("pend", "—");
