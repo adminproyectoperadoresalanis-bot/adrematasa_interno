@@ -842,6 +842,19 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     return { clase: "semaforo-embarque-gris", titulo: ETIQUETAS_SYNC[estadoSync] || "Esperando su turno para sincronizar" };
   }
 
+  // Cuenta cuántas de las 4 etapas ya están cumplidas para un embarque —
+  // usado solo para ORDENAR el semáforo (ver renderSemaforo), no se
+  // muestra como columna ni badge. DISCREPANCIA en cualquiera de los 2
+  // checkpoints del operador NO suma (es un error, no un avance).
+  function etapasCumplidas_(f, r) {
+    let n = 0;
+    if (f.origenEscaneo) n++;
+    if (f.validacion2) n++;
+    if (r && r.recepcionResultado === "COINCIDE") n++;
+    if (r && r.estatusValidacion === "VALIDADO") n++;
+    return n;
+  }
+
   // "Seguimiento de embarques" — vista de un vistazo, pedida por Ivan
   // (2026-09-08), de las 4 etapas del proceso por embarque (más el punto de
   // sincronización junto al nombre). Se arma combinando listaHistorial
@@ -858,21 +871,18 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     }
     const resultadosPorId = new Map(listaResultados.map(r => [r.id, r]));
 
-    // Pedido de Ivan (2026-09-09): los embarques que YA completaron las 4
-    // etapas (Checkpoint 2 / Operador Pre Entrega ya con VALIDADO o
-    // DISCREPANCIA) se van al fondo de la tabla — arriba se quedan los que
-    // todavía necesitan que alguien haga algo (cualquier etapa pendiente,
-    // incluyendo "En tránsito"). Dentro de cada grupo se conserva el orden
-    // de listaHistorial (más reciente primero) — Array.prototype.sort es
-    // estable en los navegadores modernos, así que basta con ordenar por
-    // "completado" sin tocar el resto del criterio.
+    // Pedido de Ivan (2026-09-09): arriba los embarques con MENOS etapas
+    // cumplidas, abajo los que ya llevan más avanzado — así el enfoque cae
+    // naturalmente en lo pendiente. "Cumplida" cuenta las 4 etapas por
+    // separado (no solo la última): Atención al Cliente (origenEscaneo),
+    // Despacho y Asignación (validacion2), Operador Despacho (COINCIDE) y
+    // Operador Pre Entrega (VALIDADO). DISCREPANCIA en cualquiera de los 2
+    // checkpoints del operador NO cuenta como cumplida — es un error, no un
+    // avance (confirmado por Ivan). En empate se conserva el orden que ya
+    // traía listaHistorial (más reciente primero) — Array.prototype.sort es
+    // estable en los navegadores modernos.
     const historialOrdenado = listaHistorial.slice().sort((a, b) => {
-      const ra = resultadosPorId.get(a.id);
-      const rb = resultadosPorId.get(b.id);
-      const completadoA = !!(ra && (ra.estatusValidacion === "VALIDADO" || ra.estatusValidacion === "DISCREPANCIA"));
-      const completadoB = !!(rb && (rb.estatusValidacion === "VALIDADO" || rb.estatusValidacion === "DISCREPANCIA"));
-      if (completadoA === completadoB) return 0;
-      return completadoA ? 1 : -1;
+      return etapasCumplidas_(a, resultadosPorId.get(a.id)) - etapasCumplidas_(b, resultadosPorId.get(b.id));
     });
 
     tbodySemaforo.innerHTML = historialOrdenado.map(f => {
