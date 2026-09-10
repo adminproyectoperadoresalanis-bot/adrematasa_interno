@@ -575,7 +575,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       <div class="qr-interno-tarjeta">
         <h2>SIN FACTURA — CONTROL INTERNO</h2>
         <p id="qr-interno-info"></p>
-        <div class="qr-interno-imagen-wrap"><canvas id="qr-interno-canvas"></canvas></div>
+        <div class="qr-interno-imagen-wrap"><div id="qr-interno-canvas"></div></div>
         <div class="qr-interno-etiqueta-impresa" id="qr-interno-etiqueta"></div>
         <p class="nota" style="text-align:center;">Imprime esta etiqueta e intégrala al set de documentos de este embarque. No es una factura — es un control interno de Alanis para poder seguir el proceso de escaneo en cada checkpoint.</p>
         <div class="qr-interno-acciones">
@@ -1292,7 +1292,10 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
   const overlayQrInterno = contenedor.querySelector("#overlay-qr-interno");
   const infoQrInterno = contenedor.querySelector("#qr-interno-info");
-  const canvasQrInterno = contenedor.querySelector("#qr-interno-canvas");
+  // Contenedor (no un <canvas>) — la librería qrcodejs dibuja DENTRO de un
+  // div que se le pasa, no sobre un canvas que uno ya tenga (ver
+  // dibujarQrInterno más abajo).
+  const contenedorQrInterno = contenedor.querySelector("#qr-interno-canvas");
   const etiquetaQrInterno = contenedor.querySelector("#qr-interno-etiqueta");
   const botonCerrarQrInterno = contenedor.querySelector("#qr-interno-cerrar");
   const botonImprimirQrInterno = contenedor.querySelector("#qr-interno-imprimir");
@@ -1339,30 +1342,40 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     overlayQrInterno.classList.remove("oculto");
   }
 
+  // Instancia de qrcodejs reutilizada entre generaciones (evita que se
+  // vayan acumulando QR viejos dentro del mismo contenedor cada vez que se
+  // abre este overlay) — se crea la primera vez, después solo se llama
+  // .makeCode() para cambiar el texto.
+  let instanciaQrInterno = null;
+
   function dibujarQrInterno(texto) {
-    if (typeof window.QRCode === "undefined" || !window.QRCode.toCanvas) {
+    contenedorQrInterno.innerHTML = "";
+    if (typeof window.QRCode === "undefined") {
       // Librería de generación de QR no cargada — ver nota de despliegue
-      // (falta agregar el <script> de la librería qrcode en el HTML, igual
-      // que ya está agregado el de Html5Qrcode para leer). Sin ella no hay
-      // forma de dibujar el código, pero al menos se deja el texto visible
-      // para poder copiarlo/depurar.
-      const ctx2d = canvasQrInterno.getContext && canvasQrInterno.getContext("2d");
-      canvasQrInterno.width = 280;
-      canvasQrInterno.height = 80;
-      if (ctx2d) {
-        ctx2d.clearRect(0, 0, 280, 80);
-        ctx2d.font = "12px sans-serif";
-        ctx2d.fillStyle = "#c8362a";
-        ctx2d.fillText("No se pudo cargar el generador de QR.", 6, 20);
-        ctx2d.fillText("Revisa que la librería 'qrcode' esté", 6, 38);
-        ctx2d.fillText("agregada en el HTML.", 6, 56);
-      }
+      // (falta agregar el <script> de la librería qrcodejs en el HTML,
+      // igual que ya está agregado el de Html5Qrcode para leer — son dos
+      // librerías distintas, una lee QR y la otra los genera). Sin ella no
+      // hay forma de dibujar el código, pero al menos se deja el texto
+      // visible para poder copiarlo/depurar mientras tanto.
+      instanciaQrInterno = null;
+      const aviso = document.createElement("p");
+      aviso.style.cssText = "color:#c8362a;font-size:12px;text-align:left;line-height:1.5;";
+      aviso.textContent = "No se pudo cargar el generador de QR. Revisa que la librería 'qrcodejs' esté agregada en el HTML. Texto del código: " + texto;
+      contenedorQrInterno.appendChild(aviso);
       return;
     }
-    window.QRCode.toCanvas(canvasQrInterno, texto, { width: 240, margin: 1 }, (err) => {
-      if (err) {
-        console.error("No se pudo dibujar el QR interno:", err);
-      }
+    // qrcodejs (davidshimjs) dibuja DENTRO del contenedor que se le pasa —
+    // no existe un método para "redibujar sobre un canvas ya existente"
+    // como en otras librerías, así que si ya había una instancia (de un QR
+    // anterior) simplemente se descarta y se crea una nueva sobre el
+    // contenedor recién vaciado arriba.
+    instanciaQrInterno = new window.QRCode(contenedorQrInterno, {
+      text: texto,
+      width: 220,
+      height: 220,
+      colorDark: "#1c1a17",
+      colorLight: "#ffffff",
+      correctLevel: window.QRCode.CorrectLevel.M
     });
   }
 
