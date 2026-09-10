@@ -410,6 +410,29 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         body.imprimiendo-qr-interno .qr-interno-acciones { display: none !important; }
         body.imprimiendo-qr-interno .qr-interno-tarjeta { box-shadow: none; position: absolute; top: 0; left: 0; }
       }
+
+      /* ----------------------------------------------------------------
+         Buscador de operador (combobox) en 2da validación (2026-09-10,
+         pedido de Ivan): el <select> nativo con todo el catálogo se hacía
+         interminable para buscar uno a mano. Es un input de texto + lista
+         filtrada tipo "LIKE" (sin distinguir mayúsculas/acentos) + un
+         input oculto que guarda el uid elegido — guardarEscaneo() sigue
+         leyendo #modal-confirmar-operador exactamente igual que antes. */
+      .combo-operador { position: relative; }
+      .combo-operador-lista {
+        position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0;
+        max-height: 220px; overflow-y: auto; margin: 0; padding: 4px;
+        list-style: none; background: #fff; border: 1px solid #ded9d1;
+        border-radius: 10px; box-shadow: 0 10px 30px rgba(20,16,12,0.15);
+      }
+      .combo-operador-lista li {
+        padding: 8px 10px; border-radius: 7px; font-size: 13.5px; color: #1c1a17;
+        cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .combo-operador-lista li:hover,
+      .combo-operador-lista li.combo-operador-activa { background: #eef2ff; color: #3730a3; }
+      .combo-operador-lista li.combo-operador-vacia { color: #9c9895; cursor: default; font-style: italic; }
+      .combo-operador-lista li.combo-operador-vacia:hover { background: none; }
     </style>
     <section class="panel">
       <div class="semaforo-titulo-fila">
@@ -500,11 +523,12 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
             </label>
           </div>
           <div class="modal-fila oculto" id="modal-operador-wrap">
-            <label>Operador asignado a este embarque (obligatorio)
-              <select id="modal-confirmar-operador">
-                <option value="">Selecciona un operador…</option>
-              </select>
-            </label>
+            <label for="modal-confirmar-operador-buscar">Operador asignado a este embarque (obligatorio)</label>
+            <div class="combo-operador" id="combo-operador">
+              <input type="text" id="modal-confirmar-operador-buscar" autocomplete="off" placeholder="Escribe nombre o número de operador…">
+              <input type="hidden" id="modal-confirmar-operador">
+              <ul class="combo-operador-lista oculto" id="combo-operador-lista"></ul>
+            </div>
           </div>
           <div id="modal-confirmar-error" class="error"></div>
           <div class="modal-acciones">
@@ -1243,7 +1267,14 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const inputConfirmarRfc = contenedor.querySelector("#modal-confirmar-rfc");
   const inputConfirmarCaja = contenedor.querySelector("#modal-confirmar-caja");
   const operadorWrapDiv = contenedor.querySelector("#modal-operador-wrap");
+  // #modal-confirmar-operador conserva el mismo id de siempre, ahora en un
+  // <input type="hidden"> — así guardarEscaneo() (más abajo) sigue leyendo
+  // selectOperador.value sin ningún cambio. El buscador tipo LIKE vive en
+  // los dos elementos de al lado (ver bloque "Buscador de operador" más
+  // abajo, junto al de QR interno).
   const selectOperador = contenedor.querySelector("#modal-confirmar-operador");
+  const inputBuscarOperador = contenedor.querySelector("#modal-confirmar-operador-buscar");
+  const listaOperadorEl = contenedor.querySelector("#combo-operador-lista");
   const confirmarErrorDiv = contenedor.querySelector("#modal-confirmar-error");
   const botonesModo = contenedor.querySelectorAll(".subnav-boton[data-modo]");
   const botonGuardar = contenedor.querySelector("#modal-confirmar-guardar");
@@ -1309,6 +1340,118 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const etiquetaQrInterno = contenedor.querySelector("#qr-interno-etiqueta");
   const botonCerrarQrInterno = contenedor.querySelector("#qr-interno-cerrar");
   const botonImprimirQrInterno = contenedor.querySelector("#qr-interno-imprimir");
+
+  // ---- Buscador de operador (combobox tipo "LIKE") (2026-09-10) ----
+  // Pedido de Ivan: el <select> nativo con todo el catálogo de operadores
+  // se hacía interminable para buscar uno a mano. Este combobox filtra en
+  // vivo por nombre o número, sin distinguir mayúsculas/acentos.
+  let operadoresOrdenadosCache = [];
+  let indiceActivoOperador = -1; // fila resaltada con teclado, -1 = ninguna
+
+  function normalizarBusquedaOperador(texto) {
+    return (texto || "").toString().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+  }
+
+  function etiquetaOperador(op) {
+    return (op.numero ? op.numero + " — " : "") + (op.nombre || op.id);
+  }
+
+  function filtrarOperadores(consulta) {
+    const q = normalizarBusquedaOperador(consulta);
+    if (!q) return operadoresOrdenadosCache;
+    return operadoresOrdenadosCache.filter(op =>
+      normalizarBusquedaOperador(op.nombre).includes(q) || normalizarBusquedaOperador(op.numero).includes(q)
+    );
+  }
+
+  function pintarListaOperador(resultados) {
+    if (!listaOperadorEl) return;
+    indiceActivoOperador = -1;
+    listaOperadorEl.innerHTML = resultados.length
+      ? resultados.map(op => `<li data-uid="${op.id}">${escapeHtml(etiquetaOperador(op))}</li>`).join("")
+      : '<li class="combo-operador-vacia">Sin coincidencias</li>';
+    listaOperadorEl.classList.remove("oculto");
+  }
+
+  function abrirListaOperador() {
+    if (!inputBuscarOperador) return;
+    pintarListaOperador(filtrarOperadores(inputBuscarOperador.value));
+  }
+
+  function cerrarListaOperador() {
+    if (!listaOperadorEl) return;
+    listaOperadorEl.classList.add("oculto");
+    indiceActivoOperador = -1;
+  }
+
+  function seleccionarOperador(op) {
+    selectOperador.value = op.id;
+    inputBuscarOperador.value = etiquetaOperador(op);
+    confirmarErrorDiv.textContent = "";
+    cerrarListaOperador();
+  }
+
+  function resaltarOperadorActivo() {
+    const items = listaOperadorEl.querySelectorAll("li[data-uid]");
+    items.forEach((li, i) => li.classList.toggle("combo-operador-activa", i === indiceActivoOperador));
+    const activo = items[indiceActivoOperador];
+    if (activo && activo.scrollIntoView) activo.scrollIntoView({ block: "nearest" });
+  }
+
+  if (inputBuscarOperador) {
+    inputBuscarOperador.addEventListener("focus", abrirListaOperador);
+    inputBuscarOperador.addEventListener("input", () => {
+      // Cualquier cambio en el texto invalida la selección anterior — hay
+      // que elegir de la lista de nuevo (mismo criterio "obligatorio" de
+      // guardarEscaneo, que exige selectOperador.value con un operador
+      // real del catálogo).
+      selectOperador.value = "";
+      abrirListaOperador();
+    });
+    inputBuscarOperador.addEventListener("keydown", (e) => {
+      if (!listaOperadorEl) return;
+      const items = listaOperadorEl.querySelectorAll("li[data-uid]");
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (listaOperadorEl.classList.contains("oculto")) { abrirListaOperador(); return; }
+        indiceActivoOperador = Math.min(indiceActivoOperador + 1, items.length - 1);
+        resaltarOperadorActivo();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        indiceActivoOperador = Math.max(indiceActivoOperador - 1, 0);
+        resaltarOperadorActivo();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const uidElegido = items[indiceActivoOperador] ? items[indiceActivoOperador].dataset.uid
+          : (items.length === 1 ? items[0].dataset.uid : null);
+        const op = uidElegido ? listaOperadores.find(o => o.id === uidElegido) : null;
+        if (op) seleccionarOperador(op);
+      } else if (e.key === "Escape") {
+        cerrarListaOperador();
+        inputBuscarOperador.blur();
+      }
+    });
+    inputBuscarOperador.addEventListener("blur", () => {
+      // Si al salir no quedó una selección válida del catálogo, se limpia
+      // el texto — un nombre a medio escribir no cuenta como elegido.
+      setTimeout(() => {
+        if (!selectOperador.value) inputBuscarOperador.value = "";
+        cerrarListaOperador();
+      }, 120);
+    });
+  }
+  if (listaOperadorEl) {
+    // mousedown (no click) + preventDefault: evita que el input pierda el
+    // foco (y dispare su "blur") antes de que el click en la fila llegue a
+    // registrarse — así no hace falta un listener global de "clic afuera".
+    listaOperadorEl.addEventListener("mousedown", (e) => e.preventDefault());
+    listaOperadorEl.addEventListener("click", (e) => {
+      const li = e.target.closest("li[data-uid]");
+      if (!li) return;
+      const op = listaOperadores.find(o => o.id === li.dataset.uid);
+      if (op) seleccionarOperador(op);
+    });
+  }
 
   let embarqueSinFacturaActual = null; // { id, p } — mientras el modal de confirmación está abierto
 
@@ -1445,11 +1588,18 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   // ejemplo, si el catálogo se actualiza mientras el modal ya está abierto).
   function renderSelectorOperador() {
     if (!selectOperador) return;
+    operadoresOrdenadosCache = listaOperadores.slice().sort((a, b) => (a.nombre || "").localeCompare(b.nombre || "", "es"));
     const valorPrevio = selectOperador.value;
-    const ordenados = listaOperadores.slice().sort((a, b) => (a.nombre || "").localeCompare(b.nombre || "", "es"));
-    selectOperador.innerHTML = '<option value="">Selecciona un operador…</option>' +
-      ordenados.map(o => `<option value="${o.id}">${escapeHtml((o.numero ? o.numero + " — " : "") + (o.nombre || o.id))}</option>`).join("");
-    if (ordenados.some(o => o.id === valorPrevio)) selectOperador.value = valorPrevio;
+    if (valorPrevio && !operadoresOrdenadosCache.some(o => o.id === valorPrevio)) {
+      // El operador elegido ya no está en el catálogo (se desactivó, por
+      // ejemplo) — se limpia para obligar a elegir de nuevo, en vez de
+      // dejar guardado un uid que guardarEscaneo() ya no podría resolver.
+      selectOperador.value = "";
+      if (inputBuscarOperador) inputBuscarOperador.value = "";
+    }
+    if (listaOperadorEl && !listaOperadorEl.classList.contains("oculto")) {
+      pintarListaOperador(filtrarOperadores(inputBuscarOperador ? inputBuscarOperador.value : ""));
+    }
   }
 
   function volverAEscanear() {
@@ -1814,6 +1964,8 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     inputConfirmarCaja.value = (modo === "correccion") ? (cajaPrevia || "") : "";
     if (operadorWrapDiv) operadorWrapDiv.classList.toggle("oculto", modo !== "validacion2");
     if (selectOperador) selectOperador.value = "";
+    if (inputBuscarOperador) inputBuscarOperador.value = "";
+    cerrarListaOperador();
     if (modo === "validacion2") renderSelectorOperador();
     seccionConfirmar.classList.add("oculto");
     seccionCaptura.classList.remove("oculto");
