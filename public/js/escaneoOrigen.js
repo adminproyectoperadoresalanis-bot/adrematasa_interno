@@ -44,6 +44,46 @@ const CLASES_SYNC = {
   error: "badge-rechazada"
 };
 
+// ----------------------------------------------------------------------
+// QR interno para embarques SIN factura (pedido de Ivan, 2026-09-10).
+// Contexto: McCain confirmó en junta que cuando un correo no trae factura
+// es un movimiento interno de su inventario (sin riesgo fiscal, porque no
+// hay factura que mostrar). Sin un QR real que escanear, la cadena de 3
+// validaciones se rompía por completo. Diseño acordado: en vez de crear un
+// camino especial paralelo, Atención al Cliente GENERA un QR propio (tras
+// confirmar explícitamente que es un caso sin factura) que se imprime, se
+// integra al mismo set de documentos de siempre, y se escanea en cada
+// checkpoint EXACTAMENTE igual que un CFDI real — nadie más en la cadena
+// necesita enterarse de que es "interno".
+//
+// Truco clave: el QR generado usa el MISMO formato que ya sabe leer
+// parsearQR() (una URL con ?id=<uuid>&rr=<rfc>) — solo con un dominio
+// propio (no resuelve a nada real, no es necesario que resuelva) y un RFC
+// marcador fijo en vez de un RFC real. Así, evaluarCoincidenciaCfdi(),
+// registrarEscaneo(), la 2da validación y los checkpoints del operador
+// funcionan sin NINGÚN cambio — comparan cadenas de texto, no verifican
+// contra el SAT.
+const RFC_MARCADOR_SIN_FACTURA = "SIN-FACTURA";
+const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factura";
+
+function generarDatosQrInterno() {
+  const uuid = (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : uuidFallback_()).toUpperCase();
+  const rfc = RFC_MARCADOR_SIN_FACTURA;
+  const texto = `${QR_INTERNO_BASE}?id=${uuid}&rr=${rfc}&motivo=movimiento_interno`;
+  return { uuid, rfc, texto };
+}
+
+// Respaldo por si algún navegador viejo no trae crypto.randomUUID() — no
+// necesita ser criptográficamente perfecto, solo único para no chocar entre
+// dos embarques.
+function uuidFallback_() {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 function formatoFecha(valor) {
   if (!valor) return "—";
   const fecha = typeof valor.toDate === "function" ? valor.toDate() : new Date(valor);
@@ -329,6 +369,47 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       }
       .correccion-critica-boton:hover { background: #000; }
       .correccion-critica-pie { text-align: center; font-size: 11px; color: #9c9895; margin-top: 10px; line-height: 1.5; }
+
+      /* ----------------------------------------------------------------
+         QR interno para embarques sin factura (2026-09-10). */
+      .badge-sin-factura {
+        display: inline-block; background: #fef3c7; color: #92400e;
+        font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+        letter-spacing: 0.02em; margin-right: 6px;
+      }
+      .qr-interno-overlay {
+        position: fixed; inset: 0; z-index: 9999;
+        display: flex; align-items: center; justify-content: center; padding: 20px;
+      }
+      .qr-interno-fondo { position: absolute; inset: 0; background: rgba(20,16,12,0.6); }
+      .qr-interno-tarjeta {
+        position: relative; background: #fff; border-radius: 16px; max-width: 420px; width: 100%;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.35); padding: 26px 28px; text-align: center;
+      }
+      .qr-interno-tarjeta h2 { margin: 0 0 12px; font-size: 16px; }
+      .qr-interno-tarjeta p { font-size: 13px; color: #3a362f; line-height: 1.6; text-align: left; }
+      .qr-interno-aviso {
+        background: #fef3c7; border: 1px solid #f3d99c; border-radius: 8px;
+        padding: 10px 12px; font-size: 12px; color: #92400e; text-align: left; margin: 12px 0;
+      }
+      .qr-interno-imagen-wrap { margin: 16px 0; display: flex; justify-content: center; }
+      .qr-interno-etiqueta-impresa { font-size: 11px; color: #6b6558; margin-top: -6px; margin-bottom: 12px; }
+      .qr-interno-acciones { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 6px; }
+
+      /* Al imprimir, solo se ve la tarjeta del QR (etiqueta física para
+         integrar al set de documentos) — todo lo demás de la página se
+         oculta. Truco de visibility (no display) para que funcione sin
+         importar qué tan anidado esté #overlay-qr-interno dentro del resto
+         del layout de la app (encabezados, menús, etc.). */
+      @media print {
+        body.imprimiendo-qr-interno * { visibility: hidden !important; }
+        body.imprimiendo-qr-interno #overlay-qr-interno,
+        body.imprimiendo-qr-interno #overlay-qr-interno * { visibility: visible !important; }
+        body.imprimiendo-qr-interno #overlay-qr-interno { position: absolute; inset: 0; padding: 0; background: #fff; }
+        body.imprimiendo-qr-interno .qr-interno-fondo,
+        body.imprimiendo-qr-interno .qr-interno-acciones { display: none !important; }
+        body.imprimiendo-qr-interno .qr-interno-tarjeta { box-shadow: none; position: absolute; top: 0; left: 0; }
+      }
     </style>
     <section class="panel">
       <div class="semaforo-titulo-fila">
@@ -472,6 +553,37 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         </div>
       </div>
     </div>
+
+    <div id="modal-confirmar-sin-factura" class="modal-overlay oculto">
+      <div class="modal-tarjeta">
+        <h2>Este embarque no trae factura</h2>
+        <p class="nota" id="confirmar-sin-factura-info"></p>
+        <div class="qr-interno-aviso">
+          Confirma que esto es un movimiento interno de inventario de McCain (sin factura porque no hay riesgo fiscal que mostrar) — no un correo con la factura extraviada o ilegible. Si no estás seguro, verifica con McCain antes de continuar.
+        </div>
+        <p class="nota">Al confirmar se genera un código QR de control interno (marcado "SIN FACTURA") que debes imprimir e integrar al set de documentos de este embarque, para escanearlo en cada paso exactamente igual que un CFDI real.</p>
+        <div id="confirmar-sin-factura-error" class="error"></div>
+        <div class="modal-acciones">
+          <button type="button" class="secundario" id="confirmar-sin-factura-cancelar">Cancelar</button>
+          <button type="button" id="confirmar-sin-factura-generar">Confirmar y generar QR interno</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="overlay-qr-interno" class="qr-interno-overlay oculto">
+      <div class="qr-interno-fondo"></div>
+      <div class="qr-interno-tarjeta">
+        <h2>SIN FACTURA — CONTROL INTERNO</h2>
+        <p id="qr-interno-info"></p>
+        <div class="qr-interno-imagen-wrap"><canvas id="qr-interno-canvas"></canvas></div>
+        <div class="qr-interno-etiqueta-impresa" id="qr-interno-etiqueta"></div>
+        <p class="nota" style="text-align:center;">Imprime esta etiqueta e intégrala al set de documentos de este embarque. No es una factura — es un control interno de Alanis para poder seguir el proceso de escaneo en cada checkpoint.</p>
+        <div class="qr-interno-acciones">
+          <button type="button" class="secundario" id="qr-interno-cerrar">Cerrar</button>
+          <button type="button" id="qr-interno-imprimir">Imprimir</button>
+        </div>
+      </div>
+    </div>
   `;
 
   let listaPendientes = [];
@@ -490,6 +602,19 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   let correccionesReconocidas = new Set();
   let correccionesCriticasVistas = new Set();
   let colaCorreccionesCriticas = [];
+
+  // QR interno para embarques sin factura (2026-09-10) — deliberadamente
+  // NO se persiste en Firestore hasta que de verdad se registra el escaneo
+  // (registrarEscaneo, más abajo): las reglas reales de
+  // verificaciones_cfdi_local exigen uuidEsperado/receptorRFCEsperado/
+  // origenEscaneo completos desde el primer "create", así que un doc
+  // "a medias" con solo el QR generado sería rechazado por las reglas. Se
+  // guarda solo en memoria del navegador mientras dura esta sesión de
+  // pantalla — si se recarga la página entre generar el QR y escanearlo, se
+  // pierde esa referencia (hay que generar uno nuevo; el anterior, si ya se
+  // imprimió, simplemente queda sin usar — no representa ningún riesgo,
+  // nunca llegó a registrarse en ningún lado).
+  let qrInternoGeneradoEnSesion = new Map(); // embarqueId -> { uuid, rfc, texto, generadoPor, generadoEn }
 
   const errorPendientesDiv = contenedor.querySelector("#pendientes-origen-error");
   const errorValidacion2Div = contenedor.querySelector("#pendientes-validacion2-error");
@@ -589,6 +714,33 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <td>${escapeHtml(p.caja || "—")}</td>
         <td>${escapeHtml(p.fechaEntrega || "—")}</td>
         ${accionesPendiente(p, botonEscanearHtml())}
+      </tr>
+    `;
+  }
+
+  // Embarque sin Cadena Original del SAT capturada por el VBA (McCain no
+  // adjuntó factura, o el PDF no era legible — ver nota en el botón de
+  // abajo). Mientras no se haya generado el QR interno, se ofrece el botón
+  // para generarlo (requiere confirmación explícita); una vez generado, se
+  // ofrece reimprimirlo y el botón normal de Escanear queda disponible
+  // (2026-09-10).
+  function filaSinFactura(p, qrInterno) {
+    const accionesHtml = !puedeValidar1
+      ? `<span class="nota" style="margin:0;">Requiere Atención al Cliente</span>`
+      : (qrInterno
+          ? `<button type="button" class="btn-imprimir-qr-interno">Reimprimir QR interno</button>${botonEscanearHtml()}`
+          : `<button type="button" class="btn-generar-qr-interno">Generar QR interno</button>`);
+    return `
+      <tr data-id="${p.id}">
+        <td>${escapeHtml(p.shipment || "—")}</td>
+        <td>${escapeHtml(p.ocCliente || "—")}</td>
+        <td>${escapeHtml(p.clienteNombre || "—")}<br><span class="badge-sin-factura" title="McCain no adjuntó una factura legible en el correo original — verificado con McCain como movimiento interno de inventario">SIN FACTURA</span></td>
+        <td>${escapeHtml(p.caja || "—")}</td>
+        <td>${escapeHtml(p.fechaEntrega || "—")}</td>
+        <td class="acciones">
+          ${accionesHtml}
+          ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. Solo para pruebas.">Borrar (prueba)</button>` : ""}
+        </td>
       </tr>
     `;
   }
@@ -708,8 +860,20 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     // regresaron aquí a propósito y no debe desaparecer hasta re-validarse
     // (pedido de Ivan, 2026-09-09: "mejor que desaparezcan como lo hacen
     // los registros en las secciones de la segunda y tercera validación").
-    const idsEscaneados = new Set(listaHistorial.map(f => f.id));
+    // Un embarque cuenta como "ya escaneado" solo si su doc trae
+    // origenEscaneo (no solo por existir en la colección) — defensivo desde
+    // 2026-09-10: el QR interno para embarques sin factura se genera y
+    // guarda EN MEMORIA antes de escanearse (ver qrInternoGeneradoEnSesion),
+    // nunca como un doc a medias en Firestore, así que esto no debería
+    // dispararse hoy — pero deja el criterio correcto documentado por si
+    // eso cambia más adelante.
+    const idsEscaneados = new Set(listaHistorial.filter(f => f.origenEscaneo).map(f => f.id));
     const pendientesVisibles = listaPendientes.filter(p => !idsEscaneados.has(p.id) || p.correccionPostValidacion);
+
+    // qrInterno ya generado para este embarque (sin factura) EN ESTA
+    // SESIÓN del navegador, esperando su escaneo — ver nota junto a
+    // qrInternoGeneradoEnSesion (no vive en Firestore hasta que se escanea).
+    const qrInternoPorId = qrInternoGeneradoEnSesion;
 
     renderChipEsperaInicio(pendientesVisibles.filter(p => !p.correccionPostValidacion).length);
     if (puedeValidar1) verificarCorreccionesPostValidacion(pendientesVisibles);
@@ -723,6 +887,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     tbodyPendientes.innerHTML = pendientesVisibles.map(p => {
       if (p.correccionPostValidacion) return filaCorreccionPostValidacion(p);
       if (p.correccionCajaAnterior || p.correccionCajaNueva) return filaCorreccionPreValidacion(p);
+      if (!p.uuidFactura) return filaSinFactura(p, qrInternoPorId.get(p.id));
       return filaPendienteNormal(p);
     }).join("");
 
@@ -751,6 +916,22 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         const id = btn.closest("tr").dataset.id;
         correccionesReconocidas.add(id);
         renderPendientes();
+      });
+    });
+
+    tbodyPendientes.querySelectorAll(".btn-generar-qr-interno").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.closest("tr").dataset.id;
+        const p = listaPendientes.find(x => x.id === id);
+        abrirConfirmacionSinFactura(p, id);
+      });
+    });
+
+    tbodyPendientes.querySelectorAll(".btn-imprimir-qr-interno").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.closest("tr").dataset.id;
+        const datosQr = qrInternoGeneradoEnSesion.get(id);
+        if (datosQr) mostrarQrInterno(datosQr, id, listaPendientes.find(x => x.id === id));
       });
     });
 
@@ -1102,6 +1283,101 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     });
   }
 
+  // ---- QR interno para embarques sin factura (2026-09-10) ----
+  const modalSinFactura = contenedor.querySelector("#modal-confirmar-sin-factura");
+  const infoSinFactura = contenedor.querySelector("#confirmar-sin-factura-info");
+  const errorSinFactura = contenedor.querySelector("#confirmar-sin-factura-error");
+  const botonCancelarSinFactura = contenedor.querySelector("#confirmar-sin-factura-cancelar");
+  const botonGenerarSinFactura = contenedor.querySelector("#confirmar-sin-factura-generar");
+
+  const overlayQrInterno = contenedor.querySelector("#overlay-qr-interno");
+  const infoQrInterno = contenedor.querySelector("#qr-interno-info");
+  const canvasQrInterno = contenedor.querySelector("#qr-interno-canvas");
+  const etiquetaQrInterno = contenedor.querySelector("#qr-interno-etiqueta");
+  const botonCerrarQrInterno = contenedor.querySelector("#qr-interno-cerrar");
+  const botonImprimirQrInterno = contenedor.querySelector("#qr-interno-imprimir");
+
+  let embarqueSinFacturaActual = null; // { id, p } — mientras el modal de confirmación está abierto
+
+  function abrirConfirmacionSinFactura(p, id) {
+    embarqueSinFacturaActual = { id, p };
+    errorSinFactura.textContent = "";
+    infoSinFactura.textContent = `Embarque ${(p && (p.shipment || p.ocCliente)) || id} — ${(p && p.clienteNombre) || "McCain"}, caja ${(p && p.caja) || "—"}.`;
+    modalSinFactura.classList.remove("oculto");
+  }
+
+  botonCancelarSinFactura.addEventListener("click", () => {
+    embarqueSinFacturaActual = null;
+    modalSinFactura.classList.add("oculto");
+  });
+
+  botonGenerarSinFactura.addEventListener("click", () => {
+    if (!embarqueSinFacturaActual) return;
+    const { id, p } = embarqueSinFacturaActual;
+    errorSinFactura.textContent = "";
+    // Generado y guardado SOLO en memoria del navegador (ver nota junto a
+    // qrInternoGeneradoEnSesion) — no hay ningún write a Firestore en este
+    // paso; el registro real ocurre hasta que se escanea el QR impreso,
+    // vía el mismo registrarEscaneo() de siempre.
+    const datosQr = generarDatosQrInterno();
+    qrInternoGeneradoEnSesion.set(id, {
+      ...datosQr,
+      generadoPor: { uid, nombre: datosUsuario.nombre || null },
+      generadoEn: new Date().toISOString()
+    });
+    modalSinFactura.classList.add("oculto");
+    mostrarQrInterno(datosQr, id, p);
+    embarqueSinFacturaActual = null;
+    renderPendientes(); // para que la fila cambie a "Reimprimir" + "Escanear"
+  });
+
+  function mostrarQrInterno(datosQr, id, p) {
+    const etiqueta = (p && (p.shipment || p.ocCliente)) || id;
+    infoQrInterno.textContent = `Embarque ${etiqueta} — ${(p && p.clienteNombre) || "McCain"}, caja ${(p && p.caja) || "—"}. Este código reemplaza el QR de la factura (que no existe para este embarque).`;
+    etiquetaQrInterno.textContent = `SIN-FACTURA · ${etiqueta}`;
+    dibujarQrInterno(datosQr.texto);
+    overlayQrInterno.classList.remove("oculto");
+  }
+
+  function dibujarQrInterno(texto) {
+    if (typeof window.QRCode === "undefined" || !window.QRCode.toCanvas) {
+      // Librería de generación de QR no cargada — ver nota de despliegue
+      // (falta agregar el <script> de la librería qrcode en el HTML, igual
+      // que ya está agregado el de Html5Qrcode para leer). Sin ella no hay
+      // forma de dibujar el código, pero al menos se deja el texto visible
+      // para poder copiarlo/depurar.
+      const ctx2d = canvasQrInterno.getContext && canvasQrInterno.getContext("2d");
+      canvasQrInterno.width = 280;
+      canvasQrInterno.height = 80;
+      if (ctx2d) {
+        ctx2d.clearRect(0, 0, 280, 80);
+        ctx2d.font = "12px sans-serif";
+        ctx2d.fillStyle = "#c8362a";
+        ctx2d.fillText("No se pudo cargar el generador de QR.", 6, 20);
+        ctx2d.fillText("Revisa que la librería 'qrcode' esté", 6, 38);
+        ctx2d.fillText("agregada en el HTML.", 6, 56);
+      }
+      return;
+    }
+    window.QRCode.toCanvas(canvasQrInterno, texto, { width: 240, margin: 1 }, (err) => {
+      if (err) {
+        console.error("No se pudo dibujar el QR interno:", err);
+      }
+    });
+  }
+
+  botonCerrarQrInterno.addEventListener("click", () => {
+    overlayQrInterno.classList.add("oculto");
+  });
+
+  botonImprimirQrInterno.addEventListener("click", () => {
+    document.body.classList.add("imprimiendo-qr-interno");
+    window.print();
+  });
+  window.addEventListener("afterprint", () => {
+    document.body.classList.remove("imprimiendo-qr-interno");
+  });
+
   let embarqueActual = null;
   let modoActual = "origen"; // "origen" | "correccion" | "validacion2"
   let datosLeidos = null;
@@ -1260,8 +1536,21 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         return;
       }
 
+      // Sin factura real (2026-09-10): si no hay Cadena Original del SAT
+      // pero SÍ se generó un QR interno para este embarque en esta misma
+      // sesión (ver botón "Generar QR interno" / qrInternoGeneradoEnSesion),
+      // se usa ese UUID sintético como referencia en su lugar. El resto de
+      // la comparación (evaluarCoincidenciaCfdi) no distingue entre uno y
+      // otro — ambos son solo cadenas de texto.
       if (!lectura.uuid) {
-        modalErrorDiv.textContent = "Todavía no está disponible la factura de referencia para este embarque — puede tardar unos minutos en sincronizar desde el correo. Espera un momento e intenta de nuevo; si después de varios intentos sigue sin aparecer, avisa a un supervisor.";
+        const qrInterno = qrInternoGeneradoEnSesion.get(embarqueActual);
+        if (qrInterno && qrInterno.uuid) {
+          lectura.uuid = qrInterno.uuid;
+        }
+      }
+
+      if (!lectura.uuid) {
+        modalErrorDiv.textContent = "Todavía no está disponible la factura de referencia para este embarque — puede tardar unos minutos en sincronizar desde el correo. Espera un momento e intenta de nuevo; si el correo no trae factura porque es un movimiento interno de McCain, usa el botón \"Generar QR interno\" en la tabla de pendientes en vez de escanear aquí.";
         iniciarCamara();
         return;
       }
@@ -1509,12 +1798,20 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   }
 
   async function registrarEscaneo(embarqueId, { uuid, rfc, caja, cajaCoincide, cajaEsperada, facturaUuidEsperado, facturaUuidCoincide }) {
+    // Si este embarque venía de un QR interno (sin factura, ver arriba), se
+    // guarda quién y cuándo lo generó para auditoría — el "create" en
+    // firestore.rules solo exige uuidEsperado/receptorRFCEsperado/
+    // origenEscaneo; campos extra como estos dos no están restringidos.
+    const qrInternoInfo = qrInternoGeneradoEnSesion.get(embarqueId) || null;
+
     await setDoc(doc(db, "verificaciones_cfdi_local", embarqueId), {
       embarqueId,
       uuidEsperado: uuid,
       receptorRFCEsperado: rfc,
       estadoSync: "esperando_validacion2",
       cajaEsperada: cajaEsperada || null,
+      qrInterno: qrInternoInfo ? { uuid: qrInternoInfo.uuid, rfc: qrInternoInfo.rfc, generadoPor: qrInternoInfo.generadoPor, generadoEn: qrInternoInfo.generadoEn } : null,
+      esQrInterno: rfc === RFC_MARCADOR_SIN_FACTURA,
       origenEscaneo: {
         caja: caja || null,
         cajaCoincide,
