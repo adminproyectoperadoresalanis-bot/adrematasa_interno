@@ -603,18 +603,20 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   let correccionesCriticasVistas = new Set();
   let colaCorreccionesCriticas = [];
 
-  // QR interno para embarques sin factura (2026-09-10) — deliberadamente
-  // NO se persiste en Firestore hasta que de verdad se registra el escaneo
-  // (registrarEscaneo, más abajo): las reglas reales de
-  // verificaciones_cfdi_local exigen uuidEsperado/receptorRFCEsperado/
-  // origenEscaneo completos desde el primer "create", así que un doc
-  // "a medias" con solo el QR generado sería rechazado por las reglas. Se
-  // guarda solo en memoria del navegador mientras dura esta sesión de
-  // pantalla — si se recarga la página entre generar el QR y escanearlo, se
-  // pierde esa referencia (hay que generar uno nuevo; el anterior, si ya se
-  // imprimió, simplemente queda sin usar — no representa ningún riesgo,
-  // nunca llegó a registrarse en ningún lado).
-  let qrInternoGeneradoEnSesion = new Map(); // embarqueId -> { uuid, rfc, texto, generadoPor, generadoEn }
+  // QR interno para embarques sin factura (2026-09-10) — vive en su propia
+  // colección qr_internos_generados (requiere el firestore.rules nuevo, ver
+  // el doc de diseño). CORREGIDO 2026-09-10: la primera versión de esto lo
+  // guardaba solo en memoria del navegador para no chocar con las reglas de
+  // verificaciones_cfdi_local (que exigen uuidEsperado/origenEscaneo
+  // completos desde el primer "create") — pero eso se rompe en cuanto
+  // generar e imprimir pasa en un dispositivo/pestaña distinto de donde se
+  // escanea (justo lo que le pasó a Ivan probándolo: generó/imprimió en un
+  // navegador y escaneó desde el celular, que no tenía nada en su memoria).
+  // Un QR impreso tiene que sobrevivir a cambiar de dispositivo, así que
+  // ahora se persiste de verdad, en una colección aparte con su propia
+  // regla create-only (nunca se corrige — si un embarque necesita otro
+  // código, es un caso nuevo, no se reescribe el mismo doc).
+  let listaQrInternos = []; // [{ id: embarqueId, uuid, rfc, texto, generadoPor, timestamp }, ...]
 
   const errorPendientesDiv = contenedor.querySelector("#pendientes-origen-error");
   const errorValidacion2Div = contenedor.querySelector("#pendientes-validacion2-error");
@@ -658,6 +660,17 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   }, (err) => {
     if (errorValidacion3Div) errorValidacion3Div.textContent = "No se pudo cargar el estado del operador: " + err.message;
   });
+
+  // QR interno para embarques sin factura (2026-09-10) — sincronizado como
+  // el resto, así que un QR generado desde otro dispositivo/sesión (por
+  // ejemplo, Atención al Cliente lo genera en la computadora y lo escanea
+  // desde el celular) SÍ aparece aquí. Sin manejador de error propio: si
+  // falla, simplemente no se ofrece "Generar QR interno" con normalidad —
+  // no es crítico bloquear toda la pantalla por esto.
+  onSnapshot(collection(db, "qr_internos_generados"), (snap) => {
+    listaQrInternos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderPendientes();
+  }, () => { /* ver nota arriba */ });
 
   // Catálogo de operadores de Alanis Operadores (uid, nombre, numero de
   // unidad), reflejado aquí de solo lectura por el Apps Script cada pocos
@@ -861,19 +874,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     // (pedido de Ivan, 2026-09-09: "mejor que desaparezcan como lo hacen
     // los registros en las secciones de la segunda y tercera validación").
     // Un embarque cuenta como "ya escaneado" solo si su doc trae
-    // origenEscaneo (no solo por existir en la colección) — defensivo desde
-    // 2026-09-10: el QR interno para embarques sin factura se genera y
-    // guarda EN MEMORIA antes de escanearse (ver qrInternoGeneradoEnSesion),
-    // nunca como un doc a medias en Firestore, así que esto no debería
-    // dispararse hoy — pero deja el criterio correcto documentado por si
-    // eso cambia más adelante.
+    // origenEscaneo (no solo por existir en la colección) — el doc de
+    // verificaciones_cfdi_local no se toca hasta el escaneo real, así que
+    // esto es solo defensivo.
     const idsEscaneados = new Set(listaHistorial.filter(f => f.origenEscaneo).map(f => f.id));
     const pendientesVisibles = listaPendientes.filter(p => !idsEscaneados.has(p.id) || p.correccionPostValidacion);
 
-    // qrInterno ya generado para este embarque (sin factura) EN ESTA
-    // SESIÓN del navegador, esperando su escaneo — ver nota junto a
-    // qrInternoGeneradoEnSesion (no vive en Firestore hasta que se escanea).
-    const qrInternoPorId = qrInternoGeneradoEnSesion;
+    // qrInterno ya generado para este embarque (sin factura), esperando su
+    // escaneo — vive en Firestore (qr_internos_generados), no en memoria,
+    // para que sea visible sin importar desde qué dispositivo se escanee.
+    const qrInternoPorId = new Map(listaQrInternos.map(q => [q.id, q]));
 
     renderChipEsperaInicio(pendientesVisibles.filter(p => !p.correccionPostValidacion).length);
     if (puedeValidar1) verificarCorreccionesPostValidacion(pendientesVisibles);
@@ -930,7 +940,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     tbodyPendientes.querySelectorAll(".btn-imprimir-qr-interno").forEach(btn => {
       btn.addEventListener("click", () => {
         const id = btn.closest("tr").dataset.id;
-        const datosQr = qrInternoGeneradoEnSesion.get(id);
+        const datosQr = listaQrInternos.find(q => q.id === id);
         if (datosQr) mostrarQrInterno(datosQr, id, listaPendientes.find(x => x.id === id));
       });
     });
@@ -1314,24 +1324,34 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     modalSinFactura.classList.add("oculto");
   });
 
-  botonGenerarSinFactura.addEventListener("click", () => {
+  botonGenerarSinFactura.addEventListener("click", async () => {
     if (!embarqueSinFacturaActual) return;
     const { id, p } = embarqueSinFacturaActual;
     errorSinFactura.textContent = "";
-    // Generado y guardado SOLO en memoria del navegador (ver nota junto a
-    // qrInternoGeneradoEnSesion) — no hay ningún write a Firestore en este
-    // paso; el registro real ocurre hasta que se escanea el QR impreso,
-    // vía el mismo registrarEscaneo() de siempre.
-    const datosQr = generarDatosQrInterno();
-    qrInternoGeneradoEnSesion.set(id, {
-      ...datosQr,
-      generadoPor: { uid, nombre: datosUsuario.nombre || null },
-      generadoEn: new Date().toISOString()
-    });
-    modalSinFactura.classList.add("oculto");
-    mostrarQrInterno(datosQr, id, p);
-    embarqueSinFacturaActual = null;
-    renderPendientes(); // para que la fila cambie a "Reimprimir" + "Escanear"
+    botonGenerarSinFactura.disabled = true;
+    try {
+      const datosQr = generarDatosQrInterno();
+      // Persistido de verdad en qr_internos_generados (create-only, ver
+      // firestore.rules) — así el QR sigue existiendo sin importar desde
+      // qué dispositivo se escanee después. Si esta escritura falla con
+      // "permission-denied", casi seguro es que el firestore.rules nuevo
+      // (con el match de qr_internos_generados) todavía no está desplegado.
+      await setDoc(doc(db, "qr_internos_generados", id), {
+        uuid: datosQr.uuid,
+        rfc: datosQr.rfc,
+        texto: datosQr.texto,
+        motivo: "movimiento_interno_sin_factura",
+        generadoPor: { uid, nombre: datosUsuario.nombre || null },
+        timestamp: serverTimestamp()
+      });
+      modalSinFactura.classList.add("oculto");
+      mostrarQrInterno(datosQr, id, p);
+      embarqueSinFacturaActual = null;
+    } catch (err) {
+      errorSinFactura.textContent = "No se pudo generar el QR interno: " + err.message;
+    } finally {
+      botonGenerarSinFactura.disabled = false;
+    }
   });
 
   function mostrarQrInterno(datosQr, id, p) {
@@ -1550,13 +1570,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       }
 
       // Sin factura real (2026-09-10): si no hay Cadena Original del SAT
-      // pero SÍ se generó un QR interno para este embarque en esta misma
-      // sesión (ver botón "Generar QR interno" / qrInternoGeneradoEnSesion),
-      // se usa ese UUID sintético como referencia en su lugar. El resto de
-      // la comparación (evaluarCoincidenciaCfdi) no distingue entre uno y
-      // otro — ambos son solo cadenas de texto.
+      // pero SÍ se generó un QR interno para este embarque (ver botón
+      // "Generar QR interno" / colección qr_internos_generados, sincronizada
+      // en listaQrInternos igual que el resto de las listas de esta
+      // pantalla), se usa ese UUID sintético como referencia en su lugar.
+      // El resto de la comparación (evaluarCoincidenciaCfdi) no distingue
+      // entre uno y otro — ambos son solo cadenas de texto. Al venir de
+      // Firestore (no de memoria del navegador), funciona sin importar
+      // desde qué dispositivo se generó el QR y desde cuál se escanea.
       if (!lectura.uuid) {
-        const qrInterno = qrInternoGeneradoEnSesion.get(embarqueActual);
+        const qrInterno = listaQrInternos.find(q => q.id === embarqueActual);
         if (qrInterno && qrInterno.uuid) {
           lectura.uuid = qrInterno.uuid;
         }
@@ -1815,7 +1838,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     // guarda quién y cuándo lo generó para auditoría — el "create" en
     // firestore.rules solo exige uuidEsperado/receptorRFCEsperado/
     // origenEscaneo; campos extra como estos dos no están restringidos.
-    const qrInternoInfo = qrInternoGeneradoEnSesion.get(embarqueId) || null;
+    const qrInternoInfo = listaQrInternos.find(q => q.id === embarqueId) || null;
 
     await setDoc(doc(db, "verificaciones_cfdi_local", embarqueId), {
       embarqueId,
@@ -1823,7 +1846,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       receptorRFCEsperado: rfc,
       estadoSync: "esperando_validacion2",
       cajaEsperada: cajaEsperada || null,
-      qrInterno: qrInternoInfo ? { uuid: qrInternoInfo.uuid, rfc: qrInternoInfo.rfc, generadoPor: qrInternoInfo.generadoPor, generadoEn: qrInternoInfo.generadoEn } : null,
+      qrInterno: qrInternoInfo ? { uuid: qrInternoInfo.uuid, rfc: qrInternoInfo.rfc, generadoPor: qrInternoInfo.generadoPor } : null,
       esQrInterno: rfc === RFC_MARCADOR_SIN_FACTURA,
       origenEscaneo: {
         caja: caja || null,

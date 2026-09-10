@@ -266,6 +266,35 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ------------------------------------------------------------------
+    // QR interno para embarques SIN factura (2026-09-10, ver
+    // escaneoOrigen.js): cuando McCain no adjunta factura (movimiento
+    // interno de inventario, confirmado con McCain en junta), Atención al
+    // Cliente genera su propio QR — tras confirmar explícitamente que es
+    // un caso legítimo, no un dato faltante por error — que sustituye al
+    // QR del CFDI en toda la cadena de escaneo (origen, validación 2,
+    // checkpoints del operador). Este doc es la referencia DURABLE de ese
+    // QR generado: necesaria porque el QR se imprime y se escanea después,
+    // posiblemente desde otro dispositivo o sesión del navegador —
+    // guardarlo solo en memoria del navegador (lo que se probó primero) se
+    // rompe en cuanto cambia el dispositivo o se recarga la página.
+    // create-only a propósito: una vez generado un código para un
+    // embarque, no se corrige ni se reemplaza aquí — si hiciera falta uno
+    // distinto, es un caso nuevo. rfc siempre es el marcador fijo
+    // 'SIN-FACTURA' (ver RFC_MARCADOR_SIN_FACTURA en escaneoOrigen.js), no
+    // un RFC real.
+    // ------------------------------------------------------------------
+    match /qr_internos_generados/{embarqueId} {
+      allow read: if usuarioActivoValido();
+      allow create: if esValidador1()
+        && request.resource.data.uuid is string
+        && request.resource.data.uuid.size() > 0
+        && request.resource.data.rfc == 'SIN-FACTURA'
+        && request.resource.data.generadoPor.uid == request.auth.uid
+        && request.resource.data.timestamp == request.time;
+      allow update, delete: if false;
+    }
+
     match /verificaciones_cfdi_resultado/{embarqueId} {
       allow read: if usuarioActivoValido();
       allow write: if false;
