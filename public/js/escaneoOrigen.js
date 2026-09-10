@@ -97,6 +97,14 @@ function normalizarCaja(valor) {
   return (valor || "").toString().trim().toUpperCase();
 }
 
+// Convierte un texto (ej. un shipment/OC) en algo seguro para usar como
+// nombre de archivo sugerido al imprimir/guardar como PDF (2026-09-10) —
+// quita caracteres que Windows/macOS no permiten en nombres de archivo y
+// cambia espacios por guiones.
+function sanitizarNombreArchivo(texto) {
+  return (texto || "").toString().trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-");
+}
+
 // Extrae { uuid, rfc } del QR de verificación del CFDI del SAT
 // (https://verificacfdi.facturaelectronica.sat.gob.mx/default.aspx?id=...&rr=...).
 // Devuelve null si el texto leído no es una URL de ese tipo o le falta el
@@ -396,19 +404,27 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       .qr-interno-etiqueta-impresa { font-size: 11px; color: #6b6558; margin-top: -6px; margin-bottom: 12px; }
       .qr-interno-acciones { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 6px; }
 
-      /* Al imprimir, solo se ve la tarjeta del QR (etiqueta física para
-         integrar al set de documentos) — todo lo demás de la página se
-         oculta. Truco de visibility (no display) para que funcione sin
-         importar qué tan anidado esté #overlay-qr-interno dentro del resto
-         del layout de la app (encabezados, menús, etc.). */
+      /* Impresión aislada del QR interno — corregido 2026-09-10 (Ivan
+         reportó que, al "Guardar como PDF", salían muchas hojas en blanco
+         antes de la etiqueta). La primera versión ocultaba todo con
+         visibility: hidden, que NO le quita el espacio en el documento —
+         el resto de la app (tablas, menús) seguía reservando toda su
+         altura, y el navegador paginaba esas hojas vacías igual. Ahora se
+         arma una tarjeta de impresión aparte, colgada directo de <body>
+         (ver #impresion-qr-interno-root en el JS, creado una sola vez y
+         reutilizado) y se oculta con display: none a TODO lo demás que
+         cuelgue de <body> — eso sí quita el espacio de verdad, sin
+         importar cuántos elementos tenga la página alrededor ni qué tan
+         anidado esté el overlay original dentro de la app. */
+      #impresion-qr-interno-root { display: none; }
       @media print {
-        body.imprimiendo-qr-interno * { visibility: hidden !important; }
-        body.imprimiendo-qr-interno #overlay-qr-interno,
-        body.imprimiendo-qr-interno #overlay-qr-interno * { visibility: visible !important; }
-        body.imprimiendo-qr-interno #overlay-qr-interno { position: absolute; inset: 0; padding: 0; background: #fff; }
-        body.imprimiendo-qr-interno .qr-interno-fondo,
-        body.imprimiendo-qr-interno .qr-interno-acciones { display: none !important; }
-        body.imprimiendo-qr-interno .qr-interno-tarjeta { box-shadow: none; position: absolute; top: 0; left: 0; }
+        body.imprimiendo-qr-interno > *:not(#impresion-qr-interno-root) { display: none !important; }
+        body.imprimiendo-qr-interno #impresion-qr-interno-root {
+          display: flex !important; justify-content: center; padding: 24px;
+        }
+        body.imprimiendo-qr-interno #impresion-qr-interno-root .qr-interno-tarjeta-impresion {
+          box-shadow: none; max-width: 380px; width: 100%;
+        }
       }
 
       /* ----------------------------------------------------------------
@@ -1341,6 +1357,21 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const botonCerrarQrInterno = contenedor.querySelector("#qr-interno-cerrar");
   const botonImprimirQrInterno = contenedor.querySelector("#qr-interno-imprimir");
 
+  // ---- Impresión aislada del QR interno (2026-09-10) ----
+  // Se cuelga directo de <body> (no de donde viva #overlay-qr-interno
+  // dentro del resto de la app) para poder ocultar TODO lo demás con
+  // display:none al imprimir sin quedar adentro de lo que se oculta — ver
+  // el bloque @media print de arriba para el detalle del bug que esto
+  // corrige (hojas en blanco). Se crea una sola vez y se reutiliza.
+  let elImpresionQrInterno = document.getElementById("impresion-qr-interno-root");
+  if (!elImpresionQrInterno) {
+    elImpresionQrInterno = document.createElement("div");
+    elImpresionQrInterno.id = "impresion-qr-interno-root";
+    document.body.appendChild(elImpresionQrInterno);
+  }
+  let qrInternoImpresionActual = null; // { etiqueta } — para el título del documento al imprimir
+  let tituloOriginalDocumento = null;
+
   // ---- Buscador de operador (combobox tipo "LIKE") (2026-09-10) ----
   // Pedido de Ivan: el <select> nativo con todo el catálogo de operadores
   // se hacía interminable para buscar uno a mano. Este combobox filtra en
@@ -1501,6 +1532,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     const etiqueta = (p && (p.shipment || p.ocCliente)) || id;
     infoQrInterno.textContent = `Embarque ${etiqueta} — ${(p && p.clienteNombre) || "McCain"}, caja ${(p && p.caja) || "—"}. Este código reemplaza el QR de la factura (que no existe para este embarque).`;
     etiquetaQrInterno.textContent = `SIN-FACTURA · ${etiqueta}`;
+    qrInternoImpresionActual = { etiqueta };
     dibujarQrInterno(datosQr.texto);
     overlayQrInterno.classList.remove("oculto");
   }
@@ -1546,12 +1578,58 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     overlayQrInterno.classList.add("oculto");
   });
 
+  // Arma la tarjeta que de verdad se imprime, aparte del overlay que se ve
+  // en pantalla (ver #impresion-qr-interno-root arriba). Reutiliza la
+  // imagen ya dibujada por qrcodejs (clonando el contenedor — la librería
+  // deja un <img> con el QR ya convertido a data URL adentro, así que
+  // clonarlo alcanza, no hace falta volver a generar el código).
+  function prepararImpresionQrInterno() {
+    elImpresionQrInterno.innerHTML = "";
+    const tarjeta = document.createElement("div");
+    tarjeta.className = "qr-interno-tarjeta qr-interno-tarjeta-impresion";
+    const h2 = document.createElement("h2");
+    h2.textContent = "SIN FACTURA — CONTROL INTERNO";
+    const info = document.createElement("p");
+    info.textContent = infoQrInterno.textContent;
+    const imagenWrap = document.createElement("div");
+    imagenWrap.className = "qr-interno-imagen-wrap";
+    // Clona el contenedor ya dibujado por qrcodejs (deja un <img> con el QR
+    // como data URL adentro, así que clonarlo alcanza — no hace falta
+    // volver a generar el código). Se le quita el id para no dejar dos
+    // elementos con el mismo #qr-interno-canvas en el documento a la vez.
+    const clonImagenQr = contenedorQrInterno.cloneNode(true);
+    clonImagenQr.removeAttribute("id");
+    imagenWrap.appendChild(clonImagenQr);
+    const etiquetaImpresa = document.createElement("div");
+    etiquetaImpresa.className = "qr-interno-etiqueta-impresa";
+    etiquetaImpresa.textContent = etiquetaQrInterno.textContent;
+    tarjeta.appendChild(h2);
+    tarjeta.appendChild(info);
+    tarjeta.appendChild(imagenWrap);
+    tarjeta.appendChild(etiquetaImpresa);
+    elImpresionQrInterno.appendChild(tarjeta);
+  }
+
   botonImprimirQrInterno.addEventListener("click", () => {
+    prepararImpresionQrInterno();
+    // Nombre de archivo sugerido al "Guardar como PDF" (2026-09-10, pedido
+    // de Ivan: no proponía ningún nombre) — los navegadores usan el
+    // <title> del documento como nombre por default en ese diálogo. Antes
+    // se quedaba con el título genérico de toda la app (nada relacionado
+    // con este embarque); se cambia solo mientras dura la impresión y se
+    // restaura después para no afectar la pestaña del navegador.
+    tituloOriginalDocumento = document.title;
+    const etiqueta = (qrInternoImpresionActual && qrInternoImpresionActual.etiqueta) || "embarque";
+    document.title = "QR-interno-" + sanitizarNombreArchivo(etiqueta);
     document.body.classList.add("imprimiendo-qr-interno");
     window.print();
   });
   window.addEventListener("afterprint", () => {
     document.body.classList.remove("imprimiendo-qr-interno");
+    if (tituloOriginalDocumento !== null) {
+      document.title = tituloOriginalDocumento;
+      tituloOriginalDocumento = null;
+    }
   });
 
   let embarqueActual = null;
