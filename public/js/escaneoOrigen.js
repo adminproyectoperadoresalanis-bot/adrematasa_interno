@@ -1721,17 +1721,43 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
       // Sin factura real (2026-09-10): si no hay Cadena Original del SAT
       // pero SÍ se generó un QR interno para este embarque (ver botón
-      // "Generar QR interno" / colección qr_internos_generados, sincronizada
-      // en listaQrInternos igual que el resto de las listas de esta
-      // pantalla), se usa ese UUID sintético como referencia en su lugar.
-      // El resto de la comparación (evaluarCoincidenciaCfdi) no distingue
-      // entre uno y otro — ambos son solo cadenas de texto. Al venir de
-      // Firestore (no de memoria del navegador), funciona sin importar
-      // desde qué dispositivo se generó el QR y desde cuál se escanea.
+      // "Generar QR interno" / colección qr_internos_generados), se usa ese
+      // UUID sintético como referencia en su lugar. El resto de la
+      // comparación (evaluarCoincidenciaCfdi) no distingue entre uno y
+      // otro — ambos son solo cadenas de texto.
+      //
+      // BUG REAL encontrado 2026-09-10 (Ivan lo reprodujo él mismo, incluso
+      // forzando refresh de caché, y el "¡Alto! No coincide" seguía
+      // saliendo): aquí se estaba leyendo de `listaQrInternos`, el arreglo
+      // sincronizado en memoria vía onSnapshot — el MISMO tipo de fuente
+      // "posiblemente atrasada" que ya se había identificado como problema
+      // el 2026-09-03 para `uuidFactura` (ver el comentario de arriba, que
+      // por eso relee fresco con getDoc). Si el listener de
+      // qr_internos_generados en el dispositivo que escanea todavía no
+      // había recibido el documento (señal débil, o generar e imprimir
+      // e ir a escanear en cuestión de segundos), `listaQrInternos` seguía
+      // vacío para ese embarque y el flujo caía directo al bloqueo de
+      // "Todavía no está disponible..." — pero si justo en ese momento
+      // ARRIBA `lectura.uuid` sí tenía algo residual de una lectura previa
+      // de otro embarque, o el snapshot estaba a medias, el efecto real
+      // observado fue un `uuidEsperadoActual` desalineado → "no coincide".
+      // Fix: releer también esta colección directo de Firestore (igual que
+      // ya se hace arriba con `embarques_pendientes_origen`), en vez de
+      // confiar en el caché del listener — así funciona sin importar qué
+      // tan rápido se pase de generar/imprimir a escanear, ni la calidad
+      // de la señal del dispositivo que escanea.
       if (!lectura.uuid) {
-        const qrInterno = listaQrInternos.find(q => q.id === embarqueActual);
-        if (qrInterno && qrInterno.uuid) {
-          lectura.uuid = qrInterno.uuid;
+        try {
+          const snapQrInterno = await getDoc(doc(db, "qr_internos_generados", embarqueActual));
+          if (snapQrInterno.exists() && snapQrInterno.data().uuid) {
+            lectura.uuid = snapQrInterno.data().uuid;
+          }
+        } catch (err) {
+          // Si falla la lectura fresca, se sigue de todas formas con lo que
+          // haya en el caché local (mejor que bloquear por un error de red
+          // pasajero) — el candado real sigue siendo el bloqueo de abajo.
+          const qrInternoCache = listaQrInternos.find(q => q.id === embarqueActual);
+          if (qrInternoCache && qrInternoCache.uuid) lectura.uuid = qrInternoCache.uuid;
         }
       }
 
