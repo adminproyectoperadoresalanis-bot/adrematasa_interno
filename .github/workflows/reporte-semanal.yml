@@ -34,7 +34,14 @@ jobs:
       - name: Instalar Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # firebase-admin ^14.3.0 exige Node >=22 (ver package.json de esta
+          # carpeta) — con Node 20 npm instala todo "sin error visible" pero
+          # se salta silenciosamente la dependencia opcional
+          # @google-cloud/firestore, y el script truena hasta que de verdad
+          # intenta usar Firestore. Usamos 24 para igualar la versión que ya
+          # usa functions/ (Cloud Functions QR/CFDI) y de paso evitar el aviso
+          # de que Node 20 está deprecado en los runners de GitHub Actions.
+          node-version: 24
 
       - name: Instalar dependencias
         working-directory: automatizacion

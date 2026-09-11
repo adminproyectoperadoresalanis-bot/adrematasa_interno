@@ -22,7 +22,7 @@
 // ============================================================================
 
 const { onDocumentWritten, onDocumentCreated } = require("firebase-functions/v2/firestore");
-const { initializeApp } = require("firebase-admin/app");
+const { initializeApp, applicationDefault } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 
@@ -41,7 +41,10 @@ const dbLocal = getFirestore();
 // App remota: alanis-operadores. Requiere que la cuenta de servicio de
 // runtime de ESTA función (ver README de IAM) tenga el rol "Cloud Datastore
 // User" otorgado en el proyecto alanis-operadores.
-const alanisApp = initializeApp({ projectId: "alanis-operadores" }, "alanis");
+const alanisApp = initializeApp(
+  { credential: applicationDefault(), projectId: "alanis-operadores" },
+  "alanis"
+);
 const dbAlanis = getFirestore(alanisApp);
 
 const COLECCION_LOCAL = "verificaciones_cfdi_local";
