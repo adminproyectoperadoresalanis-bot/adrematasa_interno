@@ -747,7 +747,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     return `
       <td class="acciones">
         ${escanearHtml}
-        ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. Solo para pruebas.">Borrar (prueba)</button>` : ""}
+        ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. No es reversible.">Borrar</button>` : ""}
       </td>
     `;
   }
@@ -792,7 +792,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <td>${escapeHtml(p.fechaEntrega || "—")}</td>
         <td class="acciones">
           ${accionesHtml}
-          ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. Solo para pruebas.">Borrar (prueba)</button>` : ""}
+          ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. No es reversible.">Borrar</button>` : ""}
         </td>
       </tr>
     `;
@@ -830,7 +830,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
                     ? `<span class="nota" style="margin:0;">Corrección revisada — ya puedes escanear</span>`
                     : `<button type="button" class="peligro btn-revisar-correccion">Revisar corrección</button>`)
                 : ""}
-              ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. Solo para pruebas.">Borrar (prueba)</button>` : ""}
+              ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. No es reversible.">Borrar</button>` : ""}
             </div>
           </div>
         </td>
@@ -1191,7 +1191,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <td><span class="badge ${CLASES_SYNC[f.estadoSync] || "badge-pendiente"}">${ETIQUETAS_SYNC[f.estadoSync] || f.estadoSync}</span></td>
         ${puedeCorregir ? `<td class="acciones">
               <button type="button" class="secundario btn-corregir-origen">Corregir origen</button>
-              ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. Solo para pruebas.">Borrar (prueba)</button>` : ""}
+              ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. No es reversible.">Borrar</button>` : ""}
             </td>` : ""}
       </tr>
     `;
@@ -1232,7 +1232,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     if (esAdmin) wireBorrarPrueba(tbodyHistorial, () => listaHistorial);
   }
 
-  // Engancha el botón "Borrar (prueba)" dentro de un <tbody> ya dibujado.
+  // Engancha el botón "Borrar" dentro de un <tbody> ya dibujado.
   // listaFn() debe devolver el arreglo de embarques de esa tabla en ESE
   // momento (no una copia vieja), para poder mostrar el embarqueId en la
   // confirmación aunque la tabla se haya vuelto a dibujar entre medio.
@@ -1247,7 +1247,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
           `Esto lo elimina de ADREMATASA y de Alanis Operadores (repositorio_mccain). ` +
           `No es reversible, y no es instantáneo: se ejecuta en el siguiente ciclo de ` +
           `sincronización (o de inmediato si alguien corre sync() a mano).\n\n` +
-          `Úsalo solo con embarques de prueba, nunca con un embarque real.`
+          `Esta acción es definitiva y no se puede deshacer — verifica que sea el embarque correcto antes de continuar.`
         );
         if (!confirmado) return;
         btn.disabled = true;
