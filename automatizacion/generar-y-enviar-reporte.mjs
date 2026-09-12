@@ -77,7 +77,8 @@ import { dirname, join } from "path";
 
 import {
   calcularSemanaLaboral, sumarDias, numeroSemanaISO, formatearFechaLargaCap,
-  construirPaginaRH, construirPaginaNomina, construirHtmlReporteCompleto
+  construirPaginaRH, construirPaginaNomina, construirHtmlReporteCompleto,
+  idsIncluidosEnReporte
 } from "../public/js/reportesHtml.js";
 
 const ZONA_HORARIA = "America/Matamoros"; // Nuevo Laredo, Tamps. — frontera con horario de verano tipo EU.
@@ -222,6 +223,38 @@ async function main() {
   const resultado = await respuesta.json().catch(() => ({}));
   const detalleCc = copiaEn.length > 0 ? ` (con copia a ${copiaEn.join(", ")})` : "";
   console.log(`Correo enviado a ${destinatarios.join(", ")}${detalleCc}. messageId: ${resultado.messageId || "(sin messageId en la respuesta)"}`);
+
+  // --- 6. Marcar como enviado a nóminas lo que de verdad se acaba de mandar ---
+  // Solo se llega aquí si Brevo ya confirmó el envío arriba — si algo de lo
+  // anterior falla, el proceso truena antes y nada se marca (así una corrida
+  // fallida no le "come" el reporte a la siguiente semana: ver
+  // js/reportesHtml.js, sección "Pendientes de semanas anteriores", para el
+  // porqué completo de esta bandera).
+  await marcarComoEnviado({ db, listaHoras, listaVacaciones, listaFaltas, viernes, jueves });
+}
+
+async function marcarComoEnviado({ db, listaHoras, listaVacaciones, listaFaltas, viernes, jueves }) {
+  const ids = idsIncluidosEnReporte({ listaHoras, listaVacaciones, listaFaltas, viernes, jueves });
+  const ahoraIso = new Date().toISOString();
+  const escrituras = [
+    ...ids.horas.map(id => ({ coleccion: "solicitudes", id })),
+    ...ids.faltas.map(id => ({ coleccion: "faltas", id })),
+    ...ids.vacaciones.map(id => ({ coleccion: "solicitudesVacaciones", id }))
+  ];
+  if (escrituras.length === 0) {
+    console.log("Nada que marcar como enviado (no había solicitudes/faltas/vacaciones en este reporte).");
+    return;
+  }
+  // Firestore permite máximo 500 operaciones por batch — de sobra para el
+  // volumen de esta empresa, pero se trocea por si algún día no alcanza.
+  for (let i = 0; i < escrituras.length; i += 450) {
+    const lote = db.batch();
+    escrituras.slice(i, i + 450).forEach(({ coleccion, id }) => {
+      lote.update(db.collection(coleccion).doc(id), { enviadoANominaEn: ahoraIso });
+    });
+    await lote.commit();
+  }
+  console.log(`Marcados como enviados: ${ids.horas.length} horas extra, ${ids.faltas.length} faltas, ${ids.vacaciones.length} vacaciones.`);
 }
 
 main().catch(err => {

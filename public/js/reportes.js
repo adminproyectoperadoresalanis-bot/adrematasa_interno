@@ -1,12 +1,13 @@
 import { db } from "./firebase-config.js";
 import {
-  collection, onSnapshot, query, where
+  collection, onSnapshot, query, where, doc, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import {
   formatearFechaCorta, formatearHora12, sumarDias, calcularSemanaLaboral,
   numeroSemanaISO, formatearFechaDDMMYY, formatearFechaLargaCap,
   formatearFechaHoraGeneracion, escapeHtml as escapeHtmlCompartido,
-  construirPaginaRH, construirPaginaNomina, construirHtmlReporteCompleto
+  construirPaginaRH, construirPaginaNomina, construirHtmlReporteCompleto,
+  idsIncluidosEnReporte
 } from "./reportesHtml.js";
 
 function hoyLocalStr() {
@@ -426,13 +427,21 @@ function construirVista(contenedor, { esAdmin, uid }) {
   }
 
   // Un solo PDF con 2 páginas: REPORTE RH (detalle por empleado) y
-  // REPORTE NOMINA (cuadrícula semanal). Solo cuenta lo ya aprobado (documento
-  // formal, no depende del checkbox de "incluir pendientes y rechazados").
-  // El armado real de las 2 páginas vive en js/reportesHtml.js — lo mismo
-  // que usa automatizacion/generar-y-enviar-reporte.mjs para el correo
-  // automático de los jueves, así que ambos lados siempre producen el
-  // mismo formato exacto.
-  function abrirVistaPreviaImprimir() {
+  // REPORTE NOMINA (cuadrícula semanal + "Pendientes de semanas anteriores").
+  // Solo cuenta lo ya aprobado (documento formal, no depende del checkbox de
+  // "incluir pendientes y rechazados"). El armado real de las 2 páginas vive
+  // en js/reportesHtml.js — lo mismo que usa
+  // automatizacion/generar-y-enviar-reporte.mjs para el correo automático de
+  // los jueves, así que ambos lados siempre producen el mismo formato
+  // exacto.
+  //
+  // Solo el ADMIN puede marcar como "enviado a nóminas": el mismo botón para
+  // supervisor sigue siendo 100% de solo lectura (su reporte es un
+  // preliminar de su equipo, no la entrega oficial). Para el admin, antes de
+  // marcar se pide confirmación — así un click para nada más checar el
+  // formato no marca nada por accidente; ver js/reportesHtml.js
+  // (idsIncluidosEnReporte) para qué exactamente se marca.
+  async function abrirVistaPreviaImprimir() {
     if (!selectSemana.value) {
       alert("Elige la semana en la sección Reportes de arriba.");
       return;
@@ -442,6 +451,30 @@ function construirVista(contenedor, { esAdmin, uid }) {
     const jueves = sumarDias(viernes, 6);
     const numeroSemana = numeroSemanaISO(jueves);
     const logoSrc = window.location.origin + "/img/logo-alanis.png";
+
+    if (esAdmin) {
+      const ids = idsIncluidosEnReporte({ listaHoras, listaVacaciones, listaFaltas, viernes, jueves });
+      const total = ids.horas.length + ids.faltas.length + ids.vacaciones.length;
+      if (total > 0) {
+        const partes = [];
+        if (ids.horas.length) partes.push(`${ids.horas.length} horas extra`);
+        if (ids.faltas.length) partes.push(`${ids.faltas.length} falta(s)`);
+        if (ids.vacaciones.length) partes.push(`${ids.vacaciones.length} vacación(es)`);
+        const confirmado = confirm(
+          `¿Confirmas que este reporte (Semana ${numeroSemana}) ya se entregó a nóminas?\n\n` +
+          `Se marcarán como enviados: ${partes.join(", ")}.\n` +
+          `Esto evita que se dupliquen o se pierdan en reportes futuros.\n\n` +
+          `Cancelar solo abre la vista previa, sin marcar nada.`
+        );
+        if (confirmado) {
+          try {
+            await marcarComoEnviado(ids);
+          } catch (err) {
+            alert("No se pudo marcar como enviado: " + err.message + "\n\nSe abre la vista previa de todos modos.");
+          }
+        }
+      }
+    }
 
     const paginaRH = construirPaginaRH({ listaHoras, mapUsuarios, viernes, jueves, numeroSemana, logoSrc });
     const paginaNomina = construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, jueves, numeroSemana, logoSrc });
@@ -454,6 +487,15 @@ function construirVista(contenedor, { esAdmin, uid }) {
     }
     ventana.document.write(html);
     ventana.document.close();
+  }
+
+  async function marcarComoEnviado(ids) {
+    const ahoraIso = new Date().toISOString();
+    const lote = writeBatch(db);
+    ids.horas.forEach(id => lote.update(doc(db, "solicitudes", id), { enviadoANominaEn: ahoraIso }));
+    ids.faltas.forEach(id => lote.update(doc(db, "faltas", id), { enviadoANominaEn: ahoraIso }));
+    ids.vacaciones.forEach(id => lote.update(doc(db, "solicitudesVacaciones", id), { enviadoANominaEn: ahoraIso }));
+    await lote.commit();
   }
 }
 

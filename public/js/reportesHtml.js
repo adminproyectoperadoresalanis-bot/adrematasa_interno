@@ -216,15 +216,149 @@ export function construirPaginaRH({ listaHoras, mapUsuarios, viernes, jueves, nu
   `;
 }
 
+// --- "Pendientes de semanas anteriores" -----------------------------------
+// Un colaborador a veces captura (o le aprueban) una solicitud DESPUÉS de
+// que el reporte de su semana ya se mandó — con el filtro de arriba
+// (fecha dentro de [viernes, jueves] de la semana que se está armando AHORA)
+// esos registros nunca volverían a aparecer en ningún reporte futuro: se
+// pierden en silencio para siempre. Por eso cada solicitud/falta/vacación
+// aprobada guarda `enviadoANominaEn` (null hasta que de verdad se incluye en
+// un reporte ya entregado — ver automatizacion/generar-y-enviar-reporte.mjs
+// y el botón "Vista previa/Imprimir" del admin en js/reportes.js, los dos
+// únicos lugares que lo escriben, y solo después de la entrega real, nunca
+// solo por generar el PDF). Un registro "pendiente" es uno aprobado, de una
+// semana YA PASADA (respecto a la que se está reportando), que todavía no
+// tiene esa marca — sin importar por qué se quedó fuera (captura tardía,
+// aprobación tardía, o que el envío automático haya fallado esa semana).
+//
+// filtrarActuales/filtrarPendientes son la ÚNICA fuente de verdad de este
+// criterio — tanto construirPaginaNomina (para armar el HTML) como
+// idsIncluidosEnReporte (para que quien llama sepa qué ids marcar como
+// enviados tras la entrega real) parten de aquí, para que nunca se
+// desincronicen.
+function filtrarActuales({ listaHoras, listaVacaciones, listaFaltas, viernes, jueves }) {
+  const dentroDeSemana = (fechaStr) => fechaStr >= viernes && fechaStr <= jueves;
+  return {
+    horas: listaHoras.filter(s => s.estatus === "aprobada" && dentroDeSemana(s.fecha)),
+    faltas: listaFaltas.filter(f => f.estatus === "aprobada" && dentroDeSemana(f.fecha)),
+    vacaciones: listaVacaciones.filter(v => v.estatus === "aprobada" && v.fechaInicio <= jueves && v.fechaFin >= viernes)
+  };
+}
+
+function filtrarPendientes({ listaHoras, listaVacaciones, listaFaltas, viernes }) {
+  const yaPasada = (fechaStr) => fechaStr < viernes;
+  return {
+    horas: listaHoras.filter(s => s.estatus === "aprobada" && !s.enviadoANominaEn && yaPasada(s.fecha)),
+    faltas: listaFaltas.filter(f => f.estatus === "aprobada" && !f.enviadoANominaEn && yaPasada(f.fecha)),
+    vacaciones: listaVacaciones.filter(v => v.estatus === "aprobada" && !v.enviadoANominaEn && yaPasada(v.fechaFin))
+  };
+}
+
+// Ids (de las 3 colecciones) que un reporte de la semana [viernes, jueves]
+// va a incluir — los de esta semana MÁS los pendientes atrasados. Quien
+// arma y de verdad ENTREGA el reporte (correo automático, o el admin al
+// confirmar "Vista previa/Imprimir") usa esto para saber qué documentos
+// marcar con `enviadoANominaEn` justo después de la entrega exitosa.
+export function idsIncluidosEnReporte({ listaHoras, listaVacaciones, listaFaltas, viernes, jueves }) {
+  const actuales = filtrarActuales({ listaHoras, listaVacaciones, listaFaltas, viernes, jueves });
+  const pendientes = filtrarPendientes({ listaHoras, listaVacaciones, listaFaltas, viernes });
+  return {
+    horas: [...actuales.horas, ...pendientes.horas].map(x => x.id),
+    faltas: [...actuales.faltas, ...pendientes.faltas].map(x => x.id),
+    vacaciones: [...actuales.vacaciones, ...pendientes.vacaciones].map(x => x.id)
+  };
+}
+
+const ETIQUETAS_TIPO_PENDIENTE = {
+  horaExtra: "Horas extra",
+  falta: "Falta",
+  vacacion: "Vacación"
+};
+
+// Tabla aparte (caja independiente, NO se mezcla con la cuadrícula semanal
+// de abajo porque esa cuadrícula tiene una columna por día de ESTA semana y
+// un atrasado de hace 3 semanas no tiene en qué columna caer) con el detalle
+// de lo atrasado, para que nóminas lo vea y decida cómo aplicarlo.
+function construirSeccionPendientes({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes }) {
+  const p = filtrarPendientes({ listaHoras, listaVacaciones, listaFaltas, viernes });
+  const pendientes = [
+    ...p.horas.map(s => ({ tipo: "horaExtra", empleadoId: s.empleadoId, empleadoNombre: s.empleadoNombre, fecha: s.fecha, horas: s.horas, motivo: s.motivo })),
+    ...p.faltas.map(f => ({ tipo: "falta", empleadoId: f.empleadoId, empleadoNombre: f.empleadoNombre, fecha: f.fecha, tipoFaltaEtiqueta: ETIQUETAS_FALTA_CORTAS[f.tipo] || f.tipo })),
+    ...p.vacaciones.map(v => ({ tipo: "vacacion", empleadoId: v.empleadoId, empleadoNombre: v.empleadoNombre, fechaInicio: v.fechaInicio, fechaFin: v.fechaFin, dias: v.diasHabiles }))
+  ];
+  if (pendientes.length === 0) return "";
+
+  const filas = pendientes
+    .slice()
+    .sort((a, b) => (a.fecha || a.fechaInicio || "").localeCompare(b.fecha || b.fechaInicio || ""))
+    .map(item => {
+      const datosUsuario = mapUsuarios.get(item.empleadoId) || {};
+      const nombre = item.empleadoNombre || datosUsuario.nombre || "";
+      const numeroEmpleado = datosUsuario.numeroEmpleado || "—";
+      const fechaReal = item.tipo === "vacacion"
+        ? `${formatearFechaCorta(item.fechaInicio)} al ${formatearFechaCorta(item.fechaFin)}`
+        : formatearFechaCorta(item.fecha);
+      const fechaParaSemana = item.tipo === "vacacion" ? item.fechaInicio : item.fecha;
+      const semanaOriginal = numeroSemanaISO(sumarDias(calcularSemanaLaboral(fechaParaSemana), 6));
+      let detalle = "—";
+      let cantidad = "";
+      if (item.tipo === "horaExtra") {
+        detalle = escapeHtml(item.motivo || "");
+        cantidad = `${item.horas} h`;
+      } else if (item.tipo === "falta") {
+        detalle = escapeHtml(item.tipoFaltaEtiqueta || "");
+        cantidad = "1 día";
+      } else if (item.tipo === "vacacion") {
+        cantidad = `${item.dias} día${item.dias === 1 ? "" : "s"}`;
+      }
+      return `
+        <tr>
+          <td class="centrado">${escapeHtml(numeroEmpleado)}</td>
+          <td>${escapeHtml(nombre)}</td>
+          <td class="centrado">${ETIQUETAS_TIPO_PENDIENTE[item.tipo] || item.tipo}</td>
+          <td class="centrado">${fechaReal}</td>
+          <td class="centrado">Semana ${semanaOriginal}</td>
+          <td>${detalle}</td>
+          <td class="centrado">${cantidad}</td>
+        </tr>
+      `;
+    }).join("");
+
+  return `
+    <div class="seccion-pendientes">
+      <div class="seccion-pendientes-titulo">
+        Pendientes de semanas anteriores
+        <span class="seccion-pendientes-subtitulo">Aprobadas después del corte de su semana original — no incluidas en ningún reporte previo</span>
+      </div>
+      <table class="tabla-pendientes">
+        <thead>
+          <tr>
+            <th>No.<br>Emp.</th>
+            <th>Nombre</th>
+            <th>Tipo</th>
+            <th>Fecha</th>
+            <th>Semana original</th>
+            <th>Detalle</th>
+            <th>Cantidad</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filas}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 // Construye la página 2 (REPORTE NOMINA: cuadrícula semanal, viernes a
 // jueves) de la semana [viernes, jueves]. Incluye horas extra, faltas y
-// vacaciones aprobadas.
+// vacaciones aprobadas — más, en su propia sección aparte, lo atrasado de
+// semanas anteriores (ver "Pendientes de semanas anteriores" arriba).
 export function construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, jueves, numeroSemana, logoSrc }) {
   const diasSemana = Array.from({ length: 7 }, (_, i) => sumarDias(viernes, i));
   const dentroDeSemana = (fechaStr) => fechaStr >= viernes && fechaStr <= jueves;
-  const vacacionesSemana = listaVacaciones.filter(v =>
-    v.estatus === "aprobada" && v.fechaInicio <= jueves && v.fechaFin >= viernes
-  );
+  const actuales = filtrarActuales({ listaHoras, listaVacaciones, listaFaltas, viernes, jueves });
+  const vacacionesSemana = actuales.vacaciones;
 
   const porEmpleado = new Map();
   function fila(empleadoId, nombreFallback) {
@@ -242,8 +376,8 @@ export function construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas
     }
     return porEmpleado.get(empleadoId);
   }
-  const horasSemana = listaHoras.filter(s => s.estatus === "aprobada" && dentroDeSemana(s.fecha));
-  const faltasSemana = listaFaltas.filter(f => f.estatus === "aprobada" && dentroDeSemana(f.fecha));
+  const horasSemana = actuales.horas;
+  const faltasSemana = actuales.faltas;
   horasSemana.forEach(s => {
     const e = fila(s.empleadoId, s.empleadoNombre);
     e.horasPorDia[s.fecha] = (e.horasPorDia[s.fecha] || 0) + (Number(s.horas) || 0);
@@ -344,6 +478,8 @@ export function construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas
               </tbody>
             </table>
 
+            ${construirSeccionPendientes({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes })}
+
             <div class="pie-nomina">
               <div class="pie-nomina-contenido">
                 <div class="autorizo">Autorizó: Iván Landa</div>
@@ -419,6 +555,14 @@ export const CSS_REPORTE = `
   .barra-imprimir { text-align:center; margin:14px 0; }
   .barra-imprimir button { padding:8px 18px; font-size:13px; cursor:pointer; }
   @media print { .barra-imprimir { display:none; } }
+
+  .seccion-pendientes { margin-top: 14px; border: 1.5px solid #a35a00; border-radius: 4px; break-inside: avoid; page-break-inside: avoid; }
+  .seccion-pendientes-titulo { background:#fff4e3; color:#7a3e00; font-weight:bold; font-size:10.5px; padding:5px 8px; border-bottom: 1.5px solid #a35a00; display:flex; flex-direction:column; gap:2px; }
+  .seccion-pendientes-subtitulo { font-weight:normal; font-size:8.5px; color:#8a5a20; }
+  .tabla-pendientes { width:100%; border-collapse:collapse; }
+  .tabla-pendientes th, .tabla-pendientes td { border:1px solid #d9b98a; padding:3px 5px; font-size:8.5px; }
+  .tabla-pendientes th { background:#fdf1e0; font-weight:bold; text-align:center; }
+  .tabla-pendientes thead { display: table-header-group; }
 `;
 
 // Arma el documento HTML completo (<!DOCTYPE>...</html>) con las 2 páginas.
