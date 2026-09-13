@@ -205,17 +205,34 @@ service cloud.firestore {
     match /verificaciones_cfdi_local/{embarqueId} {
       allow read: if usuarioActivoValido();
 
-      // Validación 1 — Atención al Cliente escanea el CFDI de origen.
+      // Validación 1 — dos casos (segundo caso agregado 2026-09-12):
+      //   (a) Atención al Cliente escanea el CFDI real — uuidEsperado y
+      //       receptorRFCEsperado ya se conocen desde este mismo create.
+      //   (b) Atención al Cliente confirma que el embarque NO trae factura
+      //       — uuidEsperado/receptorRFCEsperado todavía NO existen (se
+      //       generan hasta que Operaciones cree el QR interno en la
+      //       validación 2, ver más abajo); esQrInterno queda marcado
+      //       desde aquí para poder distinguir el caso en validación 2.
       allow create: if esValidador1()
         && request.resource.data.embarqueId == embarqueId
-        && request.resource.data.uuidEsperado is string
-        && request.resource.data.uuidEsperado.size() > 0
-        && request.resource.data.receptorRFCEsperado is string
-        && request.resource.data.receptorRFCEsperado.size() > 0
         && request.resource.data.estadoSync == 'esperando_validacion2'
         && request.resource.data.origenEscaneo.escaneadoPor.uid == request.auth.uid
         && request.resource.data.origenEscaneo.timestamp == request.time
-        && request.resource.data.origenEscaneo.correccion == null;
+        && request.resource.data.origenEscaneo.correccion == null
+        && (
+          (
+            request.resource.data.get('esQrInterno', false) == false
+            && request.resource.data.uuidEsperado is string
+            && request.resource.data.uuidEsperado.size() > 0
+            && request.resource.data.receptorRFCEsperado is string
+            && request.resource.data.receptorRFCEsperado.size() > 0
+          ) ||
+          (
+            request.resource.data.esQrInterno == true
+            && request.resource.data.get('uuidEsperado', null) == null
+            && request.resource.data.get('receptorRFCEsperado', null) == null
+          )
+        );
 
       // Corrección de la validación 1 (solo supervisor/admin). Si la
       // validación 2 todavía no existía, el embarque sigue esperándola; si
@@ -263,6 +280,66 @@ service cloud.firestore {
         && request.resource.data.operadorAsignado.timestamp == request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['validacion2', 'estadoSync', 'operadorAsignado']);
 
+      // Validación 2 para embarques SIN FACTURA (2026-09-12, reestructuración
+      // del flujo): aquí no hay un CFDI que volver a escanear/comparar — en
+      // vez de eso, Operaciones asigna al operador y EN ESE MISMO MOVIMIENTO
+      // se generan uuidEsperado/receptorRFCEsperado (el QR de control interno
+      // recién creado). A diferencia de la regla de arriba, aquí SÍ se
+      // permite que esos dos campos cambien (de no existir a tener el valor
+      // del QR generado) — nunca de un valor real a otro.
+      allow update: if esValidador2()
+        && resource.data.get('esQrInterno', false) == true
+        && resource.data.origenEscaneo != null
+        && resource.data.get('validacion2', null) == null
+        && request.resource.data.embarqueId == resource.data.embarqueId
+        && request.resource.data.origenEscaneo == resource.data.origenEscaneo
+        && request.resource.data.estadoSync == 'pendiente'
+        && request.resource.data.uuidEsperado is string
+        && request.resource.data.uuidEsperado.size() > 0
+        && request.resource.data.receptorRFCEsperado == 'SIN-FACTURA'
+        && request.resource.data.validacion2.escaneadoPor.uid == request.auth.uid
+        && request.resource.data.validacion2.timestamp == request.time
+        && request.resource.data.validacion2.uuidCoincide == true
+        && request.resource.data.validacion2.rfcCoincide == true
+        && request.resource.data.operadorAsignado.uid is string
+        && request.resource.data.operadorAsignado.uid.size() > 0
+        && exists(/databases/$(database)/documents/operadores_alanis/$(request.resource.data.operadorAsignado.uid))
+        && request.resource.data.operadorAsignado.nombre is string
+        && request.resource.data.operadorAsignado.asignadoPor == request.auth.uid
+        && request.resource.data.operadorAsignado.timestamp == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['validacion2', 'estadoSync', 'operadorAsignado', 'uuidEsperado', 'receptorRFCEsperado']);
+
+      // Reasignación de operador (2026-09-12, decisión de Ivan): cualquier
+      // puesto de Operaciones o admin puede cambiar quién es el
+      // operadorAsignado — con o sin factura, sin justificar motivo —
+      // mientras la pre-entrega (Checkpoint 2) todavía no se haya
+      // completado. verificaciones_cfdi_resultado es donde Alanis
+      // Operadores refleja ese resultado (ver esa colección más abajo);
+      // mientras no exista, o no traiga VALIDADO/DISCREPANCIA todavía, se
+      // puede reasignar cuantas veces haga falta. El operador anterior
+      // nunca se pierde: historialReasignaciones solo permite AGREGAR
+      // (nunca se le exige que crezca por un tamaño exacto porque el
+      // cliente arma el arreglo completo desde el valor leído, igual que ya
+      // se hace con validacion2/operadorAsignado arriba).
+      allow update: if esValidador2()
+        && resource.data.get('operadorAsignado', null) != null
+        && !(
+          exists(/databases/$(database)/documents/verificaciones_cfdi_resultado/$(embarqueId)) &&
+          get(/databases/$(database)/documents/verificaciones_cfdi_resultado/$(embarqueId)).data.get('estatusValidacion', null) in ['VALIDADO', 'DISCREPANCIA']
+        )
+        && request.resource.data.operadorAsignado.uid is string
+        && request.resource.data.operadorAsignado.uid.size() > 0
+        && exists(/databases/$(database)/documents/operadores_alanis/$(request.resource.data.operadorAsignado.uid))
+        && request.resource.data.operadorAsignado.nombre is string
+        && request.resource.data.operadorAsignado.asignadoPor == request.auth.uid
+        && request.resource.data.operadorAsignado.timestamp == request.time
+        && request.resource.data.historialReasignaciones is list
+        // NUEVO (2026-09-13): la reasignación ahora también debe poner
+        // estadoSync en 'pendiente' para que la sincronización (Cloud
+        // Function o Codigo.gs) recoja el operadorAsignado nuevo.
+        && request.resource.data.estadoSync == 'pendiente'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['operadorAsignado', 'historialReasignaciones', 'estadoSync']);
+
       allow delete: if false;
     }
 
@@ -286,13 +363,33 @@ service cloud.firestore {
     // ------------------------------------------------------------------
     match /qr_internos_generados/{embarqueId} {
       allow read: if usuarioActivoValido();
-      allow create: if esValidador1()
+      // 2026-09-12: antes solo Atención al Cliente (esValidador1) generaba
+      // este QR; con la reestructuración del flujo sin factura, ahora es
+      // Operaciones (esValidador2) quien lo crea, al asignar operador.
+      allow create: if (esValidador1() || esValidador2())
         && request.resource.data.uuid is string
         && request.resource.data.uuid.size() > 0
         && request.resource.data.rfc == 'SIN-FACTURA'
         && request.resource.data.generadoPor.uid == request.auth.uid
         && request.resource.data.timestamp == request.time;
-      allow update, delete: if false;
+
+      // Reasignación de operador (2026-09-12): si el embarque sin factura se
+      // reasigna ANTES de que el operador anterior haya hecho Checkpoint 1
+      // (recepción — reflejado en verificaciones_cfdi_resultado.
+      // recepcionResultado), se reimprime el MISMO QR (uuid/rfc/texto NUNCA
+      // cambian aquí) solo actualizando el nombre visible en el papel. Si
+      // Checkpoint 1 ya se hizo, esta rama ni siquiera se necesita — el
+      // cliente no la usa (ver reasignarOperador() en escaneoOrigen.js) —
+      // pero igual queda acotada aquí por seguridad, nunca solo del lado del
+      // navegador.
+      allow update: if esValidador2()
+        && !(
+          exists(/databases/$(database)/documents/verificaciones_cfdi_resultado/$(embarqueId)) &&
+          get(/databases/$(database)/documents/verificaciones_cfdi_resultado/$(embarqueId)).data.get('recepcionResultado', null) != null
+        )
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['operadorNombre']);
+
+      allow delete: if false;
     }
 
     match /verificaciones_cfdi_resultado/{embarqueId} {

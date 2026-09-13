@@ -66,6 +66,45 @@ const CLASES_SYNC = {
 const RFC_MARCADOR_SIN_FACTURA = "SIN-FACTURA";
 const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factura";
 
+// ----------------------------------------------------------------------
+// Control de versión (agregado 2026-09-12): permite a Ivan saber, sin
+// preguntarle a nadie, qué versión de la app tiene abierta cada usuario
+// (se reporta a usuarios/{uid} en Firestore) y avisa en pantalla cuando
+// hay una versión más nueva publicada que la que está cargada. Sube
+// APP_VERSION en cada deploy que quieras poder detectar, y actualiza
+// version.json al mismo valor.
+// ----------------------------------------------------------------------
+const APP_VERSION = "2026.09.12-1";
+
+async function verificarActualizacionYReportarVersion(uid) {
+  // Reporta la versión actual — no bloqueante, no crítico si falla.
+  setDoc(doc(db, "usuarios", uid), {
+    appVersion: APP_VERSION,
+    appVersionFecha: serverTimestamp()
+  }, { merge: true }).catch(() => {});
+
+  // Compara contra version.json (sin caché) para avisar si hay algo más
+  // nuevo publicado que lo que el navegador tiene cargado ahora mismo.
+  try {
+    const resp = await fetch("./version.json?t=" + Date.now(), { cache: "no-store" });
+    if (!resp.ok) return;
+    const datos = await resp.json();
+    if (datos.version && datos.version !== APP_VERSION) mostrarBannerActualizacion();
+  } catch (e) {
+    // Sin conexión o archivo no publicado todavía — no es crítico.
+  }
+}
+
+function mostrarBannerActualizacion() {
+  if (document.getElementById("banner-actualizacion-app")) return;
+  const banner = document.createElement("div");
+  banner.id = "banner-actualizacion-app";
+  banner.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:9999;background:#92400e;color:#fff;padding:10px 16px;font-size:13px;display:flex;align-items:center;justify-content:center;gap:12px;font-family:system-ui,-apple-system,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,0.25);";
+  banner.innerHTML = `<span>Hay una versión nueva de la app disponible.</span><button id="banner-actualizacion-btn" style="background:#fff;color:#92400e;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer;">Recargar</button>`;
+  document.body.prepend(banner);
+  document.getElementById("banner-actualizacion-btn").addEventListener("click", () => location.reload());
+}
+
 function generarDatosQrInterno() {
   const uuid = (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : uuidFallback_()).toUpperCase();
   const rfc = RFC_MARCADOR_SIN_FACTURA;
@@ -191,6 +230,8 @@ const ICONO_ALERTA = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 // (se usa .nombre, .rol, .area y .puesto). uid: el auth.uid de quien tiene
 // la sesión abierta.
 export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
+  verificarActualizacionYReportarVersion(uid);
+
   const esAdmin = datosUsuario.rol === "admin";
   const puedeCorregir = ROLES_QUE_CORRIGEN.includes(datosUsuario.rol);
   const puedeValidar1 = esAdmin || datosUsuario.area === AREA_ATENCION_CLIENTE;
@@ -402,6 +443,10 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       }
       .qr-interno-imagen-wrap { margin: 16px 0; display: flex; justify-content: center; }
       .qr-interno-etiqueta-impresa { font-size: 11px; color: #6b6558; margin-top: -6px; margin-bottom: 12px; }
+      /* Nombre del operador asignado (2026-09-12) — solo texto visible en
+         pantalla/impreso, NUNCA dentro de los datos que codifica el QR. */
+      .qr-interno-operador { font-size: 13px; font-weight: 700; color: #1c1a17; text-align: center; margin: -6px 0 12px; }
+      .qr-interno-operador-impreso { font-size: 13px; font-weight: 700; color: #1c1a17; text-align: center; margin-top: 10px; }
       .qr-interno-acciones { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 6px; }
 
       /* Impresión aislada del QR interno — corregido 2026-09-10 (Ivan
@@ -525,7 +570,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         </div>
 
         <div id="modal-escaneo-confirmar" class="oculto">
-          <div class="modal-fila">
+          <div class="modal-fila" id="modal-lectura-cfdi-wrap">
             <label>UUID leído
               <input type="text" id="modal-confirmar-uuid" disabled>
             </label>
@@ -601,11 +646,11 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <div class="qr-interno-aviso">
           Confirma que esto es un movimiento interno de inventario de McCain (sin factura porque no hay riesgo fiscal que mostrar) — no un correo con la factura extraviada o ilegible. Si no estás seguro, verifica con McCain antes de continuar.
         </div>
-        <p class="nota">Al confirmar se genera un código QR de control interno (marcado "SIN FACTURA") que debes imprimir e integrar al set de documentos de este embarque, para escanearlo en cada paso exactamente igual que un CFDI real.</p>
+        <p class="nota">Al confirmar, este embarque pasa directamente a la cola de Operaciones (segunda validación) — ahí se asigna al operador y en ese mismo momento se genera e imprime el QR de control interno (marcado "SIN FACTURA").</p>
         <div id="confirmar-sin-factura-error" class="error"></div>
         <div class="modal-acciones">
           <button type="button" class="secundario" id="confirmar-sin-factura-cancelar">Cancelar</button>
-          <button type="button" id="confirmar-sin-factura-generar">Confirmar y generar QR interno</button>
+          <button type="button" id="confirmar-sin-factura-generar">Confirmar sin factura</button>
         </div>
       </div>
     </div>
@@ -617,6 +662,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <p id="qr-interno-info"></p>
         <div class="qr-interno-imagen-wrap"><div id="qr-interno-canvas"></div></div>
         <div class="qr-interno-etiqueta-impresa" id="qr-interno-etiqueta"></div>
+        <p class="qr-interno-operador oculto" id="qr-interno-operador"></p>
         <p class="nota" style="text-align:center;">Imprime esta etiqueta e intégrala al set de documentos de este embarque. No es una factura — es un control interno de Alanis para poder seguir el proceso de escaneo en cada checkpoint.</p>
         <div class="qr-interno-acciones">
           <button type="button" class="secundario" id="qr-interno-cerrar">Cerrar</button>
@@ -772,17 +818,15 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   }
 
   // Embarque sin Cadena Original del SAT capturada por el VBA (McCain no
-  // adjuntó factura, o el PDF no era legible — ver nota en el botón de
-  // abajo). Mientras no se haya generado el QR interno, se ofrece el botón
-  // para generarlo (requiere confirmación explícita); una vez generado, se
-  // ofrece reimprimirlo y el botón normal de Escanear queda disponible
-  // (2026-09-10).
-  function filaSinFactura(p, qrInterno) {
+  // adjuntó factura, o el PDF no era legible). Rediseñado 2026-09-12: ya no
+  // se genera QR aquí — Atención al Cliente solo confirma con un clic que
+  // el embarque no trae factura y lo pasa automáticamente a la cola de
+  // Operaciones, quien crea el QR al asignar operador (ver
+  // abrirModalAsignarOperadorSinFactura más abajo).
+  function filaSinFactura(p) {
     const accionesHtml = !puedeValidar1
       ? `<span class="nota" style="margin:0;">Requiere Atención al Cliente</span>`
-      : (qrInterno
-          ? `<button type="button" class="btn-imprimir-qr-interno">Reimprimir QR interno</button>${botonEscanearHtml()}`
-          : `<button type="button" class="btn-generar-qr-interno">Generar QR interno</button>`);
+      : `<button type="button" class="btn-confirmar-sin-factura">Confirmar sin factura</button>`;
     return `
       <tr data-id="${p.id}">
         <td>${escapeHtml(p.shipment || "—")}</td>
@@ -920,11 +964,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     const idsEscaneados = new Set(listaHistorial.filter(f => f.origenEscaneo).map(f => f.id));
     const pendientesVisibles = listaPendientes.filter(p => !idsEscaneados.has(p.id) || p.correccionPostValidacion);
 
-    // qrInterno ya generado para este embarque (sin factura), esperando su
-    // escaneo — vive en Firestore (qr_internos_generados), no en memoria,
-    // para que sea visible sin importar desde qué dispositivo se escanee.
-    const qrInternoPorId = new Map(listaQrInternos.map(q => [q.id, q]));
-
     renderChipEsperaInicio(pendientesVisibles.filter(p => !p.correccionPostValidacion).length);
     if (puedeValidar1) verificarCorreccionesPostValidacion(pendientesVisibles);
 
@@ -937,7 +976,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     tbodyPendientes.innerHTML = pendientesVisibles.map(p => {
       if (p.correccionPostValidacion) return filaCorreccionPostValidacion(p);
       if (p.correccionCajaAnterior || p.correccionCajaNueva) return filaCorreccionPreValidacion(p);
-      if (!p.uuidFactura) return filaSinFactura(p, qrInternoPorId.get(p.id));
+      if (!p.uuidFactura) return filaSinFactura(p);
       return filaPendienteNormal(p);
     }).join("");
 
@@ -969,19 +1008,11 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       });
     });
 
-    tbodyPendientes.querySelectorAll(".btn-generar-qr-interno").forEach(btn => {
+    tbodyPendientes.querySelectorAll(".btn-confirmar-sin-factura").forEach(btn => {
       btn.addEventListener("click", () => {
         const id = btn.closest("tr").dataset.id;
         const p = listaPendientes.find(x => x.id === id);
         abrirConfirmacionSinFactura(p, id);
-      });
-    });
-
-    tbodyPendientes.querySelectorAll(".btn-imprimir-qr-interno").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const id = btn.closest("tr").dataset.id;
-        const datosQr = listaQrInternos.find(q => q.id === id);
-        if (datosQr) mostrarQrInterno(datosQr, id, listaPendientes.find(x => x.id === id));
       });
     });
 
@@ -1001,13 +1032,15 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     tbodyValidacion2.innerHTML = pendientes.map(f => `
       <tr data-id="${f.id}">
         <td>${escapeHtml(f.embarqueId || f.id)}</td>
-        <td>${escapeHtml(f.clienteNombre || "McCain")}</td>
+        <td>${escapeHtml(f.clienteNombre || "McCain")}${f.esQrInterno ? '<br><span class="badge-sin-factura" title="Movimiento interno de McCain, sin factura">SIN FACTURA</span>' : ""}</td>
         <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—")}</td>
         <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.escaneadoPor && f.origenEscaneo.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.origenEscaneo && f.origenEscaneo.timestamp)}</td>
         <td class="acciones">
-          ${puedeValidar2
-            ? `<button type="button" class="btn-validar2">Validar</button>`
-            : `<span class="nota" style="margin:0;">Requiere Operaciones</span>`}
+          ${!puedeValidar2
+            ? `<span class="nota" style="margin:0;">Requiere Operaciones</span>`
+            : (f.esQrInterno
+                ? `<button type="button" class="btn-asignar-operador-sin-factura">Asignar operador y generar QR</button>`
+                : `<button type="button" class="btn-validar2">Validar</button>`)}
         </td>
       </tr>
     `).join("");
@@ -1025,6 +1058,17 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
           uuidEsperado: f ? f.uuidEsperado : null,
           rfcEsperado: f ? f.receptorRFCEsperado : null
         });
+      });
+    });
+
+    // Sin factura (2026-09-12): en vez de escanear/comparar un CFDI que no
+    // existe, Operaciones asigna aquí al operador y en ese mismo momento se
+    // genera el QR de control interno (ver abrirModalAsignarOperadorSinFactura).
+    tbodyValidacion2.querySelectorAll(".btn-asignar-operador-sin-factura").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.closest("tr").dataset.id;
+        const f = listaHistorial.find(x => x.id === id);
+        if (f) abrirModalAsignarOperadorSinFactura(id, f);
       });
     });
   }
@@ -1154,9 +1198,24 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     return `<span class="badge ${valor ? "badge-aprobada" : "badge-rechazada"}" style="margin-left:6px;">${valor ? etiquetaSi : etiquetaNo}</span>`;
   }
 
+  // Reasignación de operador (2026-09-12, decisión de Ivan): disponible
+  // para CUALQUIER puesto de Operaciones o admin (mismo criterio que
+  // puedeValidar2), para embarques con o sin factura, sin pedir motivo —
+  // mientras la pre-entrega (Checkpoint 2) todavía no se haya completado.
+  // Una vez que verificaciones_cfdi_resultado ya trae VALIDADO/DISCREPANCIA
+  // (listaResultados, sincronizado en vivo), ya no se puede reasignar.
+  function puedeReasignar(f) {
+    if (!puedeValidar2) return false;
+    if (!f.operadorAsignado) return false;
+    const r = listaResultados.find(x => x.id === f.id);
+    const preEntregaCompletada = !!(r && (r.estatusValidacion === "VALIDADO" || r.estatusValidacion === "DISCREPANCIA"));
+    return !preEntregaCompletada;
+  }
+
   function renderHistorial() {
+    const mostrarColumnaAcciones = puedeCorregir || puedeValidar2;
     if (listaHistorial.length === 0) {
-      tbodyHistorial.innerHTML = `<tr><td colspan="${puedeCorregir ? 8 : 7}">Todavía no hay escaneos de origen.</td></tr>`;
+      tbodyHistorial.innerHTML = `<tr><td colspan="${mostrarColumnaAcciones ? 8 : 7}">Todavía no hay escaneos de origen.</td></tr>`;
       return;
     }
     tbodyHistorial.innerHTML = listaHistorial.map(f => {
@@ -1189,8 +1248,9 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <td>${celdaAtencion}</td>
         <td>${celdaValidacion2}</td>
         <td><span class="badge ${CLASES_SYNC[f.estadoSync] || "badge-pendiente"}">${ETIQUETAS_SYNC[f.estadoSync] || f.estadoSync}</span></td>
-        ${puedeCorregir ? `<td class="acciones">
-              <button type="button" class="secundario btn-corregir-origen">Corregir origen</button>
+        ${mostrarColumnaAcciones ? `<td class="acciones">
+              ${puedeCorregir ? `<button type="button" class="secundario btn-corregir-origen">Corregir origen</button>` : ""}
+              ${puedeReasignar(f) ? `<button type="button" class="secundario btn-reasignar-operador" title="Cambia quién es el operador asignado a este embarque">Reasignar operador</button>` : ""}
               ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. No es reversible.">Borrar</button>` : ""}
             </td>` : ""}
       </tr>
@@ -1209,6 +1269,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
             cajaEsperada: f ? f.cajaEsperada : null,
             cajaPrevia: (f && f.origenEscaneo && f.origenEscaneo.caja) || ""
           });
+        });
+      });
+    }
+
+    if (puedeValidar2) {
+      tbodyHistorial.querySelectorAll(".btn-reasignar-operador").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const id = btn.closest("tr").dataset.id;
+          const f = listaHistorial.find(x => x.id === id);
+          if (f) abrirModalReasignarOperador(id, f);
         });
       });
     }
@@ -1281,6 +1351,10 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const inputManualRfc = contenedor.querySelector("#modal-manual-rfc");
   const inputConfirmarUuid = contenedor.querySelector("#modal-confirmar-uuid");
   const inputConfirmarRfc = contenedor.querySelector("#modal-confirmar-rfc");
+  // Fila "UUID leído / RFC receptor leído" — no aplica en el flujo de
+  // asignar operador + generar QR sin factura (2026-09-12, ver
+  // abrirModalAsignarOperadorSinFactura), así que se puede ocultar.
+  const modalLecturaCfdiWrap = contenedor.querySelector("#modal-lectura-cfdi-wrap");
   const inputConfirmarCaja = contenedor.querySelector("#modal-confirmar-caja");
   const operadorWrapDiv = contenedor.querySelector("#modal-operador-wrap");
   // #modal-confirmar-operador conserva el mismo id de siempre, ahora en un
@@ -1294,6 +1368,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const confirmarErrorDiv = contenedor.querySelector("#modal-confirmar-error");
   const botonesModo = contenedor.querySelectorAll(".subnav-boton[data-modo]");
   const botonGuardar = contenedor.querySelector("#modal-confirmar-guardar");
+  const botonVolverEscanear = contenedor.querySelector("#modal-volver-escanear");
 
   const overlayResultado = contenedor.querySelector("#resultado-escaneo-origen");
   const overlayIcono = contenedor.querySelector("#resultado-escaneo-icono");
@@ -1354,6 +1429,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   // dibujarQrInterno más abajo).
   const contenedorQrInterno = contenedor.querySelector("#qr-interno-canvas");
   const etiquetaQrInterno = contenedor.querySelector("#qr-interno-etiqueta");
+  const operadorQrInterno = contenedor.querySelector("#qr-interno-operador");
   const botonCerrarQrInterno = contenedor.querySelector("#qr-interno-cerrar");
   const botonImprimirQrInterno = contenedor.querySelector("#qr-interno-imprimir");
 
@@ -1498,41 +1574,54 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     modalSinFactura.classList.add("oculto");
   });
 
+  // Rediseñado 2026-09-12: Atención al Cliente ya NO genera el QR aquí —
+  // solo confirma que el embarque no trae factura y lo pasa directo a la
+  // cola de segunda validación (Operaciones), quien crea el QR al asignar
+  // operador (ver crearQrInternoYAsignarOperador más abajo).
   botonGenerarSinFactura.addEventListener("click", async () => {
     if (!embarqueSinFacturaActual) return;
     const { id, p } = embarqueSinFacturaActual;
     errorSinFactura.textContent = "";
     botonGenerarSinFactura.disabled = true;
     try {
-      const datosQr = generarDatosQrInterno();
-      // Persistido de verdad en qr_internos_generados (create-only, ver
-      // firestore.rules) — así el QR sigue existiendo sin importar desde
-      // qué dispositivo se escanee después. Si esta escritura falla con
-      // "permission-denied", casi seguro es que el firestore.rules nuevo
-      // (con el match de qr_internos_generados) todavía no está desplegado.
-      await setDoc(doc(db, "qr_internos_generados", id), {
-        uuid: datosQr.uuid,
-        rfc: datosQr.rfc,
-        texto: datosQr.texto,
-        motivo: "movimiento_interno_sin_factura",
-        generadoPor: { uid, nombre: datosUsuario.nombre || null },
-        timestamp: serverTimestamp()
+      await setDoc(doc(db, "verificaciones_cfdi_local", id), {
+        embarqueId: id,
+        estadoSync: "esperando_validacion2",
+        esQrInterno: true,
+        cajaEsperada: (p && p.caja) || null,
+        origenEscaneo: {
+          caja: (p && p.caja) || null,
+          cajaCoincide: true,
+          facturaUuidEsperado: null,
+          facturaUuidCoincide: null,
+          escaneadoPor: { uid, nombre: datosUsuario.nombre || null, rol: datosUsuario.rol },
+          timestamp: serverTimestamp(),
+          correccion: null
+        }
       });
       modalSinFactura.classList.add("oculto");
-      mostrarQrInterno(datosQr, id, p);
       embarqueSinFacturaActual = null;
     } catch (err) {
-      errorSinFactura.textContent = "No se pudo generar el QR interno: " + err.message;
+      errorSinFactura.textContent = "No se pudo confirmar: " + err.message;
     } finally {
       botonGenerarSinFactura.disabled = false;
     }
   });
 
-  function mostrarQrInterno(datosQr, id, p) {
+  // operadorNombre (2026-09-12, opcional): se muestra como texto visible en
+  // pantalla y en el documento impreso — NUNCA se codifica dentro del QR
+  // (parsearQR() sigue leyendo solo id/rr, sin cambios; el candado de
+  // identidad del operador se valida contra operadorAsignado en Firestore,
+  // no contra lo impreso en el papel).
+  function mostrarQrInterno(datosQr, id, p, operadorNombre) {
     const etiqueta = (p && (p.shipment || p.ocCliente)) || id;
     infoQrInterno.textContent = `Embarque ${etiqueta} — ${(p && p.clienteNombre) || "McCain"}, caja ${(p && p.caja) || "—"}. Este código reemplaza el QR de la factura (que no existe para este embarque).`;
     etiquetaQrInterno.textContent = `SIN-FACTURA · ${etiqueta}`;
-    qrInternoImpresionActual = { etiqueta };
+    if (operadorQrInterno) {
+      operadorQrInterno.textContent = operadorNombre ? `Operador asignado: ${operadorNombre}` : "";
+      operadorQrInterno.classList.toggle("oculto", !operadorNombre);
+    }
+    qrInternoImpresionActual = { etiqueta, operadorNombre: operadorNombre || null };
     dibujarQrInterno(datosQr.texto);
     overlayQrInterno.classList.remove("oculto");
   }
@@ -1607,6 +1696,14 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     tarjeta.appendChild(info);
     tarjeta.appendChild(imagenWrap);
     tarjeta.appendChild(etiquetaImpresa);
+    // Nombre del operador asignado (2026-09-12) — solo texto en el
+    // documento impreso, no forma parte de los datos del QR.
+    if (qrInternoImpresionActual && qrInternoImpresionActual.operadorNombre) {
+      const operadorImpreso = document.createElement("div");
+      operadorImpreso.className = "qr-interno-operador-impreso";
+      operadorImpreso.textContent = `Operador asignado: ${qrInternoImpresionActual.operadorNombre}`;
+      tarjeta.appendChild(operadorImpreso);
+    }
     elImpresionQrInterno.appendChild(tarjeta);
   }
 
@@ -1655,7 +1752,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     modalErrorDiv.textContent = "";
     mostrarConfirmacion({ uuid: uuid.toUpperCase(), rfc: rfc.toUpperCase() });
   });
-  contenedor.querySelector("#modal-volver-escanear").addEventListener("click", volverAEscanear);
+  botonVolverEscanear.addEventListener("click", volverAEscanear);
   botonGuardar.addEventListener("click", guardarEscaneo);
   contenedor.querySelector("#modal-escaneo-cancelar").addEventListener("click", cerrarModal);
 
@@ -1888,7 +1985,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     // el mismo movimiento. No se puede dejar pendiente — sin esto, no se
     // guarda nada (mismo criterio de "bloqueo real" que la caja y el CFDI).
     let operadorAsignado = null;
-    if (modoActual === "validacion2") {
+    if (modoActual === "validacion2" || modoActual === "asignar_operador_sin_factura" || modoActual === "reasignar_operador") {
       const uidOperador = selectOperador ? selectOperador.value : "";
       if (!uidOperador) {
         confirmarErrorDiv.textContent = "Selecciona el operador asignado a este embarque — es obligatorio para poder continuar.";
@@ -1926,6 +2023,43 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         await corregirEscaneo(embarqueActual, { ...datosLeidos, caja: cajaCapturada, cajaCoincide });
       } else if (modoActual === "validacion2") {
         await registrarValidacion2(embarqueActual, { ...datosLeidos, caja: cajaCapturada, cajaCoincide, uuidCoincide, rfcCoincide, operadorAsignado });
+      } else if (modoActual === "asignar_operador_sin_factura") {
+        // Este modo no "registra un resultado" — CREA el QR interno y de
+        // una vez lo muestra para imprimir, en vez de la pantalla genérica
+        // de éxito/discrepancia. Se captura embarqueActual ANTES de
+        // cerrarModal() porque cerrarModal() lo pone en null.
+        const idEmbarqueQr = embarqueActual;
+        const pInfo = listaPendientes.find(x => x.id === idEmbarqueQr) || listaHistorial.find(x => x.id === idEmbarqueQr);
+        const datosQr = await crearQrInternoYAsignarOperador(idEmbarqueQr, operadorAsignado);
+        cerrarModal();
+        mostrarQrInterno(datosQr, idEmbarqueQr, pInfo, operadorAsignado.nombre);
+        return;
+      } else if (modoActual === "reasignar_operador") {
+        // Igual que arriba: se captura embarqueActual ANTES de cerrarModal().
+        const idEmbarqueReasignado = embarqueActual;
+        const resultado = await reasignarOperador(idEmbarqueReasignado, operadorAsignado);
+        cerrarModal();
+        if (resultado.reimprimir) {
+          // Sin factura + Checkpoint 1 todavía no hecho: se reimprime el
+          // MISMO QR (mismo uuid/rfc) con el nombre del operador nuevo — no
+          // se genera un QR distinto (ver crearQrInternoYAsignarOperador).
+          const pInfo = listaPendientes.find(x => x.id === idEmbarqueReasignado) || listaHistorial.find(x => x.id === idEmbarqueReasignado);
+          mostrarQrInterno(resultado.datosQr, idEmbarqueReasignado, pInfo, operadorAsignado.nombre);
+        } else {
+          overlayResultado.classList.remove("oculto", "exito", "discrepancia");
+          overlayResultado.classList.add("exito");
+          overlayIcono.innerHTML = ICONO_EXITO;
+          overlayRegistro.classList.remove("oculto");
+          botonOverlayContinuar.classList.remove("oculto");
+          botonOverlayVolver.classList.add("oculto");
+          overlayTitulo.textContent = "Operador reasignado";
+          overlayDetalle.textContent = `Ahora el embarque está asignado a ${operadorAsignado.nombre}.`;
+          overlayDetalle2.classList.add("oculto");
+          overlayRegistro.textContent = `Reasignado por ${datosUsuario.nombre || "—"} · ${new Date().toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" })}`;
+          reproducirSonido("exito");
+          vibrar("exito");
+        }
+        return;
       } else {
         await registrarEscaneo(embarqueActual, {
           ...datosLeidos, caja: cajaCapturada, cajaCoincide, cajaEsperada: cajaEsperadaActual || null,
@@ -2066,6 +2200,11 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     // como punto de comparación independiente (así fue como se detectó:
     // Daniel la vio precargada al hacer la 2da validación).
     inputConfirmarCaja.value = (modo === "correccion") ? (cajaPrevia || "") : "";
+    inputConfirmarCaja.disabled = false;
+    // Reset defensivo de lo que solo cambia abrirModalAsignarOperadorSinFactura.
+    if (modalLecturaCfdiWrap) modalLecturaCfdiWrap.classList.remove("oculto");
+    botonVolverEscanear.classList.remove("oculto");
+    botonGuardar.textContent = "Confirmar y registrar";
     if (operadorWrapDiv) operadorWrapDiv.classList.toggle("oculto", modo !== "validacion2");
     if (selectOperador) selectOperador.value = "";
     if (inputBuscarOperador) inputBuscarOperador.value = "";
@@ -2078,6 +2217,87 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     modoManualDiv.classList.add("oculto");
     modal.classList.remove("oculto");
     iniciarCamara();
+  }
+
+  // Sin factura (2026-09-12): Operaciones asigna aquí al operador y, al
+  // confirmar, se genera de una vez el QR de control interno — reutiliza el
+  // mismo modal de escaneo (mismo combobox de operador ya construido), pero
+  // saltando directo a la sección de "confirmar" (no hay nada que escanear:
+  // no existe un CFDI real que leer, así que tampoco tiene caso mostrar
+  // Cámara/Captura manual ni los campos de UUID/RFC leído).
+  function abrirModalAsignarOperadorSinFactura(embarqueId, f) {
+    embarqueActual = embarqueId;
+    modoActual = "asignar_operador_sin_factura";
+    // Valor de relleno para no bloquear el candado inicial de guardarEscaneo()
+    // (if (!datosLeidos || !embarqueActual) return;) — este modo no escanea
+    // nada, así que uuid/rfc quedan null a propósito.
+    datosLeidos = { uuid: null, rfc: null };
+    cajaEsperadaActual = null;
+    uuidEsperadoActual = null;
+    rfcEsperadoActual = null;
+    modalTitulo.textContent = "Asignar operador y generar QR (sin factura)";
+    modalInfo.textContent = `Embarque ${(f && f.embarqueId) || embarqueId} — ${(f && f.clienteNombre) || "McCain"}. Selecciona el operador asignado — al confirmar se genera el QR de control interno y se abre para imprimir.`;
+    modalErrorDiv.textContent = "";
+    confirmarErrorDiv.textContent = "";
+    inputConfirmarUuid.value = "";
+    inputConfirmarRfc.value = "";
+    if (modalLecturaCfdiWrap) modalLecturaCfdiWrap.classList.add("oculto");
+    // La caja ya se confirmó en la primera validación (Atención al Cliente)
+    // — se muestra de referencia, pero ya no se vuelve a capturar a mano.
+    inputConfirmarCaja.value = (f && f.origenEscaneo && f.origenEscaneo.caja) || "";
+    inputConfirmarCaja.disabled = true;
+    botonVolverEscanear.classList.add("oculto");
+    botonGuardar.textContent = "Generar QR y confirmar";
+    if (operadorWrapDiv) operadorWrapDiv.classList.remove("oculto");
+    if (selectOperador) selectOperador.value = "";
+    if (inputBuscarOperador) inputBuscarOperador.value = "";
+    cerrarListaOperador();
+    renderSelectorOperador();
+    // Salta directo a la sección de confirmar — no hay captura/escaneo en
+    // este flujo.
+    seccionCaptura.classList.add("oculto");
+    seccionConfirmar.classList.remove("oculto");
+    modal.classList.remove("oculto");
+  }
+
+  // Reasignación de operador (2026-09-12, decisión de Ivan): disponible
+  // para cualquier embarque que ya tenga operadorAsignado, con o sin
+  // factura, sin pedir motivo, mientras la pre-entrega no se haya
+  // completado (ver puedeReasignar()). Reutiliza el mismo combobox de
+  // operador, sin captura/escaneo — salta directo a "confirmar", igual
+  // que abrirModalAsignarOperadorSinFactura.
+  function abrirModalReasignarOperador(embarqueId, f) {
+    embarqueActual = embarqueId;
+    modoActual = "reasignar_operador";
+    // Valor de relleno para no bloquear el candado inicial de guardarEscaneo()
+    // — este modo no escanea nada.
+    datosLeidos = { uuid: null, rfc: null };
+    cajaEsperadaActual = null;
+    uuidEsperadoActual = null;
+    rfcEsperadoActual = null;
+    const operadorActualNombre = (f.operadorAsignado && f.operadorAsignado.nombre) || "—";
+    modalTitulo.textContent = "Reasignar operador";
+    modalInfo.textContent = `Embarque ${f.embarqueId || embarqueId} — ${f.clienteNombre || "McCain"}. Operador actual: ${operadorActualNombre}. Selecciona el nuevo operador asignado.`;
+    modalErrorDiv.textContent = "";
+    confirmarErrorDiv.textContent = "";
+    inputConfirmarUuid.value = "";
+    inputConfirmarRfc.value = "";
+    if (modalLecturaCfdiWrap) modalLecturaCfdiWrap.classList.add("oculto");
+    // Solo de referencia — no se vuelve a capturar a mano en este modo.
+    inputConfirmarCaja.value = (f.origenEscaneo && f.origenEscaneo.caja) || "";
+    inputConfirmarCaja.disabled = true;
+    botonVolverEscanear.classList.add("oculto");
+    botonGuardar.textContent = "Confirmar reasignación";
+    if (operadorWrapDiv) operadorWrapDiv.classList.remove("oculto");
+    if (selectOperador) selectOperador.value = "";
+    if (inputBuscarOperador) inputBuscarOperador.value = "";
+    cerrarListaOperador();
+    renderSelectorOperador();
+    // Salta directo a la sección de confirmar — no hay captura/escaneo en
+    // este flujo.
+    seccionCaptura.classList.add("oculto");
+    seccionConfirmar.classList.remove("oculto");
+    modal.classList.remove("oculto");
   }
 
   function cerrarModal() {
@@ -2175,6 +2395,129 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         timestamp: serverTimestamp()
       }
     });
+  }
+
+  // Sin factura (2026-09-12): reemplaza a registrarValidacion2 para estos
+  // casos — en vez de comparar un escaneo contra un CFDI que no existe,
+  // AQUÍ SE CREA el QR interno (mismo formato id/rr de siempre) en el mismo
+  // momento en que Operaciones asigna al operador. Devuelve los datos del
+  // QR generado para que quien llama pueda mostrarlo/imprimirlo enseguida.
+  async function crearQrInternoYAsignarOperador(embarqueId, operadorAsignado) {
+    const snap = await getDoc(doc(db, "verificaciones_cfdi_local", embarqueId));
+    if (!snap.exists()) throw new Error("No se encontró el embarque.");
+    const datosPrevios = snap.data();
+    const datosQr = generarDatosQrInterno();
+
+    // Persistido en su propia colección (create-only, ver firestore.rules)
+    // — igual que antes, ahora además con el nombre del operador para poder
+    // imprimirlo en el documento. OJO: el nombre NUNCA se mete en `texto`
+    // (el contenido real del QR) — decisión de diseño 2026-09-12, para que
+    // no quede un dato obsoleto grabado en el QR si el operador se
+    // reasigna después de imprimir. La identidad se valida siempre contra
+    // operadorAsignado en Firestore, nunca contra el documento impreso.
+    await setDoc(doc(db, "qr_internos_generados", embarqueId), {
+      uuid: datosQr.uuid,
+      rfc: datosQr.rfc,
+      texto: datosQr.texto,
+      motivo: "movimiento_interno_sin_factura",
+      generadoPor: { uid, nombre: datosUsuario.nombre || null },
+      operadorNombre: operadorAsignado.nombre || null,
+      timestamp: serverTimestamp()
+    });
+
+    const cajaPrevia = (datosPrevios.origenEscaneo && datosPrevios.origenEscaneo.caja) || null;
+    await setDoc(doc(db, "verificaciones_cfdi_local", embarqueId), {
+      ...datosPrevios,
+      uuidEsperado: datosQr.uuid,
+      receptorRFCEsperado: datosQr.rfc,
+      estadoSync: "pendiente",
+      validacion2: {
+        uuidLeido: datosQr.uuid,
+        rfcLeido: datosQr.rfc,
+        uuidCoincide: true,
+        rfcCoincide: true,
+        caja: cajaPrevia,
+        cajaCoincide: true,
+        escaneadoPor: { uid, nombre: datosUsuario.nombre || null, rol: datosUsuario.rol, area: datosUsuario.area || null, puesto: datosUsuario.puesto || null },
+        timestamp: serverTimestamp()
+      },
+      operadorAsignado: {
+        uid: operadorAsignado.uid,
+        nombre: operadorAsignado.nombre,
+        numero: operadorAsignado.numero,
+        asignadoPor: uid,
+        timestamp: serverTimestamp()
+      }
+    });
+
+    return datosQr;
+  }
+
+  // Reasignación de operador (2026-09-12, decisión de Ivan): disponible para
+  // CUALQUIER embarque que ya tenga operadorAsignado, con o sin factura, sin
+  // pedir motivo, mientras la pre-entrega (Checkpoint 2) no se haya
+  // completado (ver puedeReasignar() — mismo chequeo, ya evaluado antes de
+  // mostrar el botón; la regla de Firestore lo vuelve a exigir del lado del
+  // servidor). El operador anterior nunca se pierde: queda en
+  // historialReasignaciones. Si el embarque es SIN FACTURA y el operador
+  // ANTERIOR todavía no había hecho Checkpoint 1 (recepción — verificado
+  // contra listaResultados.recepcionResultado, sincronizado desde Alanis
+  // Operadores), además se reimprime el MISMO QR ya generado (mismo
+  // uuid/rfc — nunca uno nuevo, ver la nota en crearQrInternoYAsignarOperador
+  // sobre por qué el nombre del operador no vive dentro del QR) con el
+  // nombre del operador nuevo. Si Checkpoint 1 ya se hizo, el papel se queda
+  // como está — decisión explícita de Ivan (2026-09-12).
+  async function reasignarOperador(embarqueId, nuevoOperador) {
+    const snap = await getDoc(doc(db, "verificaciones_cfdi_local", embarqueId));
+    if (!snap.exists()) throw new Error("No se encontró el embarque.");
+    const datosPrevios = snap.data();
+    const operadorAnterior = datosPrevios.operadorAsignado || null;
+
+    const historialPrevio = Array.isArray(datosPrevios.historialReasignaciones) ? datosPrevios.historialReasignaciones : [];
+    const nuevaEntrada = {
+      operadorAnterior: operadorAnterior ? { uid: operadorAnterior.uid, nombre: operadorAnterior.nombre } : null,
+      operadorNuevo: { uid: nuevoOperador.uid, nombre: nuevoOperador.nombre },
+      reasignadoPor: uid,
+      // OJO: Firestore no permite serverTimestamp() dentro de un arreglo —
+      // se usa la hora del navegador solo para esta entrada de historial. El
+      // timestamp "oficial" de la reasignación vive en
+      // operadorAsignado.timestamp (fuera del arreglo) y sí es serverTimestamp().
+      timestamp: new Date()
+    };
+
+    await setDoc(doc(db, "verificaciones_cfdi_local", embarqueId), {
+      ...datosPrevios,
+      operadorAsignado: {
+        uid: nuevoOperador.uid,
+        nombre: nuevoOperador.nombre,
+        numero: nuevoOperador.numero,
+        asignadoPor: uid,
+        timestamp: serverTimestamp()
+      },
+      historialReasignaciones: [...historialPrevio, nuevaEntrada],
+      // NUEVO (2026-09-13): sin esto, ni Codigo.gs ni la Cloud Function
+      // sincronizarOrigenNuevos detectan el cambio — las dos solo reaccionan
+      // cuando el documento, tras el escrito, queda con estadoSync ==
+      // 'pendiente'. Sin este campo, el operadorAsignado nuevo nunca
+      // llegaba a repositorio_mccain en Alanis Operadores.
+      estadoSync: "pendiente"
+    });
+
+    const r = listaResultados.find(x => x.id === embarqueId);
+    const checkpoint1YaHecho = !!(r && r.recepcionResultado);
+    const esSinFactura = datosPrevios.esQrInterno === true;
+
+    if (esSinFactura && !checkpoint1YaHecho) {
+      const qrSnap = await getDoc(doc(db, "qr_internos_generados", embarqueId));
+      if (qrSnap.exists()) {
+        const datosQrExistente = qrSnap.data();
+        await setDoc(doc(db, "qr_internos_generados", embarqueId), {
+          operadorNombre: nuevoOperador.nombre || null
+        }, { merge: true });
+        return { reimprimir: true, datosQr: datosQrExistente };
+      }
+    }
+    return { reimprimir: false };
   }
 }
 
