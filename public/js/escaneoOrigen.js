@@ -78,7 +78,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // el menú de cuenta (ver auth.js) — antes solo se usaba internamente aquí
 // para comparar contra version.json y decidir si mostrar el banner de
 // "hay una versión nueva".
-export const APP_VERSION = "2026.09.14-10";
+export const APP_VERSION = "2026.09.14-11";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -610,6 +610,14 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       .progreso-texto strong { color: #1c1a17; font-weight: 600; }
       .progreso-texto.es-bad strong { color: #c8362a; }
       .progreso-texto.es-warn strong { color: #92400e; }
+      /* Nombre del operador asignado bajo el texto de estado (2026-09-14,
+         pedido de Ivan) — mismo tratamiento visual que celda-embarque-meta
+         (más chico, gris), para que se lea como dato secundario y no
+         compita con el estado. Se usa operadorAsignado (no el nombre
+         congelado de recepción/pre-entrega) porque es el mismo valor que
+         ya se muestra en el modal de detalle y en Reasignar operador — es
+         la fuente única de "quién es el operador de este embarque". */
+      .progreso-operador { font-size: 11px; color: #6b6558; margin-top: 1px; }
 
       .detalle-historial-tarjeta { max-width: 580px; }
       .detalle-card { background: #fff; border: 1px solid #ded9d1; border-radius: 10px; margin: 0 0 12px; overflow: hidden; }
@@ -1471,6 +1479,14 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     else if (f.origenEscaneo) { texto = "Esperando <strong>2da validación</strong>"; }
     else { texto = "<strong>Sin escanear</strong>"; }
 
+    // Nombre del operador asignado (2026-09-14, pedido de Ivan): se pone
+    // en el mismo lugar donde antes solo se leía "Operador en tránsito" /
+    // "Validado · completo" sin decir quién. Solo aparece si ya hay
+    // operador asignado (existe desde que Operaciones completa la 2da
+    // validación — ver registrarValidacion2) — antes de eso no hay nadie
+    // a quién nombrar.
+    const nombreOperadorAsignado = f.operadorAsignado && f.operadorAsignado.nombre;
+
     return `
       <div class="progreso-franja">
         <div class="progreso-seg ${seg1}"></div>
@@ -1479,6 +1495,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <div class="progreso-seg ${seg4}"></div>
       </div>
       <div class="progreso-texto ${clase}">${texto}</div>
+      ${nombreOperadorAsignado ? `<div class="progreso-operador">${escapeHtml(nombreOperadorAsignado)}</div>` : ""}
     `;
   }
 
