@@ -78,7 +78,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // el menú de cuenta (ver auth.js) — antes solo se usaba internamente aquí
 // para comparar contra version.json y decidir si mostrar el banner de
 // "hay una versión nueva".
-export const APP_VERSION = "2026.09.14-2";
+export const APP_VERSION = "2026.09.14-3";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -510,6 +510,14 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
          el tooltip nativo (title) y se puede copiar con un clic — antes
          se veía cortado donde le cabía al navegador, sin respetar los
          grupos con guion, y eso desbordaba la fila entera. */
+      /* Texto principal del historial a la misma fuente/tamaño que el UUID
+         (2026-09-14, pedido de Ivan, "a ver si haciendolo más chico se
+         reduce más") — nombre de embarque, RFC receptor, y el nombre+fecha
+         de cada validación. Lo que YA era más chico que esto (la línea de
+         "Caja ..." bajo el embarque, en .celda-embarque-meta, a 11px) se
+         deja tal cual, para que la jerarquía siga notándose — no todo el
+         texto se vuelve del mismo tamaño, solo el que antes era "grande". */
+      .historial-texto { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
       .celda-embarque-meta { display: block; font-size: 11px; color: #6b6558; font-weight: 400; margin-top: 2px; }
       .celda-embarque-meta .badge { margin-left: 4px; }
 
@@ -1257,7 +1265,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   // muestra tal cual, sin truncar ni agregar el botón de copiar.
   function celdaUuid(valor) {
     const texto = valor || "";
-    if (!texto || texto === "—" || texto.length <= 20) return escapeHtml(texto || "—");
+    if (!texto || texto === "—" || texto.length <= 20) return `<span class="historial-texto">${escapeHtml(texto || "—")}</span>`;
     const truncado = `${texto.slice(0, 8)}…${texto.slice(-6)}`;
     return `<span class="uuid-chip" title="${escapeHtml(texto)}">${escapeHtml(truncado)}<button type="button" class="uuid-chip-copiar" data-uuid="${escapeHtml(texto)}">Copiar</button></span>`;
   }
@@ -1296,13 +1304,13 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       // "coincide" ni con "no coincide".
       const facturaBadge = badgeSiNo(f.origenEscaneo && f.origenEscaneo.facturaUuidCoincide, "Factura OK", "Factura no coincide");
 
-      const celdaAtencion = `${escapeHtml((f.origenEscaneo && f.origenEscaneo.escaneadoPor && f.origenEscaneo.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.origenEscaneo && f.origenEscaneo.timestamp)}${facturaBadge}`;
+      const celdaAtencion = `<span class="historial-texto">${escapeHtml((f.origenEscaneo && f.origenEscaneo.escaneadoPor && f.origenEscaneo.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.origenEscaneo && f.origenEscaneo.timestamp)}</span>${facturaBadge}`;
 
-      let celdaValidacion2 = `<span class="nota" style="margin:0;">Pendiente</span>`;
+      let celdaValidacion2 = `<span class="historial-texto">Pendiente</span>`;
       if (f.validacion2) {
         const v2 = f.validacion2;
         celdaValidacion2 = `
-          ${escapeHtml((v2.escaneadoPor && v2.escaneadoPor.nombre) || "—")} · ${formatoFecha(v2.timestamp)}
+          <span class="historial-texto">${escapeHtml((v2.escaneadoPor && v2.escaneadoPor.nombre) || "—")} · ${formatoFecha(v2.timestamp)}</span>
           ${badgeSiNo(v2.uuidCoincide, "UUID OK", "UUID no coincide")}
           ${badgeSiNo(v2.rfcCoincide, "RFC OK", "RFC no coincide")}
           ${badgeSiNo(v2.cajaCoincide, "Caja OK", "Caja no coincide")}
@@ -1315,11 +1323,11 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       return `
       <tr data-id="${f.id}">
         <td>
-          ${escapeHtml(f.embarqueId || f.id)}
+          <span class="historial-texto">${escapeHtml(f.embarqueId || f.id)}</span>
           <span class="celda-embarque-meta">Caja ${cajaTexto}${cajaBadge}</span>
         </td>
         <td>${celdaUuid(f.uuidEsperado)}</td>
-        <td>${escapeHtml(f.receptorRFCEsperado || "—")}</td>
+        <td><span class="historial-texto">${escapeHtml(f.receptorRFCEsperado || "—")}</span></td>
         <td>${celdaAtencion}</td>
         <td>${celdaValidacion2}</td>
         <td><span class="badge ${CLASES_SYNC[f.estadoSync] || "badge-pendiente"}">${ETIQUETAS_SYNC[f.estadoSync] || f.estadoSync}</span></td>
