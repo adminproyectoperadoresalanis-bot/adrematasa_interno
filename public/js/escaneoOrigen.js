@@ -78,7 +78,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // el menú de cuenta (ver auth.js) — antes solo se usaba internamente aquí
 // para comparar contra version.json y decidir si mostrar el banner de
 // "hay una versión nueva".
-export const APP_VERSION = "2026.09.14-7";
+export const APP_VERSION = "2026.09.14-8";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -936,6 +936,15 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   onSnapshot(collection(db, "operadores_alanis"), (snap) => {
     listaOperadores = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderSelectorOperador();
+    // renderSemaforo() (2026-09-14) — el semáforo de "Seguimiento de
+    // embarques" pinta el nombre del operador (Checkpoint 1) directo en la
+    // celda vía nombreOperador_(uid, ...), que depende de listaOperadores.
+    // Sin este render, cuando se corrige un nombreOficial en el admin de
+    // Alanis Operadores el catálogo se actualiza aquí en memoria pero la
+    // tabla se queda pintada con lo último que tenía — el modal de detalle
+    // sí se veía bien porque se arma fresco en cada clic, pero el semáforo
+    // no. Mismo patrón de bug que el de renderHistorial() de más arriba.
+    renderSemaforo();
   }, (err) => {
     if (modalErrorDiv) modalErrorDiv.textContent = "No se pudo cargar el catálogo de operadores: " + err.message;
   });
