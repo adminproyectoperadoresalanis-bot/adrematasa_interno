@@ -78,7 +78,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // el menú de cuenta (ver auth.js) — antes solo se usaba internamente aquí
 // para comparar contra version.json y decidir si mostrar el banner de
 // "hay una versión nueva".
-export const APP_VERSION = "2026.09.14-4";
+export const APP_VERSION = "2026.09.14-5";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -242,6 +242,15 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const puedeValidar2 = esAdmin || (
     datosUsuario.area === AREA_OPERACIONES && PUESTOS_VALIDADOR2.includes(datosUsuario.puesto)
   );
+
+  // Historial de escaneos (2026-09-14, rediseño pedido por Ivan): la
+  // columna de acciones (⋮) solo se dibuja si hay algo que mostrar ahí —
+  // se calcula una sola vez aquí para que la cabecera de la tabla y las
+  // filas usen exactamente el mismo criterio (antes la cabecera solo
+  // miraba puedeCorregir, y el cuerpo miraba puedeCorregir||puedeValidar2 —
+  // sin diferencia práctica hoy porque admin implica los dos, pero es
+  // confuso tener dos criterios para la misma columna).
+  const mostrarColumnaAcciones = puedeCorregir || puedeValidar2;
 
   // Cada quien ve solo el paso que le toca hacer (Atención al Cliente ve
   // pendientes de origen, Operaciones ve pendientes de 2da validación);
@@ -554,6 +563,43 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       }
       .historial-menu-hr { border: none; border-top: 1px solid #e7e3dc; margin: 4px 0; }
 
+      /* Historial de escaneos — tabla condensada + modal de detalle
+         (2026-09-14, rediseño pedido por Ivan). La tabla ahora solo
+         muestra Embarque / Progreso / Sincronización / Acciones; el resto
+         vive en el modal que abre el clic sobre el embarque. Mismos tonos
+         y clases (semaforo-pill, badge-*) que ya usaba el resto de la
+         página — nada nuevo que mantener aparte. */
+      .historial-emb-btn {
+        background: none; border: none; padding: 0; margin: 0; text-align: left;
+        cursor: pointer; display: block; width: 100%; font: inherit; color: inherit;
+      }
+      .historial-emb-btn:hover .historial-texto { text-decoration: underline; }
+
+      .progreso-franja { display: flex; gap: 3px; width: 120px; height: 7px; }
+      .progreso-seg { flex: 1; border-radius: 3px; background: #e2ddd3; }
+      .progreso-seg.seg-ok { background: #22c55e; }
+      .progreso-seg.seg-bad { background: #ef4444; }
+      .progreso-seg.seg-warn { background: #f59e0b; }
+      .progreso-texto { font-size: 11.5px; color: #6b6558; margin-top: 6px; }
+      .progreso-texto strong { color: #1c1a17; font-weight: 600; }
+      .progreso-texto.es-bad strong { color: #c8362a; }
+      .progreso-texto.es-warn strong { color: #92400e; }
+
+      .detalle-historial-tarjeta { max-width: 580px; }
+      .detalle-card { background: #fff; border: 1px solid #ded9d1; border-radius: 10px; margin: 0 0 12px; overflow: hidden; }
+      .detalle-card-titulo {
+        font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+        color: #a8a29a; padding: 10px 14px 4px;
+      }
+      .detalle-fila-campos { display: flex; flex-wrap: wrap; }
+      .detalle-campo { flex: 1 1 0; min-width: 140px; padding: 6px 14px 12px; border-right: 1px solid #efece6; }
+      .detalle-campo:last-child { border-right: none; }
+      .detalle-campo-label { font-size: 10.5px; color: #a8a29a; margin-bottom: 4px; font-weight: 600; letter-spacing: 0.02em; }
+      .detalle-campo-valor { font-size: 13px; }
+      .detalle-campo-sub { font-size: 11px; color: #6b6558; margin-top: 4px; }
+      .detalle-val-doble { display: flex; flex-direction: column; gap: 8px; }
+      .detalle-sub-etiqueta { font-size: 10px; color: #a8a29a; font-weight: 600; margin-bottom: 2px; }
+
       /* Modal "Reiniciar flujo" (2026-09-14) */
       .reiniciar-flujo-checklist { margin: 0 0 14px; padding: 0; list-style: none; }
       .reiniciar-flujo-checklist li {
@@ -595,15 +641,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
     <section class="panel" style="margin-top:20px;">
       <h2>Historial de escaneos</h2>
+      <p class="nota">Da clic en un embarque para ver el detalle completo (UUID, RFC, las 4 validaciones).</p>
       <div id="historial-origen-error" class="error"></div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-historial-origen">
           <thead>
             <tr>
-              <th>Embarque</th><th>UUID CFDI</th><th>RFC receptor</th><th>Atención al Cliente</th><th>2da validación (Operaciones)</th><th>Sincronización</th>${puedeCorregir ? "<th></th>" : ""}
+              <th>Embarque</th><th>Progreso</th><th>Sincronización</th>${mostrarColumnaAcciones ? "<th></th>" : ""}
             </tr>
           </thead>
-          <tbody id="tbody-historial-origen"><tr><td colspan="${puedeCorregir ? 7 : 6}">Cargando...</td></tr></tbody>
+          <tbody id="tbody-historial-origen"><tr><td colspan="${mostrarColumnaAcciones ? 4 : 3}">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -746,6 +793,22 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <div class="modal-acciones">
           <button type="button" class="secundario" id="reiniciar-flujo-cancelar">Cancelar</button>
           <button type="button" class="peligro" id="reiniciar-flujo-confirmar" disabled>Reiniciar flujo</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Detalle de historial (2026-09-14, rediseño pedido por Ivan: la tabla
+         se veía desbordada con 6+ columnas). Solo lectura — todo lo que
+         antes eran columnas propias (UUID, RFC, Atención al Cliente, 2da
+         validación) ahora vive aquí, organizado en 3 grupos. Las acciones
+         (corregir / reasignar / reiniciar / borrar) se quedan en el menú ⋮
+         de la tabla, no se duplican aquí. -->
+    <div id="modal-detalle-historial" class="modal-overlay oculto">
+      <div class="modal-tarjeta detalle-historial-tarjeta">
+        <h2>Detalle de <span id="detalle-historial-embarque"></span></h2>
+        <div id="detalle-historial-cuerpo"></div>
+        <div class="modal-acciones">
+          <button type="button" class="secundario" id="detalle-historial-cerrar">Cerrar</button>
         </div>
       </div>
     </div>
@@ -1327,32 +1390,168 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     return !preEntregaCompletada;
   }
 
+  // Franja de progreso de 4 segmentos (Atención al Cliente / Operaciones /
+  // Operador recepción / Operador pre-entrega) + texto de estado actual —
+  // mismo mockup que Ivan aprobó (2026-09-14) para reemplazar las columnas
+  // de Atención al Cliente y 2da validación en la tabla. El detalle
+  // completo de cada etapa (quién, cuándo, badges de coincidencia) se
+  // quedó en el modal — aquí solo el resumen de un vistazo.
+  function celdaProgreso(f, r) {
+    const seg1 = f.origenEscaneo ? "seg-ok" : "";
+    const seg2 = f.validacion2 ? "seg-ok" : "";
+    let seg3 = "";
+    if (r && r.recepcionResultado === "COINCIDE") seg3 = "seg-ok";
+    else if (r && r.recepcionResultado === "NO_COINCIDE_DOCUMENTO") seg3 = "seg-bad";
+    else if (r && r.recepcionResultado === "NO_COINCIDE_OPERADOR") seg3 = "seg-warn";
+    let seg4 = "";
+    if (r && r.estatusValidacion === "VALIDADO") seg4 = "seg-ok";
+    else if (r && r.estatusValidacion === "DISCREPANCIA") seg4 = "seg-bad";
+
+    let texto, clase = "";
+    if (r && r.estatusValidacion === "VALIDADO") { texto = "<strong>Validado</strong> · completo"; }
+    else if (r && r.estatusValidacion === "DISCREPANCIA") { texto = "<strong>Discrepancia</strong> · pre-entrega"; clase = "es-bad"; }
+    else if (r && r.recepcionResultado === "NO_COINCIDE_DOCUMENTO") { texto = "<strong>Discrepancia</strong> · recepción"; clase = "es-bad"; }
+    else if (r && r.recepcionResultado === "NO_COINCIDE_OPERADOR") { texto = "<strong>Alerta</strong> · operador (recepción)"; clase = "es-warn"; }
+    else if (r && r.recepcionResultado === "COINCIDE") { texto = "Operador <strong>en tránsito</strong>"; }
+    else if (f.validacion2) { texto = "Esperando <strong>operador</strong>"; }
+    else if (f.origenEscaneo) { texto = "Esperando <strong>2da validación</strong>"; }
+    else { texto = "<strong>Sin escanear</strong>"; }
+
+    return `
+      <div class="progreso-franja">
+        <div class="progreso-seg ${seg1}"></div>
+        <div class="progreso-seg ${seg2}"></div>
+        <div class="progreso-seg ${seg3}"></div>
+        <div class="progreso-seg ${seg4}"></div>
+      </div>
+      <div class="progreso-texto ${clase}">${texto}</div>
+    `;
+  }
+
+  // Contenido del modal de detalle (2026-09-14) — los 3 grupos exactos que
+  // pidió Ivan: (1) Embarque/UUID/RFC receptor, (2) Remolque + las 4
+  // validaciones (Atención al Cliente, Operaciones, Operador recepción y
+  // pre-entrega), (3) Sincronización. Reutiliza los mismos helpers/clases
+  // que ya usaba la tabla (celdaUuid, badgeSiNo, pillEtapa, semaforo-pill)
+  // para no inventar un estilo aparte.
+  function contenidoDetalleHistorial(f, r) {
+    const caja = escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || f.cajaEsperada || "—");
+
+    let valAtencion;
+    if (f.origenEscaneo) {
+      valAtencion = pillEtapa("ok", "Escaneado") +
+        badgeSiNo(f.origenEscaneo.facturaUuidCoincide, "Factura OK", "Factura no coincide") +
+        `<div class="detalle-campo-sub">${escapeHtml((f.origenEscaneo.escaneadoPor && f.origenEscaneo.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.origenEscaneo.timestamp)}</div>`;
+    } else {
+      valAtencion = pillEtapa("pend", "Pendiente");
+    }
+
+    let valOperaciones;
+    if (f.validacion2) {
+      const v2 = f.validacion2;
+      valOperaciones = pillEtapa("ok", "Validado") +
+        badgeSiNo(v2.uuidCoincide, "UUID OK", "UUID no coincide") +
+        badgeSiNo(v2.rfcCoincide, "RFC OK", "RFC no coincide") +
+        badgeSiNo(v2.cajaCoincide, "Caja OK", "Caja no coincide") +
+        `<div class="detalle-campo-sub">${escapeHtml((v2.escaneadoPor && v2.escaneadoPor.nombre) || "—")} · ${formatoFecha(v2.timestamp)}</div>`;
+    } else {
+      valOperaciones = pillEtapa("pend", "Pendiente");
+    }
+
+    let recepcionHtml;
+    if (r && r.recepcionResultado === "COINCIDE") {
+      recepcionHtml = pillEtapa("ok", "Coincide") + `<div class="detalle-campo-sub">${escapeHtml(r.recepcionOperadorNombre || "—")}${r.recepcionTimestamp ? " · " + formatoFecha(r.recepcionTimestamp) : ""}</div>`;
+    } else if (r && r.recepcionResultado === "NO_COINCIDE_DOCUMENTO") {
+      recepcionHtml = pillEtapa("bad", "Documento no coincide") + `<div class="detalle-campo-sub">${escapeHtml(r.recepcionOperadorNombre || "—")}</div>`;
+    } else if (r && r.recepcionResultado === "NO_COINCIDE_OPERADOR") {
+      recepcionHtml = pillEtapa("warn", "Operador no coincide") + `<div class="detalle-campo-sub">${escapeHtml(r.recepcionOperadorNombre || "—")}</div>`;
+    } else {
+      recepcionHtml = pillEtapa("pend", "—");
+    }
+
+    let preEntregaHtml;
+    if (r && r.estatusValidacion === "VALIDADO") {
+      preEntregaHtml = pillEtapa("ok", "Validado");
+    } else if (r && r.estatusValidacion === "DISCREPANCIA") {
+      preEntregaHtml = pillEtapa("bad", "Discrepancia") + (r.discrepanciaDetalle ? `<div class="detalle-campo-sub">${escapeHtml(r.discrepanciaDetalle)}</div>` : "");
+    } else if (r && r.recepcionResultado) {
+      preEntregaHtml = pillEtapa("pend", "En tránsito");
+    } else {
+      preEntregaHtml = pillEtapa("pend", "—");
+    }
+
+    const valOperador = `
+      <div class="detalle-val-doble">
+        <div><div class="detalle-sub-etiqueta">Recepción</div>${recepcionHtml}</div>
+        <div><div class="detalle-sub-etiqueta">Pre-entrega</div>${preEntregaHtml}</div>
+      </div>
+    `;
+
+    const valSync = `<span class="badge ${CLASES_SYNC[f.estadoSync] || "badge-pendiente"}">${ETIQUETAS_SYNC[f.estadoSync] || f.estadoSync}</span>`;
+
+    return `
+      <div class="detalle-card">
+        <div class="detalle-card-titulo">Embarque</div>
+        <div class="detalle-fila-campos">
+          <div class="detalle-campo">
+            <div class="detalle-campo-label">Embarque</div>
+            <div class="detalle-campo-valor historial-texto">${escapeHtml(f.embarqueId || f.id)}</div>
+          </div>
+          <div class="detalle-campo">
+            <div class="detalle-campo-label">UUID</div>
+            <div class="detalle-campo-valor">${celdaUuid(f.uuidEsperado)}</div>
+          </div>
+          <div class="detalle-campo">
+            <div class="detalle-campo-label">RFC receptor</div>
+            <div class="detalle-campo-valor historial-texto">${escapeHtml(f.receptorRFCEsperado || "—")}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="detalle-card">
+        <div class="detalle-card-titulo">Validaciones</div>
+        <div class="detalle-fila-campos">
+          <div class="detalle-campo">
+            <div class="detalle-campo-label">Remolque</div>
+            <div class="detalle-campo-valor">Caja ${caja}</div>
+          </div>
+          <div class="detalle-campo">
+            <div class="detalle-campo-label">Atención al cliente</div>
+            <div class="detalle-campo-valor">${valAtencion}</div>
+          </div>
+          <div class="detalle-campo">
+            <div class="detalle-campo-label">Operaciones</div>
+            <div class="detalle-campo-valor">${valOperaciones}</div>
+          </div>
+          <div class="detalle-campo">
+            <div class="detalle-campo-label">Operador 1 y 2</div>
+            <div class="detalle-campo-valor">${valOperador}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="detalle-card">
+        <div class="detalle-card-titulo">Sincronización</div>
+        <div class="detalle-fila-campos">
+          <div class="detalle-campo">
+            <div class="detalle-campo-label">Estado</div>
+            <div class="detalle-campo-valor">${valSync}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function renderHistorial() {
-    const mostrarColumnaAcciones = puedeCorregir || puedeValidar2;
     if (listaHistorial.length === 0) {
-      tbodyHistorial.innerHTML = `<tr><td colspan="${mostrarColumnaAcciones ? 7 : 6}">Todavía no hay escaneos de origen.</td></tr>`;
+      tbodyHistorial.innerHTML = `<tr><td colspan="${mostrarColumnaAcciones ? 4 : 3}">Todavía no hay escaneos de origen.</td></tr>`;
       return;
     }
+    const resultadosPorIdHistorial = new Map(listaResultados.map(r => [r.id, r]));
     tbodyHistorial.innerHTML = listaHistorial.map(f => {
       const cajaTexto = escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—");
       const cajaBadge = badgeSiNo(f.origenEscaneo && f.origenEscaneo.cajaCoincide, "OK", "No coincide");
-      // facturaUuidCoincide es null (sin badge) cuando no había Cadena
-      // Original del SAT capturada del correo todavía — no confundir con
-      // "coincide" ni con "no coincide".
-      const facturaBadge = badgeSiNo(f.origenEscaneo && f.origenEscaneo.facturaUuidCoincide, "Factura OK", "Factura no coincide");
-
-      const celdaAtencion = `<span class="historial-texto">${escapeHtml((f.origenEscaneo && f.origenEscaneo.escaneadoPor && f.origenEscaneo.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.origenEscaneo && f.origenEscaneo.timestamp)}</span>${facturaBadge}`;
-
-      let celdaValidacion2 = `<span class="historial-texto">Pendiente</span>`;
-      if (f.validacion2) {
-        const v2 = f.validacion2;
-        celdaValidacion2 = `
-          <span class="historial-texto">${escapeHtml((v2.escaneadoPor && v2.escaneadoPor.nombre) || "—")} · ${formatoFecha(v2.timestamp)}</span>
-          ${badgeSiNo(v2.uuidCoincide, "UUID OK", "UUID no coincide")}
-          ${badgeSiNo(v2.rfcCoincide, "RFC OK", "RFC no coincide")}
-          ${badgeSiNo(v2.cajaCoincide, "Caja OK", "Caja no coincide")}
-        `;
-      }
+      const r = resultadosPorIdHistorial.get(f.id);
 
       const hayAccionesNormales = puedeCorregir || puedeReasignar(f);
       const tieneAcciones = hayAccionesNormales || esAdmin;
@@ -1360,13 +1559,12 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       return `
       <tr data-id="${f.id}">
         <td>
-          <span class="historial-texto">${escapeHtml(f.embarqueId || f.id)}</span>
-          <span class="celda-embarque-meta">Caja ${cajaTexto}${cajaBadge}</span>
+          <button type="button" class="historial-emb-btn" title="Ver detalle completo">
+            <span class="historial-texto">${escapeHtml(f.embarqueId || f.id)}</span>
+            <span class="celda-embarque-meta">Caja ${cajaTexto}${cajaBadge}</span>
+          </button>
         </td>
-        <td>${celdaUuid(f.uuidEsperado)}</td>
-        <td><span class="historial-texto">${escapeHtml(f.receptorRFCEsperado || "—")}</span></td>
-        <td>${celdaAtencion}</td>
-        <td>${celdaValidacion2}</td>
+        <td>${celdaProgreso(f, r)}</td>
         <td><span class="badge ${CLASES_SYNC[f.estadoSync] || "badge-pendiente"}">${ETIQUETAS_SYNC[f.estadoSync] || f.estadoSync}</span></td>
         ${mostrarColumnaAcciones ? `<td class="acciones">
               ${tieneAcciones ? `
@@ -1382,6 +1580,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       </tr>
     `;
     }).join("");
+
+    // Detalle (2026-09-14) — clic en el nombre del embarque abre el modal
+    // de solo lectura con todo el registro organizado en 3 grupos.
+    tbodyHistorial.querySelectorAll(".historial-emb-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.closest("tr").dataset.id;
+        const f = listaHistorial.find(x => x.id === id);
+        if (f) abrirModalDetalleHistorial(id, f);
+      });
+    });
 
     if (puedeCorregir) {
       tbodyHistorial.querySelectorAll(".btn-corregir-origen").forEach(btn => {
@@ -1602,6 +1810,11 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const errorReiniciarFlujo = contenedor.querySelector("#reiniciar-flujo-error");
   const botonCancelarReiniciarFlujo = contenedor.querySelector("#reiniciar-flujo-cancelar");
   const botonConfirmarReiniciarFlujo = contenedor.querySelector("#reiniciar-flujo-confirmar");
+
+  const modalDetalleHistorial = contenedor.querySelector("#modal-detalle-historial");
+  const embarqueDetalleHistorialSpan = contenedor.querySelector("#detalle-historial-embarque");
+  const cuerpoDetalleHistorial = contenedor.querySelector("#detalle-historial-cuerpo");
+  const botonCerrarDetalleHistorial = contenedor.querySelector("#detalle-historial-cerrar");
 
   const overlayQrInterno = contenedor.querySelector("#overlay-qr-interno");
   const infoQrInterno = contenedor.querySelector("#qr-interno-info");
@@ -1856,6 +2069,23 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       errorReiniciarFlujo.textContent = "No se pudo solicitar el reinicio: " + err.message;
       botonConfirmarReiniciarFlujo.disabled = false;
     }
+  });
+
+  // ------------------------------------------------------------------
+  // Detalle de historial (2026-09-14, rediseño pedido por Ivan). Modal de
+  // solo lectura — no crea ni borra nada, solo arma el HTML de
+  // contenidoDetalleHistorial() con el embarque y su resultado (si ya
+  // existe) al momento del clic.
+  // ------------------------------------------------------------------
+  function abrirModalDetalleHistorial(id, f) {
+    const r = listaResultados.find(x => x.id === id);
+    embarqueDetalleHistorialSpan.textContent = f.embarqueId || id;
+    cuerpoDetalleHistorial.innerHTML = contenidoDetalleHistorial(f, r);
+    modalDetalleHistorial.classList.remove("oculto");
+  }
+
+  botonCerrarDetalleHistorial.addEventListener("click", () => {
+    modalDetalleHistorial.classList.add("oculto");
   });
 
   // operadorNombre (2026-09-12, opcional): se muestra como texto visible en

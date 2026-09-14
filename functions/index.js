@@ -23,7 +23,7 @@
 
 const { onDocumentWritten, onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { initializeApp, applicationDefault } = require("firebase-admin/app");
-const { getFirestore } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 
 // TODO (Ivan): ajusta REGION a la ubicación real de tus bases de Firestore
@@ -153,27 +153,56 @@ exports.procesarSolicitudBorradoPrueba = onDocumentCreated(
 // Regresa un embarque a "recién llegado, sin ningún escaneo": borra
 // verificaciones_cfdi_local (origen + 2da validación + operador asignado —
 // TODO eso vive en ese único documento) para que Atención al Cliente lo
-// vea otra vez como pendiente, y borra repositorio_mccain en Alanis
-// Operadores para que ese lado no se quede con datos de una validación que
-// ya no existe.
+// vea otra vez como pendiente.
 //
-// A propósito, a diferencia de procesarSolicitudBorradoPrueba de arriba:
-//   - NO se toca embarques_pendientes_origen. Ese documento es justo lo que
-//     hace que el embarque reaparezca como pendiente — borrarlo lo haría
-//     desaparecer por completo en vez de regresarlo al principio.
-//   - Borrar repositorio_mccain dispara procesarCambioRepositorioMccain (el
-//     otro codebase, en alanis-operadores) con after.exists === false, que
-//     limpia verificaciones_cfdi_resultado — el mismo mecanismo ya usado y
-//     confirmado en el borrado de prueba, así que el semáforo no se queda
-//     con badges de una validación ya inexistente. Llamar .delete() no
-//     truena aunque el documento no exista todavía (embarque que nunca
-//     llegó a la 2da validación y por lo tanto nunca se sincronizó).
+// CORREGIDO 2026-09-14 (bug encontrado en producción, gracias a Ivan): la
+// primera versión de esta función BORRABA repositorio_mccain por completo,
+// igual que procesarSolicitudBorradoPrueba. Eso estaba mal: ese documento no
+// es solo "avance de validación" — también carga la identidad del embarque
+// que capturó la VBA de Outlook (ocCliente, shipment, clienteNombre, caja,
+// fechaEntrega, uuidFactura). Borrarlo entero destruye esos datos, y sin
+// ellos procesarCambioRepositorioMccain (el otro codebase, en
+// alanis-operadores) ya no tiene de dónde reconstruir la entrada en
+// embarques_pendientes_origen — el embarque queda huérfano, no "reiniciado".
 //
-// Antes de borrar, se guarda una copia del documento en
+// Ahora, en vez de borrar, se hace un UPDATE que limpia solo los campos de
+// AVANCE (uuidEsperado se deja en '' a propósito — es lo que le indica a
+// procesarCambioRepositorioMccain que este embarque todavía no se escanea) y
+// deja intactos los campos de IDENTIDAD del embarque. Ese mismo update
+// dispara procesarCambioRepositorioMccain de forma normal (ya no por la rama
+// de "documento borrado"), y esa función ya sabe, con uuidEsperado vacío:
+//   - republicar embarques_pendientes_origen con lo que quedó (ocCliente/
+//     shipment/caja/etc.) — así reaparece como pendiente de verdad.
+//   - borrar verificaciones_cfdi_resultado si ya no hay estatusValidacion ni
+//     recepcionOperador vigentes (limpiarResultadosObsoletos_) — mismo
+//     resultado que antes, sin necesitar la rama de documento borrado.
+//
+// Si repositorio_mccain/{embarqueId} ya no existe (por ejemplo, se usó
+// "Borrar embarque" antes, o es un reinicio de un reinicio ya corregido a
+// medias como el de OC-606313 del 2026-09-14), no hay nada que actualizar —
+// se registra un aviso en los logs y se sigue con el resto, en vez de
+// tronar. En ese caso el embarque NO puede reaparecer solo en pendientes
+// (su identidad ya se perdió); hay que recrearlo a mano o esperar a que la
+// VBA vuelva a capturarlo si llega un correo de corrección.
+//
+// NO se toca embarques_pendientes_origen directamente aquí — eso lo hace
+// procesarCambioRepositorioMccain como reacción al update de arriba, no esta
+// función.
+//
+// Antes de tocar nada, se guarda una copia del documento local en
 // historial_reinicios_flujo — así el reinicio queda auditado (quién, cuándo,
 // qué embarque, qué traía) aunque el documento vivo ya no exista para
 // consultarlo.
 // ============================================================================
+const CAMPOS_AVANCE_REPO_A_BORRAR = [
+  "receptorRFCEsperado",
+  "origenEscaneo",
+  "validacion2",
+  "operadorAsignado",
+  "estatusValidacion",
+  "discrepanciaDetalle",
+  "recepcionOperador",
+];
 exports.procesarSolicitudReinicioFlujo = onDocumentCreated(
   { document: `${COLECCION_SOLICITUDES_REINICIO}/{embarqueId}`, region: REGION },
   async (event) => {
@@ -198,9 +227,22 @@ exports.procesarSolicitudReinicioFlujo = onDocumentCreated(
         });
       }
 
-      await dbAlanis.collection(COLECCION_REPO).doc(embarqueId).delete();
+      const snapRepo = await dbAlanis.collection(COLECCION_REPO).doc(embarqueId).get();
+      if (snapRepo.exists) {
+        const limpieza = { uuidEsperado: "" };
+        CAMPOS_AVANCE_REPO_A_BORRAR.forEach((campo) => {
+          limpieza[campo] = FieldValue.delete();
+        });
+        await dbAlanis.collection(COLECCION_REPO).doc(embarqueId).update(limpieza);
+      } else {
+        logger.warn(
+          `[procesarSolicitudReinicioFlujo] repositorio_mccain/${embarqueId} ya no existe — no hay identidad de embarque que limpiar/republicar. El embarque no va a reaparecer solo en embarques_pendientes_origen.`
+        );
+      }
+
       await dbLocal.collection(COLECCION_LOCAL).doc(embarqueId).delete();
-      // COLECCION_PENDIENTES NO se toca — ver nota arriba.
+      // COLECCION_PENDIENTES NO se toca aquí — la repuebla
+      // procesarCambioRepositorioMccain como reacción al update de arriba.
     } catch (error) {
       logger.error(`[procesarSolicitudReinicioFlujo] embarqueId ${embarqueId}: ${error.message}`, error);
     } finally {
