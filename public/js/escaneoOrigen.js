@@ -78,7 +78,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // el menú de cuenta (ver auth.js) — antes solo se usaba internamente aquí
 // para comparar contra version.json y decidir si mostrar el banner de
 // "hay una versión nueva".
-export const APP_VERSION = "2026.09.14-12";
+export const APP_VERSION = "2026.09.14-13";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -318,15 +318,19 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     <style>
       .resultado-escaneo-botonera { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 
-      /* Seguimiento de embarques (semáforo) — pedido de Ivan, 2026-09-08:
-         una fila por embarque, una píldora de color por etapa, columnas
-         angostas con encabezado a 2 líneas para verse bien de un vistazo
-         (pensado incluso para una pantalla en el área de Operaciones). */
-      #tabla-semaforo th, #tabla-semaforo td { padding: 6px 8px; text-align: center; white-space: nowrap; }
-      #tabla-semaforo th:first-child, #tabla-semaforo td:first-child { text-align: left; }
-      #tabla-semaforo th { font-size: 11.5px; line-height: 1.25; font-weight: 600; }
-      #tabla-semaforo td { font-size: 13px; }
-      #tabla-semaforo .semaforo-meta { display: block; font-size: 10.5px; color: #6b7280; margin-top: 2px; white-space: normal; }
+      /* Seguimiento de embarques (semáforo) — pedido de Ivan, 2026-09-08.
+         (2026-09-14) Desde que esta tabla pasó a 2 columnas reutilizando
+         celdaProgreso (igual que "Historial de escaneos"), este bloque
+         quedó de la versión VIEJA de 5 columnas con píldoras (texto
+         centrado, sin wrap) — eso era lo que le metía espacio de más a
+         "Embarque" y hacía que el nombre del operador se desbordara en
+         vez de acomodarse en 2 líneas en el celular. Se quita por
+         completo: sin overrides, esta tabla hereda las mismas reglas
+         base de .tabla que ya usa Historial (mismo padding, alineado a
+         la izquierda, texto que sí puede hacer wrap) — por eso ahora se
+         ve y se comporta igual que esa. Las clases .semaforo-pill /
+         .semaforo-dot / .semaforo-* de abajo NO se tocan: siguen en uso
+         por pillEtapa() en el modal de detalle. */
       .semaforo-pill {
         display: inline-flex; align-items: center; gap: 5px;
         padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap;
@@ -1399,9 +1403,28 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       const r = resultadosPorId.get(f.id);
       const syncInfo = claseYTituloSync(f.estadoSync);
 
+      // Celda de embarque (2026-09-14, pedido de Ivan: "es técnicamente
+      // como lo quiero" viendo Historial de escaneos) — MISMA estructura
+      // que usa renderHistorial para esta celda (historial-texto +
+      // celda-embarque-meta + badge de caja OK/No coincide), sin el
+      // nombre del cliente (McCain es el único por ahora y esa línea
+      // sobraba espacio) y sin el <button> de Historial porque este
+      // semáforo sigue siendo solo informativo, sin clic para abrir
+      // detalle.
+      const cajaTexto = escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—");
+      const cajaBadge = badgeSiNo(
+        f.origenEscaneo && f.origenEscaneo.cajaCoincide,
+        "OK", "No coincide",
+        "La caja escaneada coincide con la esperada — no es el estado de sincronización",
+        "La caja escaneada NO coincide con la esperada"
+      );
+
       return `
         <tr data-id="${f.id}">
-          <td><strong class="${syncInfo.clase}" title="${escapeHtml(syncInfo.titulo)}">${escapeHtml(f.embarqueId || f.id)}</strong><span class="semaforo-meta">${escapeHtml(f.clienteNombre || "McCain")}${f.origenEscaneo && f.origenEscaneo.caja ? " · Caja " + escapeHtml(f.origenEscaneo.caja) : ""}</span></td>
+          <td>
+            <span class="historial-texto ${syncInfo.clase}" title="${escapeHtml(syncInfo.titulo)}">${escapeHtml(f.embarqueId || f.id)}</span>
+            <span class="celda-embarque-meta">Caja ${cajaTexto}${cajaBadge}</span>
+          </td>
           <td>${celdaProgreso(f, r)}</td>
         </tr>
       `;
