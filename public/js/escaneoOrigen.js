@@ -78,7 +78,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // el menú de cuenta (ver auth.js) — antes solo se usaba internamente aquí
 // para comparar contra version.json y decidir si mostrar el banner de
 // "hay una versión nueva".
-export const APP_VERSION = "2026.09.14-3";
+export const APP_VERSION = "2026.09.14-4";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -553,6 +553,18 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         padding: 8px 10px 2px; font-weight: 700;
       }
       .historial-menu-hr { border: none; border-top: 1px solid #e7e3dc; margin: 4px 0; }
+
+      /* Modal "Reiniciar flujo" (2026-09-14) */
+      .reiniciar-flujo-checklist { margin: 0 0 14px; padding: 0; list-style: none; }
+      .reiniciar-flujo-checklist li {
+        padding: 7px 0; border-bottom: 1px solid #eee; font-size: 0.85rem; color: #444;
+      }
+      .reiniciar-flujo-checklist li:last-child { border-bottom: none; }
+      .reiniciar-flujo-confirmar {
+        display: flex; gap: 9px; align-items: flex-start; font-size: 0.85rem; color: #2c1e0f;
+        background: #faf8f5; border: 1px solid #eee; border-radius: 8px; padding: 10px 12px; margin: 0 0 14px;
+      }
+      .reiniciar-flujo-confirmar input { margin-top: 2px; }
     </style>
     <section class="panel">
       <div class="semaforo-titulo-fila">
@@ -710,6 +722,30 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <div class="modal-acciones">
           <button type="button" class="secundario" id="confirmar-sin-factura-cancelar">Cancelar</button>
           <button type="button" id="confirmar-sin-factura-generar">Confirmar sin factura</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reiniciar flujo (2026-09-14, pedido de Ivan) — SOLO ADMIN. La acción
+         más delicada del menú: borra el escaneo, la 2da validación y el
+         operador asignado, en los dos proyectos (ver
+         procesarSolicitudReinicioFlujo). El navegador solo crea la
+         solicitud; por eso no hay nada que "deshacer" desde aquí una vez
+         confirmado — de ahí el checklist + la casilla obligatoria antes de
+         dejar hacer clic en el botón rojo. -->
+    <div id="modal-reiniciar-flujo" class="modal-overlay oculto">
+      <div class="modal-tarjeta">
+        <h2>¿Reiniciar el flujo de <span id="reiniciar-flujo-embarque"></span>?</h2>
+        <p class="nota">Esto borra el avance ya registrado y regresa el embarque a "Sin escanear", como si nadie lo hubiera tocado — Atención al Cliente tendría que capturarlo de cero. No se puede deshacer.</p>
+        <ul class="reiniciar-flujo-checklist" id="reiniciar-flujo-checklist"></ul>
+        <label class="reiniciar-flujo-confirmar">
+          <input type="checkbox" id="reiniciar-flujo-entendido">
+          Entiendo que esto no se puede deshacer y quiero reiniciar este embarque desde cero.
+        </label>
+        <div id="reiniciar-flujo-error" class="error"></div>
+        <div class="modal-acciones">
+          <button type="button" class="secundario" id="reiniciar-flujo-cancelar">Cancelar</button>
+          <button type="button" class="peligro" id="reiniciar-flujo-confirmar" disabled>Reiniciar flujo</button>
         </div>
       </div>
     </div>
@@ -1275,6 +1311,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const ICONO_LAPIZ = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>`;
   const ICONO_SWAP = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>`;
   const ICONO_BASURA = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a1 1 0 01-1 1H7a1 1 0 01-1-1L5 6"/></svg>`;
+  const ICONO_REINICIAR = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 109-9"/><path d="M3 4v5h5"/></svg>`;
 
   // Reasignación de operador (2026-09-12, decisión de Ivan): disponible
   // para CUALQUIER puesto de Operaciones o admin (mismo criterio que
@@ -1338,7 +1375,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
                 <div class="historial-menu">
                   ${puedeCorregir ? `<button type="button" class="secundario btn-corregir-origen">${ICONO_LAPIZ}Corregir origen</button>` : ""}
                   ${puedeReasignar(f) ? `<button type="button" class="secundario btn-reasignar-operador" title="Cambia quién es el operador asignado a este embarque">${ICONO_SWAP}Reasignar operador</button>` : ""}
-                  ${esAdmin ? `${hayAccionesNormales ? `<hr class="historial-menu-hr"><div class="historial-menu-admin-label">Solo admin</div>` : ""}<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. No es reversible.">${ICONO_BASURA}Borrar embarque</button>` : ""}
+                  ${esAdmin ? `${hayAccionesNormales ? `<hr class="historial-menu-hr"><div class="historial-menu-admin-label">Solo admin</div>` : ""}<button type="button" class="peligro btn-reiniciar-flujo" title="Borra el escaneo, la 2da validación y el operador asignado — el embarque vuelve a pendiente para Atención al Cliente.">${ICONO_REINICIAR}Reiniciar flujo…</button><button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. No es reversible.">${ICONO_BASURA}Borrar embarque</button>` : ""}
                 </div>
               </div>` : ""}
             </td>` : ""}
@@ -1426,6 +1463,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     // Codigo.gs y el match /solicitudes_borrado_prueba/ de firestore.rules.
     // ------------------------------------------------------------------
     if (esAdmin) wireBorrarPrueba(tbodyHistorial, () => listaHistorial);
+
+    // Reiniciar flujo (2026-09-14) — abre el modal de confirmación con el
+    // checklist de lo que se va a borrar para ESE embarque en particular.
+    tbodyHistorial.querySelectorAll(".btn-reiniciar-flujo").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.closest("tr").dataset.id;
+        const f = listaHistorial.find(x => x.id === id);
+        if (f) abrirModalReiniciarFlujo(id, f);
+      });
+    });
   }
 
   // Engancha el botón "Borrar" dentro de un <tbody> ya dibujado.
@@ -1547,6 +1594,14 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const errorSinFactura = contenedor.querySelector("#confirmar-sin-factura-error");
   const botonCancelarSinFactura = contenedor.querySelector("#confirmar-sin-factura-cancelar");
   const botonGenerarSinFactura = contenedor.querySelector("#confirmar-sin-factura-generar");
+
+  const modalReiniciarFlujo = contenedor.querySelector("#modal-reiniciar-flujo");
+  const embarqueReiniciarFlujoSpan = contenedor.querySelector("#reiniciar-flujo-embarque");
+  const checklistReiniciarFlujo = contenedor.querySelector("#reiniciar-flujo-checklist");
+  const checkboxReiniciarFlujo = contenedor.querySelector("#reiniciar-flujo-entendido");
+  const errorReiniciarFlujo = contenedor.querySelector("#reiniciar-flujo-error");
+  const botonCancelarReiniciarFlujo = contenedor.querySelector("#reiniciar-flujo-cancelar");
+  const botonConfirmarReiniciarFlujo = contenedor.querySelector("#reiniciar-flujo-confirmar");
 
   const overlayQrInterno = contenedor.querySelector("#overlay-qr-interno");
   const infoQrInterno = contenedor.querySelector("#qr-interno-info");
@@ -1731,6 +1786,75 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       errorSinFactura.textContent = "No se pudo confirmar: " + err.message;
     } finally {
       botonGenerarSinFactura.disabled = false;
+    }
+  });
+
+  // ------------------------------------------------------------------
+  // Reiniciar flujo (2026-09-14, pedido de Ivan) — SOLO ADMIN. Este botón
+  // no borra nada directamente: solo crea una solicitud en
+  // solicitudes_reinicio_flujo (mismo patrón que "Borrar embarque" más
+  // abajo) que procesa la Cloud Function procesarSolicitudReinicioFlujo,
+  // la única con permiso real de borrar en los dos proyectos. El checklist
+  // se arma con lo que este embarque en concreto tiene registrado — para
+  // que el admin vea exactamente qué se pierde, no un texto genérico.
+  // ------------------------------------------------------------------
+  let embarqueReiniciarFlujoActual = null; // { id, f } — mientras el modal está abierto
+
+  function construirChecklistReiniciarFlujo(f) {
+    const items = [];
+    if (f.origenEscaneo) {
+      items.push(`Atención al cliente — ${(f.origenEscaneo.escaneadoPor && f.origenEscaneo.escaneadoPor.nombre) || "escaneo registrado"}`);
+    }
+    if (f.validacion2) {
+      items.push(`2da validación (Operaciones) — ${(f.validacion2.escaneadoPor && f.validacion2.escaneadoPor.nombre) || "validación registrada"}`);
+    }
+    if (f.operadorAsignado) {
+      items.push(`Operador asignado — ${f.operadorAsignado.nombre || "—"}`);
+    }
+    if (f.estadoSync && f.estadoSync !== "esperando_validacion2") {
+      items.push("Sincronización con Alanis Operadores");
+    }
+    return items;
+  }
+
+  function abrirModalReiniciarFlujo(id, f) {
+    embarqueReiniciarFlujoActual = { id, f };
+    errorReiniciarFlujo.textContent = "";
+    embarqueReiniciarFlujoSpan.textContent = f.embarqueId || id;
+    const items = construirChecklistReiniciarFlujo(f);
+    checklistReiniciarFlujo.innerHTML = items.length
+      ? items.map(t => `<li>${escapeHtml(t)}</li>`).join("")
+      : `<li>Este embarque todavía no tiene nada registrado.</li>`;
+    checkboxReiniciarFlujo.checked = false;
+    botonConfirmarReiniciarFlujo.disabled = true;
+    modalReiniciarFlujo.classList.remove("oculto");
+  }
+
+  checkboxReiniciarFlujo.addEventListener("change", () => {
+    botonConfirmarReiniciarFlujo.disabled = !checkboxReiniciarFlujo.checked;
+  });
+
+  botonCancelarReiniciarFlujo.addEventListener("click", () => {
+    embarqueReiniciarFlujoActual = null;
+    modalReiniciarFlujo.classList.add("oculto");
+  });
+
+  botonConfirmarReiniciarFlujo.addEventListener("click", async () => {
+    if (!embarqueReiniciarFlujoActual || !checkboxReiniciarFlujo.checked) return;
+    const { id } = embarqueReiniciarFlujoActual;
+    errorReiniciarFlujo.textContent = "";
+    botonConfirmarReiniciarFlujo.disabled = true;
+    try {
+      await setDoc(doc(db, "solicitudes_reinicio_flujo", id), {
+        embarqueId: id,
+        solicitadoPor: uid,
+        timestamp: serverTimestamp()
+      });
+      modalReiniciarFlujo.classList.add("oculto");
+      embarqueReiniciarFlujoActual = null;
+    } catch (err) {
+      errorReiniciarFlujo.textContent = "No se pudo solicitar el reinicio: " + err.message;
+      botonConfirmarReiniciarFlujo.disabled = false;
     }
   });
 

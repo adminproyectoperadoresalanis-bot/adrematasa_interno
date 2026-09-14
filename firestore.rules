@@ -431,5 +431,36 @@ service cloud.firestore {
         && request.resource.data.timestamp == request.time;
       allow update, delete: if false;
     }
+
+    // ------------------------------------------------------------------
+    // Reiniciar flujo — SOLO ADMIN (2026-09-14, pedido de Ivan). Regresa un
+    // embarque a "recién llegado, sin ningún escaneo" para que Atención al
+    // Cliente lo capture de cero — borra origen, 2da validación y operador
+    // asignado. Mismo patrón que "Borrado de prueba" arriba: el navegador
+    // únicamente crea esta solicitud; quien borra de verdad (en los dos
+    // proyectos: repositorio_mccain en alanis-operadores y
+    // verificaciones_cfdi_local aquí) es la Cloud Function
+    // procesarSolicitudReinicioFlujo, con su propia cuenta de servicio —
+    // ninguna de esas dos colecciones permite "delete" a ningún navegador,
+    // ni siquiera admin (ver "allow delete: if false" de cada una). A
+    // diferencia del borrado de prueba, embarques_pendientes_origen NUNCA se
+    // toca — es justo lo que hace que el embarque reaparezca como
+    // pendiente para Atención al Cliente.
+    // ------------------------------------------------------------------
+    match /solicitudes_reinicio_flujo/{embarqueId} {
+      allow read: if esAdmin();
+      allow create: if esAdmin()
+        && request.resource.data.solicitadoPor == request.auth.uid
+        && request.resource.data.timestamp == request.time;
+      allow update, delete: if false;
+    }
+
+    // Bitácora de reinicios de flujo — la llena procesarSolicitudReinicioFlujo
+    // (cuenta de servicio) como respaldo de auditoría antes de borrar el
+    // documento local; nadie escribe aquí desde el navegador.
+    match /historial_reinicios_flujo/{id} {
+      allow read: if esAdmin();
+      allow write: if false;
+    }
   }
 }

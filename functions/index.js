@@ -51,6 +51,8 @@ const COLECCION_LOCAL = "verificaciones_cfdi_local";
 const COLECCION_REPO = "repositorio_mccain";
 const COLECCION_PENDIENTES = "embarques_pendientes_origen";
 const COLECCION_SOLICITUDES_BORRADO = "solicitudes_borrado_prueba";
+const COLECCION_SOLICITUDES_REINICIO = "solicitudes_reinicio_flujo";
+const COLECCION_HISTORIAL_REINICIOS = "historial_reinicios_flujo";
 
 // ============================================================================
 // 1) verificaciones_cfdi_local (LOCAL) —estadoSync:'pendiente'→
@@ -138,6 +140,74 @@ exports.procesarSolicitudBorradoPrueba = onDocumentCreated(
         await dbLocal.collection(COLECCION_SOLICITUDES_BORRADO).doc(embarqueId).delete();
       } catch (errorFinal) {
         logger.error(`[procesarSolicitudBorradoPrueba] no se pudo borrar la solicitud ${embarqueId}: ${errorFinal.message}`);
+      }
+    }
+  }
+);
+
+// ============================================================================
+// 6) Reiniciar flujo — SOLO ADMIN (2026-09-14, pedido de Ivan). El botón en
+//    ADREMATASA únicamente crea la solicitud (ver firestore.rules); esta
+//    función es la que borra de verdad.
+//
+// Regresa un embarque a "recién llegado, sin ningún escaneo": borra
+// verificaciones_cfdi_local (origen + 2da validación + operador asignado —
+// TODO eso vive en ese único documento) para que Atención al Cliente lo
+// vea otra vez como pendiente, y borra repositorio_mccain en Alanis
+// Operadores para que ese lado no se quede con datos de una validación que
+// ya no existe.
+//
+// A propósito, a diferencia de procesarSolicitudBorradoPrueba de arriba:
+//   - NO se toca embarques_pendientes_origen. Ese documento es justo lo que
+//     hace que el embarque reaparezca como pendiente — borrarlo lo haría
+//     desaparecer por completo en vez de regresarlo al principio.
+//   - Borrar repositorio_mccain dispara procesarCambioRepositorioMccain (el
+//     otro codebase, en alanis-operadores) con after.exists === false, que
+//     limpia verificaciones_cfdi_resultado — el mismo mecanismo ya usado y
+//     confirmado en el borrado de prueba, así que el semáforo no se queda
+//     con badges de una validación ya inexistente. Llamar .delete() no
+//     truena aunque el documento no exista todavía (embarque que nunca
+//     llegó a la 2da validación y por lo tanto nunca se sincronizó).
+//
+// Antes de borrar, se guarda una copia del documento en
+// historial_reinicios_flujo — así el reinicio queda auditado (quién, cuándo,
+// qué embarque, qué traía) aunque el documento vivo ya no exista para
+// consultarlo.
+// ============================================================================
+exports.procesarSolicitudReinicioFlujo = onDocumentCreated(
+  { document: `${COLECCION_SOLICITUDES_REINICIO}/{embarqueId}`, region: REGION },
+  async (event) => {
+    const embarqueId = event.params.embarqueId;
+    const solicitud = event.data.data();
+    try {
+      const snapLocal = await dbLocal.collection(COLECCION_LOCAL).doc(embarqueId).get();
+      if (snapLocal.exists) {
+        const datosPrevios = snapLocal.data();
+        await dbLocal.collection(COLECCION_HISTORIAL_REINICIOS).add({
+          embarqueId,
+          reiniciadoPor: solicitud.solicitadoPor,
+          timestamp: solicitud.timestamp,
+          valorAnterior: {
+            uuidEsperado: datosPrevios.uuidEsperado ?? null,
+            receptorRFCEsperado: datosPrevios.receptorRFCEsperado ?? null,
+            origenEscaneo: datosPrevios.origenEscaneo ?? null,
+            validacion2: datosPrevios.validacion2 ?? null,
+            operadorAsignado: datosPrevios.operadorAsignado ?? null,
+            estadoSync: datosPrevios.estadoSync ?? null,
+          },
+        });
+      }
+
+      await dbAlanis.collection(COLECCION_REPO).doc(embarqueId).delete();
+      await dbLocal.collection(COLECCION_LOCAL).doc(embarqueId).delete();
+      // COLECCION_PENDIENTES NO se toca — ver nota arriba.
+    } catch (error) {
+      logger.error(`[procesarSolicitudReinicioFlujo] embarqueId ${embarqueId}: ${error.message}`, error);
+    } finally {
+      try {
+        await dbLocal.collection(COLECCION_SOLICITUDES_REINICIO).doc(embarqueId).delete();
+      } catch (errorFinal) {
+        logger.error(`[procesarSolicitudReinicioFlujo] no se pudo borrar la solicitud ${embarqueId}: ${errorFinal.message}`);
       }
     }
   }
