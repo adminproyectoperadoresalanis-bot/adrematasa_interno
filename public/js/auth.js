@@ -23,7 +23,7 @@ import { iniciarCalendarioVacaciones } from "./calendarioVacaciones.js";
 import { iniciarCentroNotificaciones, detenerCentroNotificaciones } from "./notificaciones.js";
 import { iniciarCambioContrasena } from "./cuenta.js";
 import { iniciarOrganigrama } from "./organigrama.js";
-import { iniciarEscaneoOrigen } from "./escaneoOrigen.js";
+import { iniciarEscaneoOrigen, APP_VERSION } from "./escaneoOrigen.js";
 
 const DOMINIO_ALANIS = "@alanis.com.mx";
 
@@ -52,6 +52,20 @@ const avatarUsuarioSpan = document.getElementById("avatar-usuario");
 const avatarUsuarioGrandeSpan = document.getElementById("avatar-usuario-grande");
 const btnMenuUsuario = document.getElementById("btn-menu-usuario");
 const menuUsuario = document.getElementById("menu-usuario");
+
+// Versión de la app en el menú de cuenta (2026-09-14, pedido de Ivan):
+// mismo APP_VERSION que escaneoOrigen.js ya usa para comparar contra
+// version.json y decidir si mostrar el banner de "hay una versión
+// nueva" — aquí nomás se muestra, sin comparar nada. Se inserta una sola
+// vez, justo debajo del rol ("Admin"/"Supervisor"/etc.), sin depender de
+// que el HTML estático ya traiga el elemento.
+if (rolUsuarioSpan && !document.getElementById("version-usuario")) {
+  const versionUsuarioSpan = document.createElement("span");
+  versionUsuarioSpan.id = "version-usuario";
+  versionUsuarioSpan.style.cssText = "display:block;font-size:11px;color:#a8a29a;margin-top:2px;";
+  versionUsuarioSpan.textContent = `v${APP_VERSION}`;
+  rolUsuarioSpan.insertAdjacentElement("afterend", versionUsuarioSpan);
+}
 
 // Iniciales para el círculo del menú de usuario: primera letra del primer
 // y (si hay) del último nombre — "Iván Landa" -> "IL", "Daniel" -> "D".

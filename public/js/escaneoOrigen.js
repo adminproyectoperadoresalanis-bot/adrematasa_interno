@@ -74,7 +74,11 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // APP_VERSION en cada deploy que quieras poder detectar, y actualiza
 // version.json al mismo valor.
 // ----------------------------------------------------------------------
-const APP_VERSION = "2026.09.14-2";
+// Exportado (2026-09-14, pedido de Ivan) para poder mostrarlo también en
+// el menú de cuenta (ver auth.js) — antes solo se usaba internamente aquí
+// para comparar contra version.json y decidir si mostrar el banner de
+// "hay una versión nueva".
+export const APP_VERSION = "2026.09.14-2";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
