@@ -78,7 +78,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // el menú de cuenta (ver auth.js) — antes solo se usaba internamente aquí
 // para comparar contra version.json y decidir si mostrar el banner de
 // "hay una versión nueva".
-export const APP_VERSION = "2026.09.14-11";
+export const APP_VERSION = "2026.09.14-12";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -1485,7 +1485,17 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     // operador asignado (existe desde que Operaciones completa la 2da
     // validación — ver registrarValidacion2) — antes de eso no hay nadie
     // a quién nombrar.
-    const nombreOperadorAsignado = f.operadorAsignado && f.operadorAsignado.nombre;
+    // Se resuelve con nombreOperador_ (mismo helper que ya usa Recepción,
+    // 2026-09-14) en vez de leer operadorAsignado.nombre directo: ese
+    // nombre queda CONGELADO desde el momento de la asignación (viene de
+    // como se haya escrito/elegido entonces — "Irene", "Pepe Nieto", etc.)
+    // y no se actualiza si después se corrige el nombre oficial en Alanis
+    // Operadores. nombreOperador_ busca por uid contra listaOperadores
+    // (que sí refleja el nombre oficial vigente) y solo usa el nombre
+    // congelado como respaldo si el uid no se encuentra.
+    const nombreOperadorAsignado = f.operadorAsignado
+      ? nombreOperador_(f.operadorAsignado.uid, f.operadorAsignado.nombre)
+      : null;
 
     return `
       <div class="progreso-franja">
