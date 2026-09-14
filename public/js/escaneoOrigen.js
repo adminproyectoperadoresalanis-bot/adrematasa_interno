@@ -78,7 +78,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // el menú de cuenta (ver auth.js) — antes solo se usaba internamente aquí
 // para comparar contra version.json y decidir si mostrar el banner de
 // "hay una versión nueva".
-export const APP_VERSION = "2026.09.14-6";
+export const APP_VERSION = "2026.09.14-7";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -1299,6 +1299,25 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     return n;
   }
 
+  // Nombre del operador resuelto por uid (2026-09-14, pedido de Ivan) — los
+  // operadores auto-capturan su nombre al validar en Alanis Operadores, y a
+  // veces lo escriben con mayúsculas/minúsculas inconsistentes ("JOSE
+  // RODOLFO MARTINEZ" vs "Moises Garcia"). En vez de confiar en ese texto
+  // congelado al momento del escaneo (recepcionOperadorNombre), se resuelve
+  // en vivo contra operadores_alanis (listaOperadores, que ya refleja
+  // usuarios/{uid}.nombre) — así, si se corrige el nombre desde la pantalla
+  // de admin de Alanis Operadores, aquí se ve corregido de inmediato sin
+  // tener que re-escanear nada. Si el uid todavía no llegó (embarques
+  // anteriores a este cambio) o no se encuentra en el catálogo, se usa el
+  // nombre congelado como respaldo.
+  function nombreOperador_(uid, nombreRespaldo) {
+    if (uid) {
+      const op = listaOperadores.find(o => o.id === uid);
+      if (op && op.nombre) return op.nombre;
+    }
+    return nombreRespaldo || "—";
+  }
+
   // "Seguimiento de embarques" — vista de un vistazo, pedida por Ivan
   // (2026-09-08), de las 4 etapas del proceso por embarque (más el punto de
   // sincronización junto al nombre). Se arma combinando listaHistorial
@@ -1336,9 +1355,9 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       const colOperaciones = f.validacion2 ? pillEtapa("ok", "OK") : pillEtapa("pend", "Pendiente");
 
       let colCheckpoint1;
-      if (r && r.recepcionResultado === "COINCIDE") colCheckpoint1 = pillEtapa("ok", "Coincide", r.recepcionOperadorNombre);
-      else if (r && r.recepcionResultado === "NO_COINCIDE_DOCUMENTO") colCheckpoint1 = pillEtapa("bad", "Documento", r.recepcionOperadorNombre);
-      else if (r && r.recepcionResultado === "NO_COINCIDE_OPERADOR") colCheckpoint1 = pillEtapa("warn", "Operador", r.recepcionOperadorNombre);
+      if (r && r.recepcionResultado === "COINCIDE") colCheckpoint1 = pillEtapa("ok", "Coincide", nombreOperador_(r.recepcionOperadorUid, r.recepcionOperadorNombre));
+      else if (r && r.recepcionResultado === "NO_COINCIDE_DOCUMENTO") colCheckpoint1 = pillEtapa("bad", "Documento", nombreOperador_(r.recepcionOperadorUid, r.recepcionOperadorNombre));
+      else if (r && r.recepcionResultado === "NO_COINCIDE_OPERADOR") colCheckpoint1 = pillEtapa("warn", "Operador", nombreOperador_(r.recepcionOperadorUid, r.recepcionOperadorNombre));
       else if (f.estadoSync === "sincronizado") colCheckpoint1 = pillEtapa("pend", "Pendiente");
       else colCheckpoint1 = pillEtapa("pend", "—");
 
@@ -1474,22 +1493,33 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       valOperaciones = pillEtapa("pend", "Pendiente");
     }
 
+    const nombreRecepcion = nombreOperador_(r && r.recepcionOperadorUid, r && r.recepcionOperadorNombre);
     let recepcionHtml;
     if (r && r.recepcionResultado === "COINCIDE") {
-      recepcionHtml = pillEtapa("ok", "Coincide") + `<div class="detalle-campo-sub">${escapeHtml(r.recepcionOperadorNombre || "—")}${r.recepcionTimestamp ? " · " + formatoFecha(r.recepcionTimestamp) : ""}</div>`;
+      recepcionHtml = pillEtapa("ok", "Coincide") + `<div class="detalle-campo-sub">${escapeHtml(nombreRecepcion)}${r.recepcionTimestamp ? " · " + formatoFecha(r.recepcionTimestamp) : ""}</div>`;
     } else if (r && r.recepcionResultado === "NO_COINCIDE_DOCUMENTO") {
-      recepcionHtml = pillEtapa("bad", "Documento no coincide") + `<div class="detalle-campo-sub">${escapeHtml(r.recepcionOperadorNombre || "—")}</div>`;
+      recepcionHtml = pillEtapa("bad", "Documento no coincide") + `<div class="detalle-campo-sub">${escapeHtml(nombreRecepcion)}</div>`;
     } else if (r && r.recepcionResultado === "NO_COINCIDE_OPERADOR") {
-      recepcionHtml = pillEtapa("warn", "Operador no coincide") + `<div class="detalle-campo-sub">${escapeHtml(r.recepcionOperadorNombre || "—")}</div>`;
+      recepcionHtml = pillEtapa("warn", "Operador no coincide") + `<div class="detalle-campo-sub">${escapeHtml(nombreRecepcion)}</div>`;
     } else {
       recepcionHtml = pillEtapa("pend", "—");
     }
 
+    // Nombre de quien validó pre-entrega (2026-09-14) — antes no se
+    // mostraba porque el uid no llegaba reflejado desde Alanis Operadores;
+    // ahora que validadoPor sí llega, se resuelve igual que en recepción.
+    // Sin respaldo de texto congelado (nunca existió para esta etapa): si
+    // el uid no se encuentra en el catálogo, simplemente no se muestra
+    // nombre en vez de mostrar un "—" confuso junto al pillEtapa.
+    const opPreEntrega = r && r.validadoPor ? listaOperadores.find(o => o.id === r.validadoPor) : null;
+    const nombrePreEntrega = opPreEntrega && opPreEntrega.nombre ? opPreEntrega.nombre : null;
     let preEntregaHtml;
     if (r && r.estatusValidacion === "VALIDADO") {
-      preEntregaHtml = pillEtapa("ok", "Validado");
+      preEntregaHtml = pillEtapa("ok", "Validado") + (nombrePreEntrega ? `<div class="detalle-campo-sub">${escapeHtml(nombrePreEntrega)}</div>` : "");
     } else if (r && r.estatusValidacion === "DISCREPANCIA") {
-      preEntregaHtml = pillEtapa("bad", "Discrepancia") + (r.discrepanciaDetalle ? `<div class="detalle-campo-sub">${escapeHtml(r.discrepanciaDetalle)}</div>` : "");
+      preEntregaHtml = pillEtapa("bad", "Discrepancia") +
+        (nombrePreEntrega ? `<div class="detalle-campo-sub">${escapeHtml(nombrePreEntrega)}</div>` : "") +
+        (r.discrepanciaDetalle ? `<div class="detalle-campo-sub">${escapeHtml(r.discrepanciaDetalle)}</div>` : "");
     } else if (r && r.recepcionResultado) {
       preEntregaHtml = pillEtapa("pend", "En tránsito");
     } else {
