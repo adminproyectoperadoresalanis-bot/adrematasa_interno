@@ -78,7 +78,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // el menú de cuenta (ver auth.js) — antes solo se usaba internamente aquí
 // para comparar contra version.json y decidir si mostrar el banner de
 // "hay una versión nueva".
-export const APP_VERSION = "2026.09.14-5";
+export const APP_VERSION = "2026.09.14-6";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -641,16 +641,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
     <section class="panel" style="margin-top:20px;">
       <h2>Historial de escaneos</h2>
-      <p class="nota">Da clic en un embarque para ver el detalle completo (UUID, RFC, las 4 validaciones).</p>
+      <p class="nota">Da clic en un embarque para ver el detalle completo (UUID, RFC, las 4 validaciones). El color del nombre del embarque indica si ya sincronizó con Alanis Operadores (verde = sí, gris = en camino, rojo = error).</p>
       <div id="historial-origen-error" class="error"></div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-historial-origen">
           <thead>
             <tr>
-              <th>Embarque</th><th>Progreso</th><th>Sincronización</th>${mostrarColumnaAcciones ? "<th></th>" : ""}
+              <th>Embarque</th><th>Progreso</th>${mostrarColumnaAcciones ? "<th></th>" : ""}
             </tr>
           </thead>
-          <tbody id="tbody-historial-origen"><tr><td colspan="${mostrarColumnaAcciones ? 4 : 3}">Cargando...</td></tr></tbody>
+          <tbody id="tbody-historial-origen"><tr><td colspan="${mostrarColumnaAcciones ? 3 : 2}">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -901,6 +901,17 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     listaResultados = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderPendientesValidacion3();
     renderSemaforo();
+    // Bug real encontrado por Ivan (2026-09-14): la franja de Progreso del
+    // historial (celdaProgreso) también depende de listaResultados —
+    // Recepción/Pre-entrega del operador — pero este listener nunca
+    // volvía a dibujar la tabla de historial, solo el semáforo. El modal
+    // de detalle sí quedaba correcto porque lee listaResultados en vivo al
+    // momento del clic, pero la franja de la fila se quedaba pegada con lo
+    // que había cuando se dibujó por última vez (normalmente vacío, porque
+    // el resultado del operador casi siempre llega DESPUÉS de que el
+    // historial ya se dibujó) — por eso se veían embarques ya validados
+    // por completo en el modal, pero "Esperando operador" en la fila.
+    renderHistorial();
   }, (err) => {
     if (errorValidacion3Div) errorValidacion3Div.textContent = "No se pudo cargar el estado del operador: " + err.message;
   });
@@ -1351,9 +1362,14 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     }).join("");
   }
 
-  function badgeSiNo(valor, etiquetaSi, etiquetaNo) {
+  // tituloSi/tituloNo (2026-09-14, opcionales): tooltip del badge — para
+  // casos donde el badge por sí solo se presta a confusión (ej. el "OK" de
+  // coincidencia de caja, que Ivan confundió con el estado de
+  // sincronización por estar tan cerca de esa otra pastilla).
+  function badgeSiNo(valor, etiquetaSi, etiquetaNo, tituloSi, tituloNo) {
     if (typeof valor !== "boolean") return "";
-    return `<span class="badge ${valor ? "badge-aprobada" : "badge-rechazada"}" style="margin-left:6px;">${valor ? etiquetaSi : etiquetaNo}</span>`;
+    const titulo = valor ? tituloSi : tituloNo;
+    return `<span class="badge ${valor ? "badge-aprobada" : "badge-rechazada"}" style="margin-left:6px;"${titulo ? ` title="${escapeHtml(titulo)}"` : ""}>${valor ? etiquetaSi : etiquetaNo}</span>`;
   }
 
   // Historial: UUID truncado + copiable (2026-09-14) — el navegador cortaba
@@ -1544,28 +1560,45 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
   function renderHistorial() {
     if (listaHistorial.length === 0) {
-      tbodyHistorial.innerHTML = `<tr><td colspan="${mostrarColumnaAcciones ? 4 : 3}">Todavía no hay escaneos de origen.</td></tr>`;
+      tbodyHistorial.innerHTML = `<tr><td colspan="${mostrarColumnaAcciones ? 3 : 2}">Todavía no hay escaneos de origen.</td></tr>`;
       return;
     }
     const resultadosPorIdHistorial = new Map(listaResultados.map(r => [r.id, r]));
     tbodyHistorial.innerHTML = listaHistorial.map(f => {
       const cajaTexto = escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—");
-      const cajaBadge = badgeSiNo(f.origenEscaneo && f.origenEscaneo.cajaCoincide, "OK", "No coincide");
+      // "OK"/"No coincide" aquí es si la CAJA escaneada coincidió con la
+      // esperada — nada que ver con sincronización (2026-09-14, aclarado a
+      // pedido de Ivan porque se prestaba a confusión con el badge de
+      // Sincronización que había al lado). El title deja claro de qué se
+      // trata sin tener que adivinar ni abrir el detalle.
+      const cajaBadge = badgeSiNo(
+        f.origenEscaneo && f.origenEscaneo.cajaCoincide,
+        "OK", "No coincide",
+        "La caja escaneada coincide con la esperada — no es el estado de sincronización",
+        "La caja escaneada NO coincide con la esperada"
+      );
       const r = resultadosPorIdHistorial.get(f.id);
 
       const hayAccionesNormales = puedeCorregir || puedeReasignar(f);
       const tieneAcciones = hayAccionesNormales || esAdmin;
 
+      // Sincronización (2026-09-14, pedido de Ivan: ya no columna propia,
+      // "robaba espacio") — mismo tratamiento que ya usaba "Seguimiento de
+      // embarques": el nombre del embarque cambia de color según
+      // claseYTituloSync (verde = sincronizado, rojo = error, gris =
+      // cualquier otro caso normal). El detalle completo sigue disponible
+      // en el modal (tarjeta "Sincronización").
+      const syncInfo = claseYTituloSync(f.estadoSync);
+
       return `
       <tr data-id="${f.id}">
         <td>
           <button type="button" class="historial-emb-btn" title="Ver detalle completo">
-            <span class="historial-texto">${escapeHtml(f.embarqueId || f.id)}</span>
+            <span class="historial-texto ${syncInfo.clase}" title="${escapeHtml(syncInfo.titulo)}">${escapeHtml(f.embarqueId || f.id)}</span>
             <span class="celda-embarque-meta">Caja ${cajaTexto}${cajaBadge}</span>
           </button>
         </td>
         <td>${celdaProgreso(f, r)}</td>
-        <td><span class="badge ${CLASES_SYNC[f.estadoSync] || "badge-pendiente"}">${ETIQUETAS_SYNC[f.estadoSync] || f.estadoSync}</span></td>
         ${mostrarColumnaAcciones ? `<td class="acciones">
               ${tieneAcciones ? `
               <div class="historial-menu-wrap">
