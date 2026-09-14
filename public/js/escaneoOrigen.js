@@ -78,7 +78,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // el menú de cuenta (ver auth.js) — antes solo se usaba internamente aquí
 // para comparar contra version.json y decidir si mostrar el banner de
 // "hay una versión nueva".
-export const APP_VERSION = "2026.09.14-9";
+export const APP_VERSION = "2026.09.14-10";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -540,6 +540,17 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       }
       .uuid-chip-copiar:hover { background: #f7f6f4; color: #1c1a17; }
 
+      /* Celda de acciones del historial con su PROPIA clase (2026-09-14,
+         pedido de Ivan: la línea seguía "rota" junto al ⋮ aun sin el
+         borde fijo del botón). La causa real era la regla .tabla
+         .acciones en estilos.css, que le pone display flex a la celda —
+         esa regla es correcta para Pendientes/Validación (varios botones
+         en fila) pero en el historial saca a ESTA celda del layout
+         normal de tabla y desalinea su borde inferior con el resto de la
+         fila. Se deja .tabla .acciones intacta (no tocar estilos.css) y
+         esta celda usa su propio nombre para comportarse como celda
+         normal. */
+      .historial-td-acciones { text-align: right; white-space: nowrap; vertical-align: middle; }
       .historial-menu-wrap { position: relative; display: inline-block; }
       /* Botón "⋮" sin caja fija (2026-09-14, pedido de Ivan): antes tenía
          borde+fondo blanco SIEMPRE visibles, y esa cajita propia rompía la
@@ -1637,7 +1648,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
           </button>
         </td>
         <td>${celdaProgreso(f, r)}</td>
-        ${mostrarColumnaAcciones ? `<td class="acciones">
+        ${mostrarColumnaAcciones ? `<td class="historial-td-acciones">
               ${tieneAcciones ? `
               <div class="historial-menu-wrap">
                 <button type="button" class="historial-menu-btn" title="Más acciones">⋮</button>
