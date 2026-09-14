@@ -78,7 +78,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // el menú de cuenta (ver auth.js) — antes solo se usaba internamente aquí
 // para comparar contra version.json y decidir si mostrar el banner de
 // "hay una versión nueva".
-export const APP_VERSION = "2026.09.14-8";
+export const APP_VERSION = "2026.09.14-9";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -541,11 +541,26 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       .uuid-chip-copiar:hover { background: #f7f6f4; color: #1c1a17; }
 
       .historial-menu-wrap { position: relative; display: inline-block; }
+      /* Botón "⋮" sin caja fija (2026-09-14, pedido de Ivan): antes tenía
+         borde+fondo blanco SIEMPRE visibles, y esa cajita propia rompía la
+         línea divisoria entre filas justo en la columna de acciones — se
+         notaba sobre todo en el celular, donde podía confundirse a qué
+         registro pertenecía el menú. Ahora es transparente en reposo (solo
+         los tres puntos) y solo muestra su borde/fondo al pasar el mouse o
+         tener el foco (que es también el estado "menú abierto", ya que el
+         botón conserva el foco mientras el menú está desplegado) — así la
+         línea de la fila queda continua de punta a punta en el estado
+         normal. Mismo tamaño/click-target que antes, nada más cambia el
+         estilo en reposo. */
       .historial-menu-btn {
-        width: 28px; height: 28px; border-radius: 7px; border: 1px solid #ded9d1; background: #fff;
-        font-size: 15px; line-height: 1; cursor: pointer; color: #1c1a17;
+        width: 28px; height: 28px; border-radius: 7px; border: 1px solid transparent; background: transparent;
+        font-size: 15px; line-height: 1; cursor: pointer; color: #6b6558;
+        display: inline-flex; align-items: center; justify-content: center;
       }
-      .historial-menu-btn:hover { background: #f7f6f4; }
+      .historial-menu-btn:hover,
+      .historial-menu-btn:focus-visible {
+        border-color: #ded9d1; background: #f7f6f4; color: #1c1a17;
+      }
       .historial-menu {
         display: none; position: absolute; top: calc(100% + 4px); right: 0; z-index: 15; min-width: 190px;
         background: #fff; border: 1px solid #ded9d1; border-radius: 10px; box-shadow: 0 10px 30px rgba(20,16,12,0.15);
@@ -622,14 +637,10 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <table class="tabla" id="tabla-semaforo">
           <thead>
             <tr>
-              <th>Embarque</th>
-              <th>Atención<br>al Cliente</th>
-              <th>Despacho y<br>Asignación</th>
-              <th>Operador<br>Despacho</th>
-              <th>Operador<br>Pre Entrega</th>
+              <th>Embarque</th><th>Progreso</th>
             </tr>
           </thead>
-          <tbody id="tbody-semaforo"><tr><td colspan="5">Cargando...</td></tr></tbody>
+          <tbody id="tbody-semaforo"><tr><td colspan="2">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -1335,10 +1346,18 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   // sincronizarResultados_/sincronizarResultadoRecepcion_ en Codigo.gs). Es
   // solo informativa, no tiene botones — para actuar se usan las tablas de
   // abajo.
+  // (2026-09-14, pedido de Ivan) — reemplaza las 4 columnas de pastillas
+  // (Atención al Cliente / Despacho y Asignación / Operador Despacho /
+  // Operador Pre Entrega) por la misma franja de progreso de 4 segmentos +
+  // texto de estado que ya usa "Historial de escaneos" (celdaProgreso),
+  // para que ambas tablas se vean y se lean igual de un vistazo. El detalle
+  // completo por etapa sigue disponible más abajo, en la tabla de Historial
+  // (clic en el embarque abre el modal) — este semáforo sigue siendo solo
+  // informativo, sin botones.
   function renderSemaforo() {
     if (!tbodySemaforo) return;
     if (listaHistorial.length === 0) {
-      tbodySemaforo.innerHTML = `<tr><td colspan="5">Todavía no hay embarques en proceso.</td></tr>`;
+      tbodySemaforo.innerHTML = `<tr><td colspan="2">Todavía no hay embarques en proceso.</td></tr>`;
       return;
     }
     const resultadosPorId = new Map(listaResultados.map(r => [r.id, r]));
@@ -1359,32 +1378,12 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
     tbodySemaforo.innerHTML = historialOrdenado.map(f => {
       const r = resultadosPorId.get(f.id);
-
-      const colAtencion = f.origenEscaneo ? pillEtapa("ok", "OK") : pillEtapa("pend", "—");
-      const colOperaciones = f.validacion2 ? pillEtapa("ok", "OK") : pillEtapa("pend", "Pendiente");
-
-      let colCheckpoint1;
-      if (r && r.recepcionResultado === "COINCIDE") colCheckpoint1 = pillEtapa("ok", "Coincide", nombreOperador_(r.recepcionOperadorUid, r.recepcionOperadorNombre));
-      else if (r && r.recepcionResultado === "NO_COINCIDE_DOCUMENTO") colCheckpoint1 = pillEtapa("bad", "Documento", nombreOperador_(r.recepcionOperadorUid, r.recepcionOperadorNombre));
-      else if (r && r.recepcionResultado === "NO_COINCIDE_OPERADOR") colCheckpoint1 = pillEtapa("warn", "Operador", nombreOperador_(r.recepcionOperadorUid, r.recepcionOperadorNombre));
-      else if (f.estadoSync === "sincronizado") colCheckpoint1 = pillEtapa("pend", "Pendiente");
-      else colCheckpoint1 = pillEtapa("pend", "—");
-
-      let colCheckpoint2;
-      if (r && r.estatusValidacion === "VALIDADO") colCheckpoint2 = pillEtapa("ok", "Validado");
-      else if (r && r.estatusValidacion === "DISCREPANCIA") colCheckpoint2 = pillEtapa("bad", "Discrepancia");
-      else if (r && r.recepcionResultado) colCheckpoint2 = pillEtapa("pend", "En tránsito");
-      else colCheckpoint2 = pillEtapa("pend", "—");
-
       const syncInfo = claseYTituloSync(f.estadoSync);
 
       return `
         <tr data-id="${f.id}">
           <td><strong class="${syncInfo.clase}" title="${escapeHtml(syncInfo.titulo)}">${escapeHtml(f.embarqueId || f.id)}</strong><span class="semaforo-meta">${escapeHtml(f.clienteNombre || "McCain")}${f.origenEscaneo && f.origenEscaneo.caja ? " · Caja " + escapeHtml(f.origenEscaneo.caja) : ""}</span></td>
-          <td>${colAtencion}</td>
-          <td>${colOperaciones}</td>
-          <td>${colCheckpoint1}</td>
-          <td>${colCheckpoint2}</td>
+          <td>${celdaProgreso(f, r)}</td>
         </tr>
       `;
     }).join("");
