@@ -74,7 +74,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // APP_VERSION en cada deploy que quieras poder detectar, y actualiza
 // version.json al mismo valor.
 // ----------------------------------------------------------------------
-const APP_VERSION = "2026.09.12-1";
+const APP_VERSION = "2026.09.14-1";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -494,6 +494,47 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       .combo-operador-lista li.combo-operador-activa { background: #eef2ff; color: #3730a3; }
       .combo-operador-lista li.combo-operador-vacia { color: #9c9895; cursor: default; font-style: italic; }
       .combo-operador-lista li.combo-operador-vacia:hover { background: none; }
+
+      /* ----------------------------------------------------------------
+         Historial de escaneos: celda embarque+caja, UUID truncado con
+         copia, y acciones agrupadas en un menú (2026-09-14, mockup
+         revisado con Ivan). No cambia ninguna regla de negocio — Corregir
+         origen / Reasignar operador / Borrar (prueba) siguen siendo
+         EXACTAMENTE los mismos botones de antes (misma clase, mismo
+         listener), solo agrupados detrás de un menú para que la fila no
+         compita con la información. El UUID completo sigue disponible en
+         el tooltip nativo (title) y se puede copiar con un clic — antes
+         se veía cortado donde le cabía al navegador, sin respetar los
+         grupos con guion, y eso desbordaba la fila entera. */
+      .celda-embarque-meta { display: block; font-size: 11px; color: #6b6558; font-weight: 400; margin-top: 2px; }
+      .celda-embarque-meta .badge { margin-left: 4px; }
+
+      .uuid-chip {
+        display: inline-flex; align-items: center; gap: 6px; font-family: ui-monospace, Menlo, monospace;
+        font-size: 12px; white-space: nowrap;
+      }
+      .uuid-chip-copiar {
+        border: 1px solid #ded9d1; background: #fff; color: #6b6558; font-size: 10.5px; font-weight: 600;
+        padding: 2px 7px; border-radius: 6px; cursor: pointer; line-height: 1.4;
+      }
+      .uuid-chip-copiar:hover { background: #f7f6f4; color: #1c1a17; }
+
+      .historial-menu-wrap { position: relative; display: inline-block; }
+      .historial-menu-btn {
+        width: 28px; height: 28px; border-radius: 7px; border: 1px solid #ded9d1; background: #fff;
+        font-size: 15px; line-height: 1; cursor: pointer; color: #1c1a17;
+      }
+      .historial-menu-btn:hover { background: #f7f6f4; }
+      .historial-menu {
+        display: none; position: absolute; top: calc(100% + 4px); right: 0; z-index: 15; min-width: 190px;
+        background: #fff; border: 1px solid #ded9d1; border-radius: 10px; box-shadow: 0 10px 30px rgba(20,16,12,0.15);
+        overflow: hidden; padding: 4px;
+      }
+      .historial-menu.abierto { display: block; }
+      .historial-menu button.secundario,
+      .historial-menu button.peligro {
+        display: block; width: 100%; text-align: left; margin: 2px 0; white-space: nowrap;
+      }
     </style>
     <section class="panel">
       <div class="semaforo-titulo-fila">
@@ -529,10 +570,10 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <table class="tabla" id="tabla-historial-origen">
           <thead>
             <tr>
-              <th>Embarque</th><th>UUID CFDI</th><th>RFC receptor</th><th>Caja origen</th><th>Atención al Cliente</th><th>2da validación (Operaciones)</th><th>Sincronización</th>${puedeCorregir ? "<th>Acción</th>" : ""}
+              <th>Embarque</th><th>UUID CFDI</th><th>RFC receptor</th><th>Atención al Cliente</th><th>2da validación (Operaciones)</th><th>Sincronización</th>${puedeCorregir ? "<th></th>" : ""}
             </tr>
           </thead>
-          <tbody id="tbody-historial-origen"><tr><td colspan="${puedeCorregir ? 8 : 7}">Cargando...</td></tr></tbody>
+          <tbody id="tbody-historial-origen"><tr><td colspan="${puedeCorregir ? 7 : 6}">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -1198,6 +1239,19 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     return `<span class="badge ${valor ? "badge-aprobada" : "badge-rechazada"}" style="margin-left:6px;">${valor ? etiquetaSi : etiquetaNo}</span>`;
   }
 
+  // Historial: UUID truncado + copiable (2026-09-14) — el navegador cortaba
+  // las 36 posiciones del UUID donde le cabía en la celda, sin respetar los
+  // grupos con guion, y eso desbordaba la fila entera. Se ve completo en el
+  // tooltip nativo (title, al pasar el mouse) y se copia completo con un
+  // clic. Si el valor no es un UUID largo (p.ej. "SIN-FACTURA" o "—") se
+  // muestra tal cual, sin truncar ni agregar el botón de copiar.
+  function celdaUuid(valor) {
+    const texto = valor || "";
+    if (!texto || texto === "—" || texto.length <= 20) return escapeHtml(texto || "—");
+    const truncado = `${texto.slice(0, 8)}…${texto.slice(-6)}`;
+    return `<span class="uuid-chip" title="${escapeHtml(texto)}">${escapeHtml(truncado)}<button type="button" class="uuid-chip-copiar" data-uuid="${escapeHtml(texto)}">Copiar</button></span>`;
+  }
+
   // Reasignación de operador (2026-09-12, decisión de Ivan): disponible
   // para CUALQUIER puesto de Operaciones o admin (mismo criterio que
   // puedeValidar2), para embarques con o sin factura, sin pedir motivo —
@@ -1215,7 +1269,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   function renderHistorial() {
     const mostrarColumnaAcciones = puedeCorregir || puedeValidar2;
     if (listaHistorial.length === 0) {
-      tbodyHistorial.innerHTML = `<tr><td colspan="${mostrarColumnaAcciones ? 8 : 7}">Todavía no hay escaneos de origen.</td></tr>`;
+      tbodyHistorial.innerHTML = `<tr><td colspan="${mostrarColumnaAcciones ? 7 : 6}">Todavía no hay escaneos de origen.</td></tr>`;
       return;
     }
     tbodyHistorial.innerHTML = listaHistorial.map(f => {
@@ -1239,19 +1293,29 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         `;
       }
 
+      const tieneAcciones = puedeCorregir || puedeReasignar(f) || esAdmin;
+
       return `
       <tr data-id="${f.id}">
-        <td>${escapeHtml(f.embarqueId || f.id)}</td>
-        <td style="word-break:break-all;">${escapeHtml(f.uuidEsperado || "—")}</td>
+        <td>
+          ${escapeHtml(f.embarqueId || f.id)}
+          <span class="celda-embarque-meta">Caja ${cajaTexto}${cajaBadge}</span>
+        </td>
+        <td>${celdaUuid(f.uuidEsperado)}</td>
         <td>${escapeHtml(f.receptorRFCEsperado || "—")}</td>
-        <td>${cajaTexto}${cajaBadge}</td>
         <td>${celdaAtencion}</td>
         <td>${celdaValidacion2}</td>
         <td><span class="badge ${CLASES_SYNC[f.estadoSync] || "badge-pendiente"}">${ETIQUETAS_SYNC[f.estadoSync] || f.estadoSync}</span></td>
         ${mostrarColumnaAcciones ? `<td class="acciones">
-              ${puedeCorregir ? `<button type="button" class="secundario btn-corregir-origen">Corregir origen</button>` : ""}
-              ${puedeReasignar(f) ? `<button type="button" class="secundario btn-reasignar-operador" title="Cambia quién es el operador asignado a este embarque">Reasignar operador</button>` : ""}
-              ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. No es reversible.">Borrar</button>` : ""}
+              ${tieneAcciones ? `
+              <div class="historial-menu-wrap">
+                <button type="button" class="historial-menu-btn" title="Más acciones">⋮</button>
+                <div class="historial-menu">
+                  ${puedeCorregir ? `<button type="button" class="secundario btn-corregir-origen">Corregir origen</button>` : ""}
+                  ${puedeReasignar(f) ? `<button type="button" class="secundario btn-reasignar-operador" title="Cambia quién es el operador asignado a este embarque">Reasignar operador</button>` : ""}
+                  ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. No es reversible.">Borrar</button>` : ""}
+                </div>
+              </div>` : ""}
             </td>` : ""}
       </tr>
     `;
@@ -1282,6 +1346,43 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         });
       });
     }
+
+    // Copiar UUID completo (2026-09-14) — ver celdaUuid().
+    tbodyHistorial.querySelectorAll(".uuid-chip-copiar").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const valor = btn.dataset.uuid || "";
+        if (!valor || !navigator.clipboard) return;
+        try {
+          await navigator.clipboard.writeText(valor);
+          const original = btn.textContent;
+          btn.textContent = "Copiado";
+          btn.disabled = true;
+          setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1200);
+        } catch (err) {
+          // Sin permiso de portapapeles (o contexto no seguro) — no rompemos
+          // el flujo, el UUID completo sigue visible en el tooltip (title).
+        }
+      });
+    });
+
+    // Menú de acciones agrupadas (2026-09-14): mismo truco que ya usa el
+    // combobox de operador (mousedown con preventDefault dentro del menú)
+    // para no necesitar un listener global de "clic afuera" — el botón
+    // pierde el foco (blur) al hacer clic en cualquier otro lado y el menú
+    // se cierra solo.
+    tbodyHistorial.querySelectorAll(".historial-menu-btn").forEach(btn => {
+      const menu = btn.nextElementSibling;
+      if (!menu) return;
+      btn.addEventListener("click", () => {
+        const yaAbierto = menu.classList.contains("abierto");
+        tbodyHistorial.querySelectorAll(".historial-menu.abierto").forEach(m => m.classList.remove("abierto"));
+        menu.classList.toggle("abierto", !yaAbierto);
+      });
+      btn.addEventListener("blur", () => {
+        setTimeout(() => menu.classList.remove("abierto"), 120);
+      });
+      menu.addEventListener("mousedown", (e) => e.preventDefault());
+    });
 
     // ------------------------------------------------------------------
     // Borrado de prueba — TEMPORAL, solo mientras dure esta fase de
