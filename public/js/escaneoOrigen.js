@@ -74,7 +74,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // APP_VERSION en cada deploy que quieras poder detectar, y actualiza
 // version.json al mismo valor.
 // ----------------------------------------------------------------------
-const APP_VERSION = "2026.09.14-1";
+const APP_VERSION = "2026.09.14-2";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -533,8 +533,14 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       .historial-menu.abierto { display: block; }
       .historial-menu button.secundario,
       .historial-menu button.peligro {
-        display: block; width: 100%; text-align: left; margin: 2px 0; white-space: nowrap;
+        display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; margin: 2px 0; white-space: nowrap;
       }
+      .historial-menu button svg { width: 15px; height: 15px; flex: none; opacity: .75; }
+      .historial-menu-admin-label {
+        font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase; color: #a8a29a;
+        padding: 8px 10px 2px; font-weight: 700;
+      }
+      .historial-menu-hr { border: none; border-top: 1px solid #e7e3dc; margin: 4px 0; }
     </style>
     <section class="panel">
       <div class="semaforo-titulo-fila">
@@ -1252,6 +1258,12 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     return `<span class="uuid-chip" title="${escapeHtml(texto)}">${escapeHtml(truncado)}<button type="button" class="uuid-chip-copiar" data-uuid="${escapeHtml(texto)}">Copiar</button></span>`;
   }
 
+  // Iconos del menú de acciones del historial (2026-09-14) — mismo trazo
+  // que el mockup que Ivan aprobó, solo para que el menú se vea igual.
+  const ICONO_LAPIZ = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>`;
+  const ICONO_SWAP = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>`;
+  const ICONO_BASURA = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a1 1 0 01-1 1H7a1 1 0 01-1-1L5 6"/></svg>`;
+
   // Reasignación de operador (2026-09-12, decisión de Ivan): disponible
   // para CUALQUIER puesto de Operaciones o admin (mismo criterio que
   // puedeValidar2), para embarques con o sin factura, sin pedir motivo —
@@ -1293,7 +1305,8 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         `;
       }
 
-      const tieneAcciones = puedeCorregir || puedeReasignar(f) || esAdmin;
+      const hayAccionesNormales = puedeCorregir || puedeReasignar(f);
+      const tieneAcciones = hayAccionesNormales || esAdmin;
 
       return `
       <tr data-id="${f.id}">
@@ -1311,9 +1324,9 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
               <div class="historial-menu-wrap">
                 <button type="button" class="historial-menu-btn" title="Más acciones">⋮</button>
                 <div class="historial-menu">
-                  ${puedeCorregir ? `<button type="button" class="secundario btn-corregir-origen">Corregir origen</button>` : ""}
-                  ${puedeReasignar(f) ? `<button type="button" class="secundario btn-reasignar-operador" title="Cambia quién es el operador asignado a este embarque">Reasignar operador</button>` : ""}
-                  ${esAdmin ? `<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. No es reversible.">Borrar</button>` : ""}
+                  ${puedeCorregir ? `<button type="button" class="secundario btn-corregir-origen">${ICONO_LAPIZ}Corregir origen</button>` : ""}
+                  ${puedeReasignar(f) ? `<button type="button" class="secundario btn-reasignar-operador" title="Cambia quién es el operador asignado a este embarque">${ICONO_SWAP}Reasignar operador</button>` : ""}
+                  ${esAdmin ? `${hayAccionesNormales ? `<hr class="historial-menu-hr"><div class="historial-menu-admin-label">Solo admin</div>` : ""}<button type="button" class="peligro btn-borrar-prueba" title="Borra este embarque por completo en ADREMATASA y en Alanis Operadores. No es reversible.">${ICONO_BASURA}Borrar embarque</button>` : ""}
                 </div>
               </div>` : ""}
             </td>` : ""}
