@@ -932,4 +932,10 @@ body.tiene-nav main#contenido-app { padding-bottom: 104px; }
   padding: 12px 28px;
   border-radius: 8px;
   font-size: 1rem;
+  #mensaje-recuperar:not(:empty) {
+  display: block;
+  color: #2d6a4f;
+  font-size: 14px;
+  margin-top: 8px;
+}
 }

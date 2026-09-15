@@ -32,7 +32,19 @@
   <div class="tarjeta">
     <h1>Adrematasa Interno</h1>
     <h2>Recuperar contraseña</h2>
-    <p class="nota">Ponte en contacto con el administrador para recuperar tu contraseña.</p>
+    <p class="nota">Escribe tu correo Alanis y te mandamos un enlace para restablecer tu contraseña.</p>
+    <form id="form-recuperar">
+      <input
+        type="email"
+        id="recuperar-correo"
+        placeholder="tucorreo@alanis.com.mx"
+        autocomplete="email"
+        required
+      />
+      <button type="submit">Enviar enlace</button>
+    </form>
+    <p id="mensaje-recuperar" class="mensaje-exito" style="display:none"></p>
+    <p id="error-recuperar" class="error"></p>
     <p><a href="#" id="link-ir-login-desde-recuperar">Volver a iniciar sesión</a></p>
   </div>
 </div>

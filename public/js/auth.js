@@ -1,4 +1,5 @@
 import { auth, db } from "./firebase-config.js";
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -120,6 +121,47 @@ linkIrRegistro?.addEventListener("click", (e) => {
   e.preventDefault();
   errorLogin.textContent = "";
   mostrarVista(vistaRegistro);
+});
+
+// Recuperar contraseña: llama a la Cloud Function que genera el link
+// con Admin SDK y lo manda por Brevo (el correo nativo de Firebase
+// lo filtra el servidor corporativo de Alanis).
+const funciones = getFunctions(undefined, "us-central1");
+const enviarResetContrasena = httpsCallable(funciones, "enviarResetContrasena");
+
+const formRecuperar = document.getElementById("form-recuperar");
+const mensajeRecuperar = document.getElementById("mensaje-recuperar");
+const errorRecuperar = document.getElementById("error-recuperar");
+
+formRecuperar?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (mensajeRecuperar) mensajeRecuperar.textContent = "";
+  if (errorRecuperar) errorRecuperar.textContent = "";
+
+  const correo = document.getElementById("recuperar-correo").value.trim().toLowerCase();
+
+  if (!correo.endsWith(DOMINIO_ALANIS)) {
+    if (errorRecuperar) errorRecuperar.textContent = `Debes usar tu correo Alanis (${DOMINIO_ALANIS})`;
+    return;
+  }
+
+  const btnEnviar = formRecuperar.querySelector("button[type=submit]");
+  if (btnEnviar) btnEnviar.disabled = true;
+
+  try {
+    await enviarResetContrasena({ email: correo });
+    if (mensajeRecuperar) {
+      mensajeRecuperar.textContent =
+        `Listo. Si ese correo tiene una cuenta activa, en un momento recibirás el enlace para restablecer tu contraseña.`;
+    }
+    formRecuperar.reset();
+  } catch (err) {
+    if (errorRecuperar) {
+      errorRecuperar.textContent = "Ocurrió un error al enviar el correo. Intenta de nuevo o contacta al administrador.";
+    }
+  } finally {
+    if (btnEnviar) btnEnviar.disabled = false;
+  }
 });
 
 linkIrLogin?.addEventListener("click", (e) => {

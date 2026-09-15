@@ -22,25 +22,19 @@
 // ============================================================================
 
 const { onDocumentWritten, onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { defineSecret } = require("firebase-functions/params");
 const { initializeApp, applicationDefault } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getAuth } = require("firebase-admin/auth");
+const https = require("https");
 const logger = require("firebase-functions/logger");
 
-// TODO (Ivan): ajusta REGION a la ubicación real de tus bases de Firestore
-// (Firebase Console → Configuración del proyecto → General → "Ubicación de
-// recursos de Google Cloud predeterminada"). Debe ser la MISMA región en la
-// que ya vive Firestore en cada proyecto — Cloud Functions 2da gen no puede
-// desplegarse en cualquier región si el trigger es de Firestore.
 const REGION = "us-central1";
 
-// App local: appadrematasainterno (usa las credenciales del runtime, sin
-// configuración extra).
 initializeApp();
 const dbLocal = getFirestore();
 
-// App remota: alanis-operadores. Requiere que la cuenta de servicio de
-// runtime de ESTA función (ver README de IAM) tenga el rol "Cloud Datastore
-// User" otorgado en el proyecto alanis-operadores.
 const alanisApp = initializeApp(
   { credential: applicationDefault(), projectId: "alanis-operadores" },
   "alanis"
@@ -54,26 +48,21 @@ const COLECCION_SOLICITUDES_BORRADO = "solicitudes_borrado_prueba";
 const COLECCION_SOLICITUDES_REINICIO = "solicitudes_reinicio_flujo";
 const COLECCION_HISTORIAL_REINICIOS = "historial_reinicios_flujo";
 
+const brevoApiKey = defineSecret("BREVO_API_KEY");
+
 // ============================================================================
 // 1) verificaciones_cfdi_local (LOCAL) —estadoSync:'pendiente'→
 //    repositorio_mccain (ALANIS)
-//
-// Equivalente a sincronizarOrigenNuevos_ de Codigo.gs. Se dispara en
-// CUALQUIER escritura del documento, pero solo actúa cuando el estado
-// DESPUÉS del escrito es 'pendiente' — igual que el query original. No hay
-// riesgo de bucle: esta misma función es la que mueve estadoSync a
-// 'sincronizado' o 'error', y ninguno de esos valores vuelve a disparar el
-// bloque de abajo.
 // ============================================================================
 exports.sincronizarOrigenNuevos = onDocumentWritten(
   { document: `${COLECCION_LOCAL}/{embarqueId}`, region: REGION },
   async (event) => {
     const after = event.data.after;
-    if (!after || !after.exists) return; // documento borrado, nada que hacer
+    if (!after || !after.exists) return;
 
     const data = after.data();
     if (data.estadoSync !== "pendiente") return;
-    if (!data.origenEscaneo) return; // igual que Codigo.gs: sin origenEscaneo no hay nada que mandar
+    if (!data.origenEscaneo) return;
 
     const embarqueId = event.params.embarqueId;
 
@@ -82,9 +71,6 @@ exports.sincronizarOrigenNuevos = onDocumentWritten(
       receptorRFCEsperado: data.receptorRFCEsperado ?? null,
       origenEscaneo: data.origenEscaneo,
     };
-    // validacion2 (2da validación, Operaciones) y operadorAsignado — se
-    // agregan solo si existen, igual que en Codigo.gs, para no tronar con
-    // documentos viejos que no los tengan.
     if (data.validacion2) paraAlanis.validacion2 = data.validacion2;
     if (data.operadorAsignado) paraAlanis.operadorAsignado = data.operadorAsignado;
 
@@ -98,30 +84,13 @@ exports.sincronizarOrigenNuevos = onDocumentWritten(
       } catch (errorSecundario) {
         logger.error(`[sincronizarOrigenNuevos] no se pudo marcar estadoSync:'error' en ${embarqueId}: ${errorSecundario.message}`);
       }
-      throw error; // deja la excepción visible en los logs / habilita reintento
+      throw error;
     }
   }
 );
 
 // ============================================================================
-// 5) Borrado de prueba — TEMPORAL, misma vigencia que en Codigo.gs (fase de
-//    pruebas con McCain en pausa). Equivalente a
-//    procesarSolicitudesBorradoPrueba_.
-//
-// Se usa onDocumentCreated (no onDocumentWritten) porque la solicitud se
-// borra sola al procesarse — no tiene sentido reaccionar a un update de un
-// documento que va a desaparecer de inmediato.
-//
-// MEJORA respecto al Apps Script actual: Codigo.gs borra repositorio_mccain,
-// verificaciones_cfdi_local y embarques_pendientes_origen, pero NO
-// verificaciones_cfdi_resultado — así que si el embarque ya estaba validado,
-// el espejo de resultado quedaba huérfano tras un borrado de prueba (aunque
-// el comentario de limpiarResultadosObsoletos_ en Codigo.gs da a entender
-// que sí se limpiaba). Aquí SÍ se limpia también verificaciones_cfdi_resultado,
-// como consecuencia natural de que borrar repositorio_mccain dispara el
-// trigger procesarCambioRepositorioMccain (ver el otro codebase) con
-// after.exists === false. Avísame si prefieres que NO se limpie, para igualar
-// el comportamiento actual al 100%.
+// 5) Borrado de prueba — TEMPORAL
 // ============================================================================
 exports.procesarSolicitudBorradoPrueba = onDocumentCreated(
   { document: `${COLECCION_SOLICITUDES_BORRADO}/{embarqueId}`, region: REGION },
@@ -133,8 +102,6 @@ exports.procesarSolicitudBorradoPrueba = onDocumentCreated(
       await dbLocal.collection(COLECCION_PENDIENTES).doc(embarqueId).delete();
     } catch (error) {
       logger.error(`[procesarSolicitudBorradoPrueba] embarqueId ${embarqueId}: ${error.message}`, error);
-      // sigue igual: la solicitud se borra pase lo que pase (ver finally),
-      // para no reintentar en loop un id que ya no exista.
     } finally {
       try {
         await dbLocal.collection(COLECCION_SOLICITUDES_BORRADO).doc(embarqueId).delete();
@@ -146,53 +113,7 @@ exports.procesarSolicitudBorradoPrueba = onDocumentCreated(
 );
 
 // ============================================================================
-// 6) Reiniciar flujo — SOLO ADMIN (2026-09-14, pedido de Ivan). El botón en
-//    ADREMATASA únicamente crea la solicitud (ver firestore.rules); esta
-//    función es la que borra de verdad.
-//
-// Regresa un embarque a "recién llegado, sin ningún escaneo": borra
-// verificaciones_cfdi_local (origen + 2da validación + operador asignado —
-// TODO eso vive en ese único documento) para que Atención al Cliente lo
-// vea otra vez como pendiente.
-//
-// CORREGIDO 2026-09-14 (bug encontrado en producción, gracias a Ivan): la
-// primera versión de esta función BORRABA repositorio_mccain por completo,
-// igual que procesarSolicitudBorradoPrueba. Eso estaba mal: ese documento no
-// es solo "avance de validación" — también carga la identidad del embarque
-// que capturó la VBA de Outlook (ocCliente, shipment, clienteNombre, caja,
-// fechaEntrega, uuidFactura). Borrarlo entero destruye esos datos, y sin
-// ellos procesarCambioRepositorioMccain (el otro codebase, en
-// alanis-operadores) ya no tiene de dónde reconstruir la entrada en
-// embarques_pendientes_origen — el embarque queda huérfano, no "reiniciado".
-//
-// Ahora, en vez de borrar, se hace un UPDATE que limpia solo los campos de
-// AVANCE (uuidEsperado se deja en '' a propósito — es lo que le indica a
-// procesarCambioRepositorioMccain que este embarque todavía no se escanea) y
-// deja intactos los campos de IDENTIDAD del embarque. Ese mismo update
-// dispara procesarCambioRepositorioMccain de forma normal (ya no por la rama
-// de "documento borrado"), y esa función ya sabe, con uuidEsperado vacío:
-//   - republicar embarques_pendientes_origen con lo que quedó (ocCliente/
-//     shipment/caja/etc.) — así reaparece como pendiente de verdad.
-//   - borrar verificaciones_cfdi_resultado si ya no hay estatusValidacion ni
-//     recepcionOperador vigentes (limpiarResultadosObsoletos_) — mismo
-//     resultado que antes, sin necesitar la rama de documento borrado.
-//
-// Si repositorio_mccain/{embarqueId} ya no existe (por ejemplo, se usó
-// "Borrar embarque" antes, o es un reinicio de un reinicio ya corregido a
-// medias como el de OC-606313 del 2026-09-14), no hay nada que actualizar —
-// se registra un aviso en los logs y se sigue con el resto, en vez de
-// tronar. En ese caso el embarque NO puede reaparecer solo en pendientes
-// (su identidad ya se perdió); hay que recrearlo a mano o esperar a que la
-// VBA vuelva a capturarlo si llega un correo de corrección.
-//
-// NO se toca embarques_pendientes_origen directamente aquí — eso lo hace
-// procesarCambioRepositorioMccain como reacción al update de arriba, no esta
-// función.
-//
-// Antes de tocar nada, se guarda una copia del documento local en
-// historial_reinicios_flujo — así el reinicio queda auditado (quién, cuándo,
-// qué embarque, qué traía) aunque el documento vivo ya no exista para
-// consultarlo.
+// 6) Reiniciar flujo — SOLO ADMIN (2026-09-14)
 // ============================================================================
 const CAMPOS_AVANCE_REPO_A_BORRAR = [
   "receptorRFCEsperado",
@@ -241,8 +162,6 @@ exports.procesarSolicitudReinicioFlujo = onDocumentCreated(
       }
 
       await dbLocal.collection(COLECCION_LOCAL).doc(embarqueId).delete();
-      // COLECCION_PENDIENTES NO se toca aquí — la repuebla
-      // procesarCambioRepositorioMccain como reacción al update de arriba.
     } catch (error) {
       logger.error(`[procesarSolicitudReinicioFlujo] embarqueId ${embarqueId}: ${error.message}`, error);
     } finally {
@@ -252,5 +171,81 @@ exports.procesarSolicitudReinicioFlujo = onDocumentCreated(
         logger.error(`[procesarSolicitudReinicioFlujo] no se pudo borrar la solicitud ${embarqueId}: ${errorFinal.message}`);
       }
     }
+  }
+);
+
+// ============================================================================
+// 7) Recuperar contraseña — genera link con Admin SDK y lo manda por Brevo.
+//    Se llama desde el cliente vía httpsCallable. Solo acepta @alanis.com.mx.
+// ============================================================================
+exports.enviarResetContrasena = onCall(
+  { region: REGION, secrets: [brevoApiKey] },
+  async (request) => {
+    const email = (request.data.email || "").trim().toLowerCase();
+
+    if (!email.endsWith("@alanis.com.mx")) {
+      throw new HttpsError("invalid-argument", "Solo se permiten correos @alanis.com.mx.");
+    }
+
+    let link;
+    try {
+      link = await getAuth().generatePasswordResetLink(email);
+    } catch (error) {
+      logger.warn(`[enviarResetContrasena] generatePasswordResetLink falló para ${email}: ${error.code}`);
+      return { ok: true };
+    }
+
+    const cuerpo = JSON.stringify({
+      sender: { name: "Ivan Landa", email: "ilanda@alanis.com.mx" },
+      to: [{ email }],
+      subject: "Restablecer contraseña — App Alanis",
+      htmlContent: `
+        <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto">
+          <p>Hola,</p>
+          <p>Recibimos una solicitud para restablecer la contraseña de tu cuenta en la app interna de Alanis.</p>
+          <p style="margin:24px 0">
+            <a href="${link}"
+               style="background:#2c1e0f;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">
+              Restablecer contraseña
+            </a>
+          </p>
+          <p style="color:#666;font-size:13px">
+            Este enlace expira en 1 hora. Si no solicitaste este cambio, ignora este correo —
+            tu contraseña actual sigue siendo la misma.
+          </p>
+          <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
+          <p style="color:#999;font-size:12px">Autotransportes Alanis — uso interno</p>
+        </div>
+      `,
+    });
+
+    await new Promise((resolve, reject) => {
+      const req = https.request(
+        {
+          hostname: "api.brevo.com",
+          path: "/v3/smtp/email",
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "api-key": brevoApiKey.value(),
+          },
+        },
+        (res) => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve();
+          } else {
+            let body = "";
+            res.on("data", (chunk) => (body += chunk));
+            res.on("end", () => reject(new Error(`Brevo ${res.statusCode}: ${body}`)));
+          }
+        }
+      );
+      req.on("error", reject);
+      req.write(cuerpo);
+      req.end();
+    });
+
+    logger.info(`[enviarResetContrasena] correo de restablecimiento enviado a ${email}`);
+    return { ok: true };
   }
 );
