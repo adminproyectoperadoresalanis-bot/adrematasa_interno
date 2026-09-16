@@ -511,16 +511,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       .combo-operador-lista li.combo-operador-activa { background: #eef2ff; color: #3730a3; }
       .combo-operador-lista li.combo-operador-vacia { color: #9c9895; cursor: default; font-style: italic; }
       .combo-operador-lista li.combo-operador-vacia:hover { background: none; }
-      /* "Ocupado" (2026-09-16): operador con otro embarque sin terminar —
-         se ve en la lista para que quede claro que existe en el catálogo,
-         pero no se puede elegir (seleccionarOperador() lo rechaza igual
-         aunque alguien fuerce el clic). */
-      .combo-operador-lista li.combo-operador-ocupada { color: #b3aca3; cursor: not-allowed; }
-      .combo-operador-lista li.combo-operador-ocupada:hover { background: none; color: #b3aca3; }
-      .combo-operador-ocupada-tag {
-        display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
-        background: #fbeee0; color: #92400E; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px;
-      }
 
       /* ----------------------------------------------------------------
          Historial de escaneos: celda embarque+caja, UUID truncado con
@@ -1485,41 +1475,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     return !preEntregaCompletada;
   }
 
-  // Un operador solo puede estar asignado a 1 embarque sin terminar su
-  // flujo a la vez (decisión de Ivan, 2026-09-16). "Sin terminar" usa el
-  // MISMO criterio que ya existe arriba en puedeReasignar(): pre-entrega
-  // (Checkpoint 2) con estatusValidacion VALIDADO o DISCREPANCIA cuenta
-  // como terminado — cualquier otro estado (o ningún resultado todavía)
-  // cuenta como abierto. Aplica tanto a la asignación normal
-  // (registrarValidacion2 / crearQrInternoYAsignarOperador) como a
-  // Reasignar operador — en los dos casos el punto de entrada es
-  // guardarEscaneo(), así que ahí es donde se bloquea de verdad (ver
-  // abajo); esta función también se usa para marcar "Ocupado" en el
-  // buscador de operador, antes de que Operaciones intente guardar.
-  //
-  // Si un embarque queda atorado de verdad y ya no va a completar su
-  // flujo (unidad varada, cancelado, error de captura), la forma de
-  // liberar al operador es la acción de admin que ya borra el
-  // escaneo/2da validación/checkpoints de ese embarque — no hace falta
-  // ningún botón nuevo "liberar operador" para esto (decisión de Ivan,
-  // 2026-09-16): al borrarse el embarque, operadorAsignado desaparece
-  // con él y deja de contar aquí.
-  //
-  // embarqueIdExcluir: el propio embarque que se está asignando/
-  // reasignando ahora mismo — nunca debe contarse a sí mismo como "otro
-  // embarque abierto" (si no, nadie podría nunca completar su propia
-  // asignación, ni reasignar dentro del mismo embarque).
-  function embarqueAbiertoDeOperador(uidOperador, embarqueIdExcluir) {
-    if (!uidOperador) return null;
-    return listaHistorial.find(f => {
-      if (f.id === embarqueIdExcluir) return false;
-      if (!f.operadorAsignado || f.operadorAsignado.uid !== uidOperador) return false;
-      const r = listaResultados.find(x => x.id === f.id);
-      const preEntregaCompletada = !!(r && (r.estatusValidacion === "VALIDADO" || r.estatusValidacion === "DISCREPANCIA"));
-      return !preEntregaCompletada;
-    }) || null;
-  }
-
   // Franja de progreso de 4 segmentos (Atención al Cliente / Operaciones /
   // Operador recepción / Operador pre-entrega) + texto de estado actual —
   // mismo mockup que Ivan aprobó (2026-09-14) para reemplazar las columnas
@@ -2046,20 +2001,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     if (!listaOperadorEl) return;
     indiceActivoOperador = -1;
     listaOperadorEl.innerHTML = resultados.length
-      ? resultados.map(op => {
-          // "Ocupado" (2026-09-16): un operador con otro embarque abierto
-          // se muestra en la lista, pero deshabilitado — así Operaciones ve
-          // que existe en el catálogo (no piensa que desapareció) y por qué
-          // no se puede elegir, en vez de simplemente no aparecer.
-          const abierto = embarqueAbiertoDeOperador(op.id, embarqueActual);
-          if (!abierto) {
-            return `<li data-uid="${op.id}">${escapeHtml(etiquetaOperador(op))}</li>`;
-          }
-          const detalle = `Ya tiene el embarque ${abierto.embarqueId || abierto.id} sin terminar (${abierto.clienteNombre || "McCain"})`;
-          return `<li class="combo-operador-ocupada" data-uid="${op.id}" data-ocupado="1" title="${escapeHtml(detalle)}">` +
-            `${escapeHtml(etiquetaOperador(op))} <span class="combo-operador-ocupada-tag">Ocupado — ${escapeHtml(abierto.embarqueId || abierto.id)}</span>` +
-            `</li>`;
-        }).join("")
+      ? resultados.map(op => `<li data-uid="${op.id}">${escapeHtml(etiquetaOperador(op))}</li>`).join("")
       : '<li class="combo-operador-vacia">Sin coincidencias</li>';
     listaOperadorEl.classList.remove("oculto");
   }
@@ -2076,18 +2018,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   }
 
   function seleccionarOperador(op) {
-    // Bloqueo real (2026-09-16), igual que los demás de este archivo: un
-    // operador con otro embarque abierto no se puede seleccionar aquí,
-    // pase lo que pase con doble-clic o teclado — no solo se ve
-    // "deshabilitado" visualmente. Se revisa aquí (punto único por el que
-    // pasan tanto el clic del mouse como Enter) en vez de en cada handler.
-    const abierto = embarqueAbiertoDeOperador(op.id, embarqueActual);
-    if (abierto) {
-      confirmarErrorDiv.textContent =
-        `${op.nombre || op.id} ya tiene el embarque ${abierto.embarqueId || abierto.id} sin terminar ` +
-        `(${abierto.clienteNombre || "McCain"}) — debe completar su Checkpoint 2 antes de poder asignarle uno nuevo.`;
-      return;
-    }
     selectOperador.value = op.id;
     inputBuscarOperador.value = etiquetaOperador(op);
     confirmarErrorDiv.textContent = "";
@@ -2678,24 +2608,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         confirmarErrorDiv.textContent = "Ese operador ya no aparece en el catálogo (¿se desactivó?). Actualiza la lista e intenta de nuevo.";
         return;
       }
-
-      // Bloqueo real (2026-09-16): un operador solo puede estar asignado a
-      // 1 embarque sin terminar su flujo a la vez. Esto ya se revisó al
-      // elegirlo en el buscador (seleccionarOperador) y esos operadores ya
-      // aparecen deshabilitados ahí — este chequeo es el que de verdad
-      // importa, por si el catálogo cambió entre que se abrió el modal y
-      // se dio clic en Guardar (por ejemplo, otro despachador asignó a ese
-      // mismo operador un segundo antes, desde otra sesión). Mismo criterio
-      // en los 3 modos que llegan aquí (validacion2, asignar_operador_sin_
-      // factura, reasignar_operador) — no existe "guardar de todas formas".
-      const embarqueAbierto = embarqueAbiertoDeOperador(op.id, embarqueActual);
-      if (embarqueAbierto) {
-        confirmarErrorDiv.textContent =
-          `${op.nombre || op.id} ya tiene el embarque ${embarqueAbierto.embarqueId || embarqueAbierto.id} sin terminar ` +
-          `(${embarqueAbierto.clienteNombre || "McCain"}) — debe completar su Checkpoint 2 antes de poder asignarle uno nuevo.`;
-        return;
-      }
-
       operadorAsignado = { uid: op.id, nombre: op.nombre || null, numero: op.numero || null };
     }
 
