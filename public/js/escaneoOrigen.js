@@ -78,7 +78,7 @@ const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factur
 // el menú de cuenta (ver auth.js) — antes solo se usaba internamente aquí
 // para comparar contra version.json y decidir si mostrar el banner de
 // "hay una versión nueva".
-export const APP_VERSION = "2026.09.14-13";
+export const APP_VERSION = "2026.09.14-7";
 
 async function verificarActualizacionYReportarVersion(uid) {
   // Reporta la versión actual — no bloqueante, no crítico si falla.
@@ -318,19 +318,15 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     <style>
       .resultado-escaneo-botonera { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 
-      /* Seguimiento de embarques (semáforo) — pedido de Ivan, 2026-09-08.
-         (2026-09-14) Desde que esta tabla pasó a 2 columnas reutilizando
-         celdaProgreso (igual que "Historial de escaneos"), este bloque
-         quedó de la versión VIEJA de 5 columnas con píldoras (texto
-         centrado, sin wrap) — eso era lo que le metía espacio de más a
-         "Embarque" y hacía que el nombre del operador se desbordara en
-         vez de acomodarse en 2 líneas en el celular. Se quita por
-         completo: sin overrides, esta tabla hereda las mismas reglas
-         base de .tabla que ya usa Historial (mismo padding, alineado a
-         la izquierda, texto que sí puede hacer wrap) — por eso ahora se
-         ve y se comporta igual que esa. Las clases .semaforo-pill /
-         .semaforo-dot / .semaforo-* de abajo NO se tocan: siguen en uso
-         por pillEtapa() en el modal de detalle. */
+      /* Seguimiento de embarques (semáforo) — pedido de Ivan, 2026-09-08:
+         una fila por embarque, una píldora de color por etapa, columnas
+         angostas con encabezado a 2 líneas para verse bien de un vistazo
+         (pensado incluso para una pantalla en el área de Operaciones). */
+      #tabla-semaforo th, #tabla-semaforo td { padding: 6px 8px; text-align: center; white-space: nowrap; }
+      #tabla-semaforo th:first-child, #tabla-semaforo td:first-child { text-align: left; }
+      #tabla-semaforo th { font-size: 11.5px; line-height: 1.25; font-weight: 600; }
+      #tabla-semaforo td { font-size: 13px; }
+      #tabla-semaforo .semaforo-meta { display: block; font-size: 10.5px; color: #6b7280; margin-top: 2px; white-space: normal; }
       .semaforo-pill {
         display: inline-flex; align-items: center; gap: 5px;
         padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap;
@@ -511,6 +507,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       .combo-operador-lista li.combo-operador-activa { background: #eef2ff; color: #3730a3; }
       .combo-operador-lista li.combo-operador-vacia { color: #9c9895; cursor: default; font-style: italic; }
       .combo-operador-lista li.combo-operador-vacia:hover { background: none; }
+      /* "Ocupado" (2026-09-16): operador con otro embarque sin terminar —
+         se ve en la lista para que quede claro que existe en el catálogo,
+         pero no se puede elegir (seleccionarOperador() lo rechaza igual
+         aunque alguien fuerce el clic). */
+      .combo-operador-lista li.combo-operador-ocupada { color: #b3aca3; cursor: not-allowed; }
+      .combo-operador-lista li.combo-operador-ocupada:hover { background: none; color: #b3aca3; }
+      .combo-operador-ocupada-tag {
+        display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+        background: #fbeee0; color: #92400E; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px;
+      }
 
       /* ----------------------------------------------------------------
          Historial de escaneos: celda embarque+caja, UUID truncado con
@@ -544,38 +550,12 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       }
       .uuid-chip-copiar:hover { background: #f7f6f4; color: #1c1a17; }
 
-      /* Celda de acciones del historial con su PROPIA clase (2026-09-14,
-         pedido de Ivan: la línea seguía "rota" junto al ⋮ aun sin el
-         borde fijo del botón). La causa real era la regla .tabla
-         .acciones en estilos.css, que le pone display flex a la celda —
-         esa regla es correcta para Pendientes/Validación (varios botones
-         en fila) pero en el historial saca a ESTA celda del layout
-         normal de tabla y desalinea su borde inferior con el resto de la
-         fila. Se deja .tabla .acciones intacta (no tocar estilos.css) y
-         esta celda usa su propio nombre para comportarse como celda
-         normal. */
-      .historial-td-acciones { text-align: right; white-space: nowrap; vertical-align: middle; }
       .historial-menu-wrap { position: relative; display: inline-block; }
-      /* Botón "⋮" sin caja fija (2026-09-14, pedido de Ivan): antes tenía
-         borde+fondo blanco SIEMPRE visibles, y esa cajita propia rompía la
-         línea divisoria entre filas justo en la columna de acciones — se
-         notaba sobre todo en el celular, donde podía confundirse a qué
-         registro pertenecía el menú. Ahora es transparente en reposo (solo
-         los tres puntos) y solo muestra su borde/fondo al pasar el mouse o
-         tener el foco (que es también el estado "menú abierto", ya que el
-         botón conserva el foco mientras el menú está desplegado) — así la
-         línea de la fila queda continua de punta a punta en el estado
-         normal. Mismo tamaño/click-target que antes, nada más cambia el
-         estilo en reposo. */
       .historial-menu-btn {
-        width: 28px; height: 28px; border-radius: 7px; border: 1px solid transparent; background: transparent;
-        font-size: 15px; line-height: 1; cursor: pointer; color: #6b6558;
-        display: inline-flex; align-items: center; justify-content: center;
+        width: 28px; height: 28px; border-radius: 7px; border: 1px solid #ded9d1; background: #fff;
+        font-size: 15px; line-height: 1; cursor: pointer; color: #1c1a17;
       }
-      .historial-menu-btn:hover,
-      .historial-menu-btn:focus-visible {
-        border-color: #ded9d1; background: #f7f6f4; color: #1c1a17;
-      }
+      .historial-menu-btn:hover { background: #f7f6f4; }
       .historial-menu {
         display: none; position: absolute; top: calc(100% + 4px); right: 0; z-index: 15; min-width: 190px;
         background: #fff; border: 1px solid #ded9d1; border-radius: 10px; box-shadow: 0 10px 30px rgba(20,16,12,0.15);
@@ -614,14 +594,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       .progreso-texto strong { color: #1c1a17; font-weight: 600; }
       .progreso-texto.es-bad strong { color: #c8362a; }
       .progreso-texto.es-warn strong { color: #92400e; }
-      /* Nombre del operador asignado bajo el texto de estado (2026-09-14,
-         pedido de Ivan) — mismo tratamiento visual que celda-embarque-meta
-         (más chico, gris), para que se lea como dato secundario y no
-         compita con el estado. Se usa operadorAsignado (no el nombre
-         congelado de recepción/pre-entrega) porque es el mismo valor que
-         ya se muestra en el modal de detalle y en Reasignar operador — es
-         la fuente única de "quién es el operador de este embarque". */
-      .progreso-operador { font-size: 11px; color: #6b6558; margin-top: 1px; }
 
       .detalle-historial-tarjeta { max-width: 580px; }
       .detalle-card { background: #fff; border: 1px solid #ded9d1; border-radius: 10px; margin: 0 0 12px; overflow: hidden; }
@@ -660,10 +632,14 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <table class="tabla" id="tabla-semaforo">
           <thead>
             <tr>
-              <th>Embarque</th><th>Progreso</th>
+              <th>Embarque</th>
+              <th>Atención<br>al Cliente</th>
+              <th>Despacho y<br>Asignación</th>
+              <th>Operador<br>Despacho</th>
+              <th>Operador<br>Pre Entrega</th>
             </tr>
           </thead>
-          <tbody id="tbody-semaforo"><tr><td colspan="2">Cargando...</td></tr></tbody>
+          <tbody id="tbody-semaforo"><tr><td colspan="5">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -970,15 +946,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   onSnapshot(collection(db, "operadores_alanis"), (snap) => {
     listaOperadores = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderSelectorOperador();
-    // renderSemaforo() (2026-09-14) — el semáforo de "Seguimiento de
-    // embarques" pinta el nombre del operador (Checkpoint 1) directo en la
-    // celda vía nombreOperador_(uid, ...), que depende de listaOperadores.
-    // Sin este render, cuando se corrige un nombreOficial en el admin de
-    // Alanis Operadores el catálogo se actualiza aquí en memoria pero la
-    // tabla se queda pintada con lo último que tenía — el modal de detalle
-    // sí se veía bien porque se arma fresco en cada clic, pero el semáforo
-    // no. Mismo patrón de bug que el de renderHistorial() de más arriba.
-    renderSemaforo();
   }, (err) => {
     if (modalErrorDiv) modalErrorDiv.textContent = "No se pudo cargar el catálogo de operadores: " + err.message;
   });
@@ -1369,18 +1336,10 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   // sincronizarResultados_/sincronizarResultadoRecepcion_ en Codigo.gs). Es
   // solo informativa, no tiene botones — para actuar se usan las tablas de
   // abajo.
-  // (2026-09-14, pedido de Ivan) — reemplaza las 4 columnas de pastillas
-  // (Atención al Cliente / Despacho y Asignación / Operador Despacho /
-  // Operador Pre Entrega) por la misma franja de progreso de 4 segmentos +
-  // texto de estado que ya usa "Historial de escaneos" (celdaProgreso),
-  // para que ambas tablas se vean y se lean igual de un vistazo. El detalle
-  // completo por etapa sigue disponible más abajo, en la tabla de Historial
-  // (clic en el embarque abre el modal) — este semáforo sigue siendo solo
-  // informativo, sin botones.
   function renderSemaforo() {
     if (!tbodySemaforo) return;
     if (listaHistorial.length === 0) {
-      tbodySemaforo.innerHTML = `<tr><td colspan="2">Todavía no hay embarques en proceso.</td></tr>`;
+      tbodySemaforo.innerHTML = `<tr><td colspan="5">Todavía no hay embarques en proceso.</td></tr>`;
       return;
     }
     const resultadosPorId = new Map(listaResultados.map(r => [r.id, r]));
@@ -1401,31 +1360,32 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
     tbodySemaforo.innerHTML = historialOrdenado.map(f => {
       const r = resultadosPorId.get(f.id);
-      const syncInfo = claseYTituloSync(f.estadoSync);
 
-      // Celda de embarque (2026-09-14, pedido de Ivan: "es técnicamente
-      // como lo quiero" viendo Historial de escaneos) — MISMA estructura
-      // que usa renderHistorial para esta celda (historial-texto +
-      // celda-embarque-meta + badge de caja OK/No coincide), sin el
-      // nombre del cliente (McCain es el único por ahora y esa línea
-      // sobraba espacio) y sin el <button> de Historial porque este
-      // semáforo sigue siendo solo informativo, sin clic para abrir
-      // detalle.
-      const cajaTexto = escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—");
-      const cajaBadge = badgeSiNo(
-        f.origenEscaneo && f.origenEscaneo.cajaCoincide,
-        "OK", "No coincide",
-        "La caja escaneada coincide con la esperada — no es el estado de sincronización",
-        "La caja escaneada NO coincide con la esperada"
-      );
+      const colAtencion = f.origenEscaneo ? pillEtapa("ok", "OK") : pillEtapa("pend", "—");
+      const colOperaciones = f.validacion2 ? pillEtapa("ok", "OK") : pillEtapa("pend", "Pendiente");
+
+      let colCheckpoint1;
+      if (r && r.recepcionResultado === "COINCIDE") colCheckpoint1 = pillEtapa("ok", "Coincide", nombreOperador_(r.recepcionOperadorUid, r.recepcionOperadorNombre));
+      else if (r && r.recepcionResultado === "NO_COINCIDE_DOCUMENTO") colCheckpoint1 = pillEtapa("bad", "Documento", nombreOperador_(r.recepcionOperadorUid, r.recepcionOperadorNombre));
+      else if (r && r.recepcionResultado === "NO_COINCIDE_OPERADOR") colCheckpoint1 = pillEtapa("warn", "Operador", nombreOperador_(r.recepcionOperadorUid, r.recepcionOperadorNombre));
+      else if (f.estadoSync === "sincronizado") colCheckpoint1 = pillEtapa("pend", "Pendiente");
+      else colCheckpoint1 = pillEtapa("pend", "—");
+
+      let colCheckpoint2;
+      if (r && r.estatusValidacion === "VALIDADO") colCheckpoint2 = pillEtapa("ok", "Validado");
+      else if (r && r.estatusValidacion === "DISCREPANCIA") colCheckpoint2 = pillEtapa("bad", "Discrepancia");
+      else if (r && r.recepcionResultado) colCheckpoint2 = pillEtapa("pend", "En tránsito");
+      else colCheckpoint2 = pillEtapa("pend", "—");
+
+      const syncInfo = claseYTituloSync(f.estadoSync);
 
       return `
         <tr data-id="${f.id}">
-          <td>
-            <span class="historial-texto ${syncInfo.clase}" title="${escapeHtml(syncInfo.titulo)}">${escapeHtml(f.embarqueId || f.id)}</span>
-            <span class="celda-embarque-meta">Caja ${cajaTexto}${cajaBadge}</span>
-          </td>
-          <td>${celdaProgreso(f, r)}</td>
+          <td><strong class="${syncInfo.clase}" title="${escapeHtml(syncInfo.titulo)}">${escapeHtml(f.embarqueId || f.id)}</strong><span class="semaforo-meta">${escapeHtml(f.clienteNombre || "McCain")}${f.origenEscaneo && f.origenEscaneo.caja ? " · Caja " + escapeHtml(f.origenEscaneo.caja) : ""}</span></td>
+          <td>${colAtencion}</td>
+          <td>${colOperaciones}</td>
+          <td>${colCheckpoint1}</td>
+          <td>${colCheckpoint2}</td>
         </tr>
       `;
     }).join("");
@@ -1475,6 +1435,41 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     return !preEntregaCompletada;
   }
 
+  // Un operador solo puede estar asignado a 1 embarque sin terminar su
+  // flujo a la vez (decisión de Ivan, 2026-09-16). "Sin terminar" usa el
+  // MISMO criterio que ya existe arriba en puedeReasignar(): pre-entrega
+  // (Checkpoint 2) con estatusValidacion VALIDADO o DISCREPANCIA cuenta
+  // como terminado — cualquier otro estado (o ningún resultado todavía)
+  // cuenta como abierto. Aplica tanto a la asignación normal
+  // (registrarValidacion2 / crearQrInternoYAsignarOperador) como a
+  // Reasignar operador — en los dos casos el punto de entrada es
+  // guardarEscaneo(), así que ahí es donde se bloquea de verdad (ver
+  // abajo); esta función también se usa para marcar "Ocupado" en el
+  // buscador de operador, antes de que Operaciones intente guardar.
+  //
+  // Si un embarque queda atorado de verdad y ya no va a completar su
+  // flujo (unidad varada, cancelado, error de captura), la forma de
+  // liberar al operador es la acción de admin que ya borra el
+  // escaneo/2da validación/checkpoints de ese embarque — no hace falta
+  // ningún botón nuevo "liberar operador" para esto (decisión de Ivan,
+  // 2026-09-16): al borrarse el embarque, operadorAsignado desaparece
+  // con él y deja de contar aquí.
+  //
+  // embarqueIdExcluir: el propio embarque que se está asignando/
+  // reasignando ahora mismo — nunca debe contarse a sí mismo como "otro
+  // embarque abierto" (si no, nadie podría nunca completar su propia
+  // asignación, ni reasignar dentro del mismo embarque).
+  function embarqueAbiertoDeOperador(uidOperador, embarqueIdExcluir) {
+    if (!uidOperador) return null;
+    return listaHistorial.find(f => {
+      if (f.id === embarqueIdExcluir) return false;
+      if (!f.operadorAsignado || f.operadorAsignado.uid !== uidOperador) return false;
+      const r = listaResultados.find(x => x.id === f.id);
+      const preEntregaCompletada = !!(r && (r.estatusValidacion === "VALIDADO" || r.estatusValidacion === "DISCREPANCIA"));
+      return !preEntregaCompletada;
+    }) || null;
+  }
+
   // Franja de progreso de 4 segmentos (Atención al Cliente / Operaciones /
   // Operador recepción / Operador pre-entrega) + texto de estado actual —
   // mismo mockup que Ivan aprobó (2026-09-14) para reemplazar las columnas
@@ -1502,24 +1497,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     else if (f.origenEscaneo) { texto = "Esperando <strong>2da validación</strong>"; }
     else { texto = "<strong>Sin escanear</strong>"; }
 
-    // Nombre del operador asignado (2026-09-14, pedido de Ivan): se pone
-    // en el mismo lugar donde antes solo se leía "Operador en tránsito" /
-    // "Validado · completo" sin decir quién. Solo aparece si ya hay
-    // operador asignado (existe desde que Operaciones completa la 2da
-    // validación — ver registrarValidacion2) — antes de eso no hay nadie
-    // a quién nombrar.
-    // Se resuelve con nombreOperador_ (mismo helper que ya usa Recepción,
-    // 2026-09-14) en vez de leer operadorAsignado.nombre directo: ese
-    // nombre queda CONGELADO desde el momento de la asignación (viene de
-    // como se haya escrito/elegido entonces — "Irene", "Pepe Nieto", etc.)
-    // y no se actualiza si después se corrige el nombre oficial en Alanis
-    // Operadores. nombreOperador_ busca por uid contra listaOperadores
-    // (que sí refleja el nombre oficial vigente) y solo usa el nombre
-    // congelado como respaldo si el uid no se encuentra.
-    const nombreOperadorAsignado = f.operadorAsignado
-      ? nombreOperador_(f.operadorAsignado.uid, f.operadorAsignado.nombre)
-      : null;
-
     return `
       <div class="progreso-franja">
         <div class="progreso-seg ${seg1}"></div>
@@ -1528,7 +1505,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <div class="progreso-seg ${seg4}"></div>
       </div>
       <div class="progreso-texto ${clase}">${texto}</div>
-      ${nombreOperadorAsignado ? `<div class="progreso-operador">${escapeHtml(nombreOperadorAsignado)}</div>` : ""}
     `;
   }
 
@@ -1698,7 +1674,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
           </button>
         </td>
         <td>${celdaProgreso(f, r)}</td>
-        ${mostrarColumnaAcciones ? `<td class="historial-td-acciones">
+        ${mostrarColumnaAcciones ? `<td class="acciones">
               ${tieneAcciones ? `
               <div class="historial-menu-wrap">
                 <button type="button" class="historial-menu-btn" title="Más acciones">⋮</button>
@@ -2001,7 +1977,20 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     if (!listaOperadorEl) return;
     indiceActivoOperador = -1;
     listaOperadorEl.innerHTML = resultados.length
-      ? resultados.map(op => `<li data-uid="${op.id}">${escapeHtml(etiquetaOperador(op))}</li>`).join("")
+      ? resultados.map(op => {
+          // "Ocupado" (2026-09-16): un operador con otro embarque abierto
+          // se muestra en la lista, pero deshabilitado — así Operaciones ve
+          // que existe en el catálogo (no piensa que desapareció) y por qué
+          // no se puede elegir, en vez de simplemente no aparecer.
+          const abierto = embarqueAbiertoDeOperador(op.id, embarqueActual);
+          if (!abierto) {
+            return `<li data-uid="${op.id}">${escapeHtml(etiquetaOperador(op))}</li>`;
+          }
+          const detalle = `Ya tiene el embarque ${abierto.embarqueId || abierto.id} sin terminar (${abierto.clienteNombre || "McCain"})`;
+          return `<li class="combo-operador-ocupada" data-uid="${op.id}" data-ocupado="1" title="${escapeHtml(detalle)}">` +
+            `${escapeHtml(etiquetaOperador(op))} <span class="combo-operador-ocupada-tag">Ocupado — ${escapeHtml(abierto.embarqueId || abierto.id)}</span>` +
+            `</li>`;
+        }).join("")
       : '<li class="combo-operador-vacia">Sin coincidencias</li>';
     listaOperadorEl.classList.remove("oculto");
   }
@@ -2018,6 +2007,18 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   }
 
   function seleccionarOperador(op) {
+    // Bloqueo real (2026-09-16), igual que los demás de este archivo: un
+    // operador con otro embarque abierto no se puede seleccionar aquí,
+    // pase lo que pase con doble-clic o teclado — no solo se ve
+    // "deshabilitado" visualmente. Se revisa aquí (punto único por el que
+    // pasan tanto el clic del mouse como Enter) en vez de en cada handler.
+    const abierto = embarqueAbiertoDeOperador(op.id, embarqueActual);
+    if (abierto) {
+      confirmarErrorDiv.textContent =
+        `${op.nombre || op.id} ya tiene el embarque ${abierto.embarqueId || abierto.id} sin terminar ` +
+        `(${abierto.clienteNombre || "McCain"}) — debe completar su Checkpoint 2 antes de poder asignarle uno nuevo.`;
+      return;
+    }
     selectOperador.value = op.id;
     inputBuscarOperador.value = etiquetaOperador(op);
     confirmarErrorDiv.textContent = "";
@@ -2608,6 +2609,24 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         confirmarErrorDiv.textContent = "Ese operador ya no aparece en el catálogo (¿se desactivó?). Actualiza la lista e intenta de nuevo.";
         return;
       }
+
+      // Bloqueo real (2026-09-16): un operador solo puede estar asignado a
+      // 1 embarque sin terminar su flujo a la vez. Esto ya se revisó al
+      // elegirlo en el buscador (seleccionarOperador) y esos operadores ya
+      // aparecen deshabilitados ahí — este chequeo es el que de verdad
+      // importa, por si el catálogo cambió entre que se abrió el modal y
+      // se dio clic en Guardar (por ejemplo, otro despachador asignó a ese
+      // mismo operador un segundo antes, desde otra sesión). Mismo criterio
+      // en los 3 modos que llegan aquí (validacion2, asignar_operador_sin_
+      // factura, reasignar_operador) — no existe "guardar de todas formas".
+      const embarqueAbierto = embarqueAbiertoDeOperador(op.id, embarqueActual);
+      if (embarqueAbierto) {
+        confirmarErrorDiv.textContent =
+          `${op.nombre || op.id} ya tiene el embarque ${embarqueAbierto.embarqueId || embarqueAbierto.id} sin terminar ` +
+          `(${embarqueAbierto.clienteNombre || "McCain"}) — debe completar su Checkpoint 2 antes de poder asignarle uno nuevo.`;
+        return;
+      }
+
       operadorAsignado = { uid: op.id, nombre: op.nombre || null, numero: op.numero || null };
     }
 
