@@ -11,7 +11,13 @@ const ETIQUETAS_ESTATUS = {
   rechazada: "Rechazada"
 };
 
-function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryUsuarios) {
+// permiteRevertir: solo true para la vista de admin (iniciarGestionSolicitudes).
+// Las reglas de Firestore ya lo hacían así de todos modos — un supervisor solo
+// puede actualizar una solicitud mientras sigue "pendiente" (resource.data.estatus
+// == 'pendiente' en su rama de la regla), nunca una ya resuelta; solo la regla
+// de admin (esAdmin(), sin esa restricción) permite regresarla a pendiente. El
+// botón nuevo solo se muestra donde de verdad funciona.
+function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryUsuarios, permiteRevertir) {
   contenedor.innerHTML = `
     <section class="panel">
       <h2>Solicitudes pendientes</h2>
@@ -120,6 +126,7 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
           <td>${s.revisadoPorNombre ? escapeHtml(s.revisadoPorNombre) : "—"}</td>
           <td>
             <button type="button" class="secundario btn-enviar-correo">Enviar correo</button>
+            ${permiteRevertir && !s.enviadoANominaEn ? `<button type="button" class="secundario btn-revertir-solicitud">Revertir a pendiente</button>` : ""}
             <div class="nota-correo"></div>
           </td>
         </tr>
@@ -137,6 +144,10 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
         const resultado = await enviarCorreoResultado(mensajeCorreoSolicitud(solicitud, usuario));
         nota.textContent = resultado.ok ? "Enviado ✅" : "No se pudo enviar: " + resultado.error;
         boton.disabled = false;
+      });
+
+      fila.querySelector(".btn-revertir-solicitud")?.addEventListener("click", () => {
+        revertirSolicitud(solicitud);
       });
     });
   }
@@ -188,17 +199,41 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
       errorDiv.textContent = "No se pudo actualizar la solicitud: " + err.message;
     }
   }
+
+  // Deshace una aprobación/rechazo por error (18 sep 2026, pedido de Ivan) —
+  // regresa la solicitud a "pendiente" tal cual estaba antes de resolverla,
+  // sin tocar ningún saldo (las horas extra no descuentan nada) y sin avisar
+  // al empleado: no hay nada que notificar todavía, porque el caso vuelve a
+  // la fila de pendientes para resolverse correctamente. Bloqueado si ya se
+  // mandó a nómina (enviadoANominaEn) — el botón ni siquiera se muestra en
+  // ese caso, ver renderHistorial().
+  async function revertirSolicitud(solicitud) {
+    if (!confirm(`¿Regresar a "Pendiente" la solicitud de ${solicitud.empleadoNombre} del ${solicitud.fecha}? Vuelve a aparecer arriba para aprobarla o rechazarla de nuevo.`)) return;
+    errorDiv.textContent = "";
+    try {
+      await updateDoc(doc(db, "solicitudes", solicitud.id), {
+        estatus: "pendiente",
+        comentarioRevisor: null,
+        revisadoPor: null,
+        revisadoPorNombre: null,
+        resueltoEn: null
+      });
+    } catch (err) {
+      errorDiv.textContent = "No se pudo revertir la solicitud: " + err.message;
+    }
+  }
 }
 
 export function iniciarGestionSolicitudes(contenedor, uid, nombre) {
-  construirVista(contenedor, uid, nombre, collection(db, "solicitudes"), collection(db, "usuarios"));
+  construirVista(contenedor, uid, nombre, collection(db, "solicitudes"), collection(db, "usuarios"), true);
 }
 
 export function iniciarVistaSupervisor(contenedor, uid, nombre) {
   construirVista(
     contenedor, uid, nombre,
     query(collection(db, "solicitudes"), where("supervisorId", "==", uid)),
-    query(collection(db, "usuarios"), where("supervisorId", "==", uid))
+    query(collection(db, "usuarios"), where("supervisorId", "==", uid)),
+    false
   );
 }
 
