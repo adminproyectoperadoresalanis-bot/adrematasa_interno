@@ -11,7 +11,12 @@ const ETIQUETAS_ESTATUS = {
   rechazada: "Rechazada"
 };
 
-function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryUsuarios) {
+// permiteRecortes: solo true para la vista de admin (iniciarGestionVacaciones)
+// — las solicitudes de recorte de vacaciones ya aprobadas (18 sep 2026,
+// pedido de Ivan) las aprueba/rechaza él directamente, no los supervisores;
+// la vista de supervisor (iniciarVistaSupervisorVacaciones) sigue igual que
+// antes, sin esta sección.
+function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryUsuarios, permiteRecortes) {
   contenedor.innerHTML = `
     <section class="panel">
       <h2>Vacaciones pendientes</h2>
@@ -25,6 +30,21 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
         </table>
       </div>
     </section>
+
+    ${permiteRecortes ? `
+    <section class="panel" style="margin-top:20px;">
+      <h2>Recortes de vacaciones pendientes</h2>
+      <p class="nota">Solicitudes de empleados para recortar (desde un extremo) una vacación ya aprobada.</p>
+      <div class="tabla-wrap">
+        <table class="tabla" id="tabla-recortes-pendientes">
+          <thead>
+            <tr><th>Empleado</th><th>Rango aprobado</th><th>Rango nuevo</th><th>Días que libera</th><th>Motivo</th><th>Comentario</th><th>Acción</th></tr>
+          </thead>
+          <tbody id="tbody-recortes-pendientes"><tr><td colspan="7">Cargando...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+    ` : ""}
 
     <section class="panel" style="margin-top:20px;">
       <h2>Historial de vacaciones</h2>
@@ -42,6 +62,7 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
   const errorDiv = contenedor.querySelector("#vac-error");
   const tbodyPendientes = contenedor.querySelector("#tbody-vac-pendientes");
   const tbodyHistorial = contenedor.querySelector("#tbody-vac-historial");
+  const tbodyRecortes = contenedor.querySelector("#tbody-recortes-pendientes");
 
   let ultimoHistorial = [];
   let usuariosPorId = {};
@@ -55,6 +76,11 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
 
     renderPendientes(pendientes);
     renderHistorial();
+
+    if (permiteRecortes) {
+      const recortesPendientes = todas.filter(s => s.estatus === "aprobada" && s.recorteSolicitud && s.recorteSolicitud.estatus === "pendiente");
+      renderRecortesPendientes(recortesPendientes);
+    }
   }, (err) => {
     errorDiv.textContent = "No se pudieron cargar las solicitudes de vacaciones: " + err.message;
   });
@@ -96,6 +122,44 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
       });
       fila.querySelector(".btn-rechazar").addEventListener("click", () => {
         resolverSolicitud(solicitud, "rechazada", comentarioInput.value.trim());
+      });
+    });
+  }
+
+  // Tabla de recortes pendientes (solo admin). Aprobar ajusta fechaInicio/
+  // fechaFin/diasHabiles del documento y regresa a saldo los días liberados
+  // (transacción atómica); rechazar solo marca el recorteSolicitud como
+  // rechazado, sin tocar fechas ni saldo — la vacación se queda como estaba.
+  function renderRecortesPendientes(lista) {
+    if (!tbodyRecortes) return;
+    if (lista.length === 0) {
+      tbodyRecortes.innerHTML = `<tr><td colspan="7">No hay solicitudes de recorte pendientes.</td></tr>`;
+      return;
+    }
+    tbodyRecortes.innerHTML = lista.map(s => `
+      <tr data-id="${s.id}">
+        <td>${escapeHtml(s.empleadoNombre || "")}</td>
+        <td>${s.fechaInicio} al ${s.fechaFin}</td>
+        <td>${s.recorteSolicitud.fechaInicioNueva} al ${s.recorteSolicitud.fechaFinNueva}</td>
+        <td>${s.recorteSolicitud.diasLiberados}</td>
+        <td>${s.recorteSolicitud.motivo ? escapeHtml(s.recorteSolicitud.motivo) : "—"}</td>
+        <td><input type="text" class="input-comentario" placeholder="Comentario (opcional)"></td>
+        <td class="acciones">
+          <button type="button" class="btn-aprobar">Aprobar</button>
+          <button type="button" class="btn-rechazar">Rechazar</button>
+        </td>
+      </tr>
+    `).join("");
+
+    tbodyRecortes.querySelectorAll("tr[data-id]").forEach(fila => {
+      const id = fila.dataset.id;
+      const solicitud = lista.find(s => s.id === id);
+      const comentarioInput = fila.querySelector(".input-comentario");
+      fila.querySelector(".btn-aprobar").addEventListener("click", () => {
+        resolverRecorte(solicitud, "aprobada", comentarioInput.value.trim());
+      });
+      fila.querySelector(".btn-rechazar").addEventListener("click", () => {
+        resolverRecorte(solicitud, "rechazada", comentarioInput.value.trim());
       });
     });
   }
@@ -223,17 +287,96 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
       errorDiv.textContent = "No se pudo actualizar la solicitud: " + err.message;
     }
   }
+
+  // Resuelve una solicitud de recorte (18 sep 2026). Aprobar: transacción
+  // atómica que ajusta fechaInicio/fechaFin/diasHabiles del documento,
+  // agrega la entrada al historial (historialRecortes, con fecha de cliente
+  // — igual que historialReasignaciones en el otro proyecto, un arreglo no
+  // acepta serverTimestamp()), limpia recorteSolicitud, y regresa a saldo
+  // del empleado justo los días liberados. Rechazar: solo marca el
+  // recorteSolicitud como rechazado, sin tocar fechas ni saldo.
+  async function resolverRecorte(solicitud, decision, comentario) {
+    errorDiv.textContent = "";
+    const id = solicitud.id;
+    const empleadoId = solicitud.empleadoId;
+    const recorte = solicitud.recorteSolicitud;
+    try {
+      if (decision === "aprobada") {
+        await runTransaction(db, async (tx) => {
+          const refSolicitud = doc(db, "solicitudesVacaciones", id);
+          const refEmpleado = doc(db, "usuarios", empleadoId);
+          const snapSolicitud = await tx.get(refSolicitud);
+          const snapEmpleado = await tx.get(refEmpleado);
+
+          if (!snapSolicitud.exists()) {
+            throw new Error("La solicitud ya no existe.");
+          }
+          const datosActuales = snapSolicitud.data();
+          if (!datosActuales.recorteSolicitud || datosActuales.recorteSolicitud.estatus !== "pendiente") {
+            throw new Error("Este recorte ya fue resuelto por alguien más.");
+          }
+
+          const saldoActual = (snapEmpleado.data() || {}).diasVacacionesDisponibles || 0;
+          const historialPrevio = Array.isArray(datosActuales.historialRecortes) ? datosActuales.historialRecortes : [];
+          const entradaHistorial = {
+            fechaInicioAnterior: datosActuales.fechaInicio,
+            fechaFinAnterior: datosActuales.fechaFin,
+            diasHabilesAnterior: datosActuales.diasHabiles,
+            fechaInicioNueva: recorte.fechaInicioNueva,
+            fechaFinNueva: recorte.fechaFinNueva,
+            diasHabilesNuevos: recorte.diasHabilesNuevos,
+            diasLiberados: recorte.diasLiberados,
+            motivo: recorte.motivo || null,
+            aprobadoPor: uidRevisor,
+            aprobadoPorNombre: nombreRevisor || null,
+            timestamp: new Date().toISOString()
+          };
+
+          tx.update(refSolicitud, {
+            fechaInicio: recorte.fechaInicioNueva,
+            fechaFin: recorte.fechaFinNueva,
+            diasHabiles: recorte.diasHabilesNuevos,
+            recorteSolicitud: null,
+            historialRecortes: [...historialPrevio, entradaHistorial]
+          });
+          tx.update(refEmpleado, {
+            diasVacacionesDisponibles: saldoActual + recorte.diasLiberados
+          });
+        });
+      } else {
+        await updateDoc(doc(db, "solicitudesVacaciones", id), {
+          "recorteSolicitud.estatus": "rechazada",
+          "recorteSolicitud.comentarioRevisor": comentario || null,
+          "recorteSolicitud.revisadoPor": uidRevisor,
+          "recorteSolicitud.revisadoPorNombre": nombreRevisor || null,
+          "recorteSolicitud.resueltoEn": new Date().toISOString()
+        });
+      }
+
+      const aprobada = decision === "aprobada";
+      crearNotificacion(empleadoId, {
+        titulo: aprobada ? "Recorte de vacaciones aprobado" : "Recorte de vacaciones rechazado",
+        mensaje: aprobada
+          ? `Tu vacación ahora es del ${recorte.fechaInicioNueva} al ${recorte.fechaFinNueva}.`
+          : `Tu solicitud de recorte del ${solicitud.fechaInicio} al ${solicitud.fechaFin} fue rechazada${comentario ? ": " + comentario : "."}`,
+        tipo: aprobada ? "aprobacion" : "rechazo"
+      });
+    } catch (err) {
+      errorDiv.textContent = "No se pudo resolver el recorte: " + err.message;
+    }
+  }
 }
 
 export function iniciarGestionVacaciones(contenedor, uid, nombre) {
-  construirVista(contenedor, uid, nombre, collection(db, "solicitudesVacaciones"), collection(db, "usuarios"));
+  construirVista(contenedor, uid, nombre, collection(db, "solicitudesVacaciones"), collection(db, "usuarios"), true);
 }
 
 export function iniciarVistaSupervisorVacaciones(contenedor, uid, nombre) {
   construirVista(
     contenedor, uid, nombre,
     query(collection(db, "solicitudesVacaciones"), where("supervisorId", "==", uid)),
-    query(collection(db, "usuarios"), where("supervisorId", "==", uid))
+    query(collection(db, "usuarios"), where("supervisorId", "==", uid)),
+    false
   );
 }
 

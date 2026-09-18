@@ -14,7 +14,10 @@ const ETIQUETAS_ESTATUS = {
 const NOMBRES_DIA = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 
 // diaDescanso: 0=domingo ... 6=sabado — el único día de la semana que no cuenta como hábil para este empleado.
-function calcularDiasHabiles(fechaInicioStr, fechaFinStr, diaDescanso) {
+// Exportada (18 sep 2026) para que el modal de "recorte de vacaciones" use
+// exactamente el mismo cálculo al mostrar cuántos días se liberarían, sin
+// duplicar la lógica.
+export function calcularDiasHabiles(fechaInicioStr, fechaFinStr, diaDescanso) {
   const inicio = new Date(fechaInicioStr + "T00:00:00");
   const fin = new Date(fechaFinStr + "T00:00:00");
   if (fin < inicio) return 0;
@@ -25,6 +28,15 @@ function calcularDiasHabiles(fechaInicioStr, fechaFinStr, diaDescanso) {
     cursor.setDate(cursor.getDate() + 1);
   }
   return dias;
+}
+
+// "yyyy-mm-dd" de hoy, en hora local — para saber si una vacación ya
+// aprobada todavía no ha iniciado (solo entonces se puede pedir un recorte).
+function hoyStr() {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${mm}-${dd}`;
 }
 
 export function iniciarVistaVacacionesEmpleado(contenedor, datosUsuario, uid) {
@@ -217,6 +229,23 @@ ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(mo
     errorDiv.textContent = "No se pudieron cargar tus solicitudes: " + err.message;
   });
 
+  // Botones/badge extra que van junto a "Imprimir formato" en una vacación
+  // ya aprobada, según el estado de su recorteSolicitud (18 sep 2026):
+  // sin recorte activo -> botón para pedirlo; pendiente -> aviso + cancelar;
+  // rechazado -> aviso con el comentario del admin + volver a intentar. Si
+  // ya se mandó a nómina (enviadoANominaEn), ya no se puede recortar.
+  function accionesRecorte(s) {
+    if (s.enviadoANominaEn) return "";
+    const r = s.recorteSolicitud;
+    if (r && r.estatus === "pendiente") {
+      return ` <span class="badge badge-pendiente">Recorte en revisión</span> <button type="button" class="secundario btn-cancelar-recorte">Cancelar recorte</button>`;
+    }
+    if (r && r.estatus === "rechazada") {
+      return ` <span class="badge badge-rechazada" title="${r.comentarioRevisor ? escapeHtml(r.comentarioRevisor) : "Sin comentario"}">Recorte rechazado</span> <button type="button" class="secundario btn-solicitar-recorte">Solicitar de nuevo</button>`;
+    }
+    return ` <button type="button" class="secundario btn-solicitar-recorte">Solicitar recorte</button>`;
+  }
+
   function renderTabla(filas) {
     if (filas.length === 0) {
       tbody.innerHTML = `<tr><td colspan="8">Aún no has enviado ninguna solicitud de vacaciones.</td></tr>`;
@@ -236,7 +265,7 @@ ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(mo
             <button type="button" class="btn-editar">Editar</button>
             <button type="button" class="btn-eliminar btn-rechazar">Eliminar</button>
           ` : s.estatus === "aprobada" ? `
-            <button type="button" class="secundario btn-imprimir-formato">Imprimir formato</button>
+            <button type="button" class="secundario btn-imprimir-formato">Imprimir formato</button>${accionesRecorte(s)}
           ` : "—"}
         </td>
       </tr>
@@ -258,6 +287,128 @@ ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(mo
           errorDiv.textContent = "No se pudo eliminar la solicitud: " + err.message;
         }
       });
+      fila.querySelector(".btn-solicitar-recorte")?.addEventListener("click", () => {
+        if (solicitud.fechaInicio <= hoyStr()) {
+          errorDiv.textContent = "Esta vacación ya inició; ya no se puede recortar desde aquí.";
+          return;
+        }
+        abrirModalRecorte(solicitud);
+      });
+      fila.querySelector(".btn-cancelar-recorte")?.addEventListener("click", async () => {
+        if (!confirm("¿Cancelar tu solicitud de recorte? La vacación se queda como está.")) return;
+        try {
+          await updateDoc(doc(db, "solicitudesVacaciones", id), { recorteSolicitud: null });
+        } catch (err) {
+          errorDiv.textContent = "No se pudo cancelar la solicitud de recorte: " + err.message;
+        }
+      });
+    });
+  }
+
+  // Modal para pedir recortar (desde un solo extremo) una vacación ya
+  // aprobada. Solo dos formas válidas: mover la fecha de inicio hacia
+  // adelante (conservando la fecha de fin original) o mover la fecha de fin
+  // hacia atrás (conservando la fecha de inicio original) — nunca ambas a la
+  // vez ni un hueco a la mitad, porque ese escenario no existe hoy (si se
+  // necesitara, la vía es cancelar todo el periodo). No descuenta ni
+  // regresa saldo aquí: eso solo ocurre cuando el admin aprueba el recorte.
+  function abrirModalRecorte(solicitud) {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal-tarjeta">
+        <h2>Solicitar recorte de vacaciones</h2>
+        <p class="nota">Vacación aprobada actual: <strong>${solicitud.fechaInicio} al ${solicitud.fechaFin}</strong> (${solicitud.diasHabiles} día(s) hábil(es)). Recorta moviendo una sola fecha hacia adentro.</p>
+        <div id="recorte-error" class="error"></div>
+        <div class="modal-fila">
+          <label>Nueva fecha de inicio
+            <input type="date" id="recorte-fecha-inicio" min="${solicitud.fechaInicio}" max="${solicitud.fechaFin}" value="${solicitud.fechaInicio}">
+          </label>
+          <label>Nueva fecha de fin
+            <input type="date" id="recorte-fecha-fin" min="${solicitud.fechaInicio}" max="${solicitud.fechaFin}" value="${solicitud.fechaFin}">
+          </label>
+          <div class="resultado-horas">
+            <span class="etiqueta-horas">Días liberados</span>
+            <span id="recorte-dias-liberados" class="valor-horas">0</span>
+          </div>
+        </div>
+        <label>Motivo (opcional)
+          <textarea id="recorte-motivo" rows="2"></textarea>
+        </label>
+        <div class="modal-acciones">
+          <button type="button" class="secundario" id="btn-cancelar-recorte-modal">Cancelar</button>
+          <button type="button" id="btn-enviar-recorte">Enviar solicitud</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const inputInicioR = overlay.querySelector("#recorte-fecha-inicio");
+    const inputFinR = overlay.querySelector("#recorte-fecha-fin");
+    const diasLiberadosSpan = overlay.querySelector("#recorte-dias-liberados");
+    const motivoR = overlay.querySelector("#recorte-motivo");
+    const errorR = overlay.querySelector("#recorte-error");
+
+    function actualizarPreview() {
+      const nuevaInicio = inputInicioR.value;
+      const nuevaFin = inputFinR.value;
+      if (!nuevaInicio || !nuevaFin) { diasLiberadosSpan.textContent = "0"; return; }
+      const diasNuevos = calcularDiasHabiles(nuevaInicio, nuevaFin, diaDescansoActual);
+      diasLiberadosSpan.textContent = Math.max(0, solicitud.diasHabiles - diasNuevos);
+    }
+    inputInicioR.addEventListener("input", actualizarPreview);
+    inputFinR.addEventListener("input", actualizarPreview);
+    actualizarPreview();
+
+    function cerrar() { overlay.remove(); }
+    overlay.querySelector("#btn-cancelar-recorte-modal").addEventListener("click", cerrar);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) cerrar(); });
+
+    overlay.querySelector("#btn-enviar-recorte").addEventListener("click", async () => {
+      errorR.textContent = "";
+      const nuevaInicio = inputInicioR.value;
+      const nuevaFin = inputFinR.value;
+
+      if (!nuevaInicio || !nuevaFin) {
+        errorR.textContent = "Completa ambas fechas.";
+        return;
+      }
+      if (nuevaInicio < solicitud.fechaInicio || nuevaFin > solicitud.fechaFin || nuevaInicio > nuevaFin) {
+        errorR.textContent = "El nuevo rango debe caer dentro del rango ya aprobado.";
+        return;
+      }
+      if (nuevaInicio !== solicitud.fechaInicio && nuevaFin !== solicitud.fechaFin) {
+        errorR.textContent = "Solo puedes recortar desde el inicio o desde el fin, no mover ambas fechas a la vez.";
+        return;
+      }
+
+      const diasHabilesNuevos = calcularDiasHabiles(nuevaInicio, nuevaFin, diaDescansoActual);
+      const diasLiberados = solicitud.diasHabiles - diasHabilesNuevos;
+      if (diasLiberados <= 0) {
+        errorR.textContent = "El nuevo rango debe ser más corto que el original.";
+        return;
+      }
+
+      try {
+        await updateDoc(doc(db, "solicitudesVacaciones", solicitud.id), {
+          recorteSolicitud: {
+            fechaInicioNueva: nuevaInicio,
+            fechaFinNueva: nuevaFin,
+            diasHabilesNuevos,
+            diasLiberados,
+            motivo: motivoR.value.trim() || null,
+            estatus: "pendiente",
+            creadoEn: new Date().toISOString(),
+            comentarioRevisor: null,
+            revisadoPor: null,
+            revisadoPorNombre: null,
+            resueltoEn: null
+          }
+        });
+        cerrar();
+      } catch (err) {
+        errorR.textContent = "No se pudo enviar la solicitud: " + err.message;
+      }
     });
   }
 }

@@ -90,6 +90,54 @@ service cloud.firestore {
         && resource.data.estatus == 'pendiente'
         && request.resource.data.estatus in ['aprobada', 'rechazada']
         && request.resource.data.empleadoId == resource.data.empleadoId;
+
+      // Recorte de vacaciones ya aprobadas (18 sep 2026, pedido de Ivan): el
+      // propio empleado puede solicitar reducir una vacación YA APROBADA
+      // (nunca ampliarla ni tocar días de en medio) — recortando desde un
+      // extremo: conserva fechaInicio o fechaFin igual al original, nunca
+      // ambos distintos a la vez. Aquí solo se le permite escribir el campo
+      // recorteSolicitud; fechaInicio/fechaFin/diasHabiles del documento NO
+      // cambian en esta rama — eso solo lo hace Ivan (esAdmin(), más abajo)
+      // al aprobar el recorte, junto con la transacción que le regresa
+      // saldo al empleado (ver resolverRecorte() en aprobacionesVacaciones.js).
+      // No se permite si el periodo ya se mandó a nómina (enviadoANominaEn):
+      // si ya se pagó, ya no hay nada que recortar desde aquí.
+      allow update: if isSignedIn()
+        && resource.data.empleadoId == request.auth.uid
+        && resource.data.estatus == 'aprobada'
+        && resource.data.get('enviadoANominaEn', null) == null
+        && request.resource.data.estatus == 'aprobada'
+        && request.resource.data.fechaInicio == resource.data.fechaInicio
+        && request.resource.data.fechaFin == resource.data.fechaFin
+        && request.resource.data.diasHabiles == resource.data.diasHabiles
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['recorteSolicitud'])
+        && (
+          // Cancelar su propia solicitud de recorte mientras siga pendiente.
+          (
+            resource.data.get('recorteSolicitud', null) != null &&
+            resource.data.recorteSolicitud.estatus == 'pendiente' &&
+            request.resource.data.recorteSolicitud == null
+          ) ||
+          // Crear una solicitud de recorte nueva (o volver a intentar tras un
+          // rechazo) — nunca mientras ya haya una pendiente sin resolver.
+          (
+            (resource.data.get('recorteSolicitud', null) == null || resource.data.recorteSolicitud.estatus != 'pendiente') &&
+            request.resource.data.recorteSolicitud.estatus == 'pendiente' &&
+            request.resource.data.recorteSolicitud.fechaInicioNueva is string &&
+            request.resource.data.recorteSolicitud.fechaFinNueva is string &&
+            request.resource.data.recorteSolicitud.fechaInicioNueva >= resource.data.fechaInicio &&
+            request.resource.data.recorteSolicitud.fechaFinNueva <= resource.data.fechaFin &&
+            request.resource.data.recorteSolicitud.fechaInicioNueva <= request.resource.data.recorteSolicitud.fechaFinNueva &&
+            (
+              request.resource.data.recorteSolicitud.fechaInicioNueva == resource.data.fechaInicio ||
+              request.resource.data.recorteSolicitud.fechaFinNueva == resource.data.fechaFin
+            ) &&
+            request.resource.data.recorteSolicitud.diasHabilesNuevos is number &&
+            request.resource.data.recorteSolicitud.diasHabilesNuevos > 0 &&
+            request.resource.data.recorteSolicitud.diasHabilesNuevos < resource.data.diasHabiles
+          )
+        );
+
       allow update: if esAdmin();
       allow delete: if esAdmin();
     }
