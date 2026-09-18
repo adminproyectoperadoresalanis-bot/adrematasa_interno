@@ -23,15 +23,26 @@
 //    300 correos/día, y solo pide verificar un correo (sin DNS ni acceso de
 //    administrador de dominio).
 //
-// --- Por qué corre varias veces y no una sola ---
+// --- Por qué corre varias veces y no una sola, y cómo decide cuándo mandar ---
 // GitHub Actions solo programa cron en UTC, pero Nuevo Laredo cambia de
 // UTC-6 a UTC-5 con el horario de verano (igual que Texas) — un cron fijo
-// en UTC se desfasaría 1 hora dos veces al año. En vez de acordarnos de
-// ajustar el workflow cada cambio de horario, el cron dispara varias veces
-// alrededor de las 6pm (ver el workflow), y este script solo hace algo si
-// al convertir "ahora" a la hora de Nuevo Laredo da exactamente las 6pm —
-// las demás veces sale sin hacer nada. Así funciona correcto todo el año
-// sin mantenimiento.
+// en UTC se desfasaría 1 hora dos veces al año. Por eso el workflow dispara
+// varias veces alrededor de las 6pm (ver el workflow) en vez de una sola.
+//
+// Al principio este script decidía "hago algo" solo si la hora coincidía
+// EXACTAMENTE con las 6pm — cualquier otro disparo salía sin hacer nada.
+// Eso resultó frágil: GitHub Actions no garantiza puntualidad en `schedule`,
+// y se observó (17-18 sep 2026) que puede atrasar TODOS los disparos de la
+// semana varias horas, incluso hasta después de la medianoche — si ninguno
+// cae justo en la hora exacta, no se manda nada esa semana.
+//
+// Ahora la pregunta ya no es "¿son exactamente las 6pm?" sino "¿ya pasaron
+// las 6pm del jueves de esta semana, Y esa semana TODAVÍA no se mandó?" —
+// ver `yaSeEnvioEstaSemana` y el uso de `reportesSemanaEnviados` en
+// Firestore más abajo. Así el primer disparo que llegue dentro de esa
+// ventana (puntual o con horas de retraso) manda el reporte, y cualquier
+// disparo posterior lo encuentra ya enviado y no hace nada — sin depender de
+// que GitHub sea puntual, y sin arriesgar mandarlo dos veces.
 //
 // --- Cómo dejarlo funcionando (una sola vez) ---
 // Necesitas crear 4 "Secrets" en GitHub: Settings → Secrets and variables →
@@ -67,7 +78,8 @@
 // Con los secrets guardados, el workflow ya puede correr — tanto en su
 // horario (jueves) como a mano desde la pestaña "Actions" del repo (botón
 // "Run workflow", con la casilla "Forzar envío" si quieres probarlo sin
-// esperar al jueves).
+// esperar al jueves — el forzado ignora tanto la ventana de horario como el
+// chequeo de "ya se envió", así siempre puedes reenviar a propósito).
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { chromium } from "playwright";
@@ -83,6 +95,12 @@ import {
 
 const ZONA_HORARIA = "America/Matamoros"; // Nuevo Laredo, Tamps. — frontera con horario de verano tipo EU.
 const HORA_OBJETIVO = 18; // 6:00 pm hora de Nuevo Laredo.
+// Hasta qué hora de la madrugada siguiente un disparo tardío todavía cuenta
+// como "el de esta semana" (ver el porqué completo arriba). Después de esta
+// hora, un disparo sin `forzar` espera a la semana siguiente — nada se
+// pierde de todas formas, porque lo no enviado aparece como "Pendientes de
+// semanas anteriores" en el próximo reporte (ver js/reportesHtml.js).
+const HORA_LIMITE_MADRUGADA = 6;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -112,21 +130,57 @@ function ahoraEnNuevoLaredo() {
   };
 }
 
+// ¿Ya se mandó el reporte de esta semana laboral (identificada por su
+// viernes) en un disparo anterior? Independiente de `enviadoANominaEn` en
+// cada solicitud/falta/vacación individual — esas se quedan sin tocar en una
+// semana sin NADA aprobado, así que por sí solas no bastan para saber si el
+// reporte (aunque sea uno vacío) ya salió. `reportesSemanaEnviados/{viernes}`
+// es la fuente de verdad de "esta semana ya se mandó", se escriba lo que se
+// escriba (o no se escriba nada) en las colecciones de solicitudes.
+async function yaSeEnvioEstaSemana({ db, viernes }) {
+  const snap = await db.collection("reportesSemanaEnviados").doc(viernes).get();
+  return snap.exists;
+}
+
 async function main() {
   const forzar = process.env.FORZAR_ENVIO === "true";
   const ahora = ahoraEnNuevoLaredo();
 
-  if (!forzar && ahora.hora !== HORA_OBJETIVO) {
-    console.log(`Son las ${String(ahora.hora).padStart(2, "0")}:${String(ahora.minuto).padStart(2, "0")} en Nuevo Laredo — no son las ${HORA_OBJETIVO}:00, no se manda nada en este disparo. (Normal: el workflow dispara varias veces alrededor de la hora objetivo para cubrir el cambio de horario, ver el comentario al inicio de este archivo.)`);
-    return;
-  }
-  console.log(forzar ? "Envío forzado manualmente (workflow_dispatch)." : `Son las ${HORA_OBJETIVO}:00 en Nuevo Laredo — generando y enviando el reporte.`);
-
-  // --- 1. Firestore vía Admin SDK ---
+  // --- 1. Firestore vía Admin SDK (se necesita desde ya para el chequeo de "¿ya se envió?") ---
   const credencial = JSON.parse(variableRequerida("FIREBASE_SERVICE_ACCOUNT"));
   const appFirebase = initializeApp({ credential: cert(credencial) });
   const db = getFirestore(appFirebase);
 
+  // --- 2. ¿A qué semana laboral corresponde este disparo, y ya toca mandarla? ---
+  //
+  // "fechaEfectiva" corrige el disparo que cruza la medianoche: si son las
+  // 00:30 del viernes, en la práctica sigue siendo "anoche jueves" para
+  // efectos de qué semana se está reportando — sin este ajuste,
+  // calcularSemanaLaboral vería el viernes como el inicio de la semana
+  // SIGUIENTE, y este disparo se pondría a evaluar (y hasta podría marcar
+  // como enviada) la semana equivocada, la que apenas está empezando.
+  const fechaEfectiva = ahora.hora < HORA_LIMITE_MADRUGADA ? sumarDias(ahora.fechaStr, -1) : ahora.fechaStr;
+  const viernes = calcularSemanaLaboral(fechaEfectiva);
+  const jueves = sumarDias(viernes, 6);
+  const numeroSemana = numeroSemanaISO(jueves);
+
+  if (!forzar) {
+    const esJuevesEfectivo = new Date(fechaEfectiva + "T00:00:00Z").getUTCDay() === 4; // 4 = jueves
+    const dentroDeVentana = ahora.hora >= HORA_OBJETIVO || ahora.hora < HORA_LIMITE_MADRUGADA;
+    if (!esJuevesEfectivo || !dentroDeVentana) {
+      console.log(`Son las ${String(ahora.hora).padStart(2, "0")}:${String(ahora.minuto).padStart(2, "0")} del ${ahora.fechaStr} en Nuevo Laredo — todavía no toca enviar (la ventana arranca el jueves a las ${HORA_OBJETIVO}:00 y sigue abierta hasta las ${String(HORA_LIMITE_MADRUGADA).padStart(2, "0")}:00 del día siguiente). No se manda nada en este disparo.`);
+      return;
+    }
+    if (await yaSeEnvioEstaSemana({ db, viernes })) {
+      console.log(`El reporte de la semana ${numeroSemana} (viernes ${viernes}) ya se había mandado en un disparo anterior de esta misma ventana — no se manda de nuevo.`);
+      return;
+    }
+    console.log(`Son las ${String(ahora.hora).padStart(2, "0")}:${String(ahora.minuto).padStart(2, "0")} del ${ahora.fechaStr} en Nuevo Laredo, semana ${numeroSemana} todavía sin enviar — generando y mandando el reporte.`);
+  } else {
+    console.log("Envío forzado manualmente (workflow_dispatch) — se ignora la ventana de horario y el chequeo de \"ya se envió\".");
+  }
+
+  // --- 3. Leer el resto de Firestore ---
   const [snapHoras, snapVacaciones, snapFaltas, snapUsuarios] = await Promise.all([
     db.collection("solicitudes").get(),
     db.collection("solicitudesVacaciones").get(),
@@ -138,14 +192,9 @@ async function main() {
   const listaFaltas = snapFaltas.docs.map(d => ({ id: d.id, ...d.data() }));
   const mapUsuarios = new Map(snapUsuarios.docs.map(d => [d.id, d.data()]));
   console.log(`Leído de Firestore: ${listaHoras.length} solicitudes de horas extra, ${listaVacaciones.length} de vacaciones, ${listaFaltas.length} faltas, ${mapUsuarios.size} usuarios.`);
-
-  // --- 2. Semana laboral (viernes a jueves) que corresponde a "hoy" en Nuevo Laredo ---
-  const viernes = calcularSemanaLaboral(ahora.fechaStr);
-  const jueves = sumarDias(viernes, 6);
-  const numeroSemana = numeroSemanaISO(jueves);
   console.log(`Semana laboral ${numeroSemana}: del ${viernes} al ${jueves}.`);
 
-  // --- 3. Armar el HTML del reporte (mismo módulo que usa el navegador) ---
+  // --- 4. Armar el HTML del reporte (mismo módulo que usa el navegador) ---
   const logoBuffer = readFileSync(join(__dirname, "..", "public", "img", "logo-alanis.png"));
   const logoSrc = `data:image/png;base64,${logoBuffer.toString("base64")}`;
 
@@ -153,7 +202,7 @@ async function main() {
   const paginaNomina = construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, jueves, numeroSemana, logoSrc });
   const html = construirHtmlReporteCompleto({ paginaRH, paginaNomina, numeroSemana, mostrarBarraImprimir: false });
 
-  // --- 4. HTML -> PDF con Chromium headless (mismo resultado que "Imprimir / Guardar como PDF") ---
+  // --- 5. HTML -> PDF con Chromium headless (mismo resultado que "Imprimir / Guardar como PDF") ---
   const browser = await chromium.launch();
   const page = await browser.newPage();
   await page.setContent(html, { waitUntil: "networkidle" });
@@ -161,7 +210,7 @@ async function main() {
   await browser.close();
   console.log(`PDF generado: ${(pdfBuffer.length / 1024).toFixed(0)} KB.`);
 
-  // --- 5. Enviar por correo (Brevo, con el PDF adjunto) ---
+  // --- 6. Enviar por correo (Brevo, con el PDF adjunto) ---
   // Los destinatarios se leen primero de Firestore (configuracion/reporteSemanal), que es lo
   // que edita el admin desde Configuración en la app — así nadie tiene que tocar GitHub para
   // cambiar a quién llega el reporte. Si ese documento no existe todavía o viene vacío, se usa
@@ -224,13 +273,26 @@ async function main() {
   const detalleCc = copiaEn.length > 0 ? ` (con copia a ${copiaEn.join(", ")})` : "";
   console.log(`Correo enviado a ${destinatarios.join(", ")}${detalleCc}. messageId: ${resultado.messageId || "(sin messageId en la respuesta)"}`);
 
-  // --- 6. Marcar como enviado a nóminas lo que de verdad se acaba de mandar ---
+  // --- 7. Marcar como enviado a nóminas lo que de verdad se acaba de mandar ---
   // Solo se llega aquí si Brevo ya confirmó el envío arriba — si algo de lo
   // anterior falla, el proceso truena antes y nada se marca (así una corrida
   // fallida no le "come" el reporte a la siguiente semana: ver
   // js/reportesHtml.js, sección "Pendientes de semanas anteriores", para el
   // porqué completo de esta bandera).
   await marcarComoEnviado({ db, listaHoras, listaVacaciones, listaFaltas, viernes, jueves });
+
+  // --- 8. Marcar la SEMANA completa como enviada ---
+  // Aparte de las solicitudes individuales del paso anterior: esto es lo que
+  // permite que `yaSeEnvioEstaSemana` detecte "ya se mandó" incluso en una
+  // semana sin ninguna hora extra/falta/vacación aprobada (donde el paso 7
+  // no marca nada, porque no hay nada que marcar) — sin este registro
+  // aparte, una semana vacía se reenviaría (vacía) en cada disparo tardío
+  // que llegara después, el mismo jueves.
+  await db.collection("reportesSemanaEnviados").doc(viernes).set({
+    numeroSemana,
+    jueves,
+    enviadoEn: new Date().toISOString()
+  });
 }
 
 async function marcarComoEnviado({ db, listaHoras, listaVacaciones, listaFaltas, viernes, jueves }) {
@@ -242,7 +304,7 @@ async function marcarComoEnviado({ db, listaHoras, listaVacaciones, listaFaltas,
     ...ids.vacaciones.map(id => ({ coleccion: "solicitudesVacaciones", id }))
   ];
   if (escrituras.length === 0) {
-    console.log("Nada que marcar como enviado (no había solicitudes/faltas/vacaciones en este reporte).");
+    console.log("Nada que marcar como enviado en las solicitudes individuales (no había ninguna en este reporte).");
     return;
   }
   // Firestore permite máximo 500 operaciones por batch — de sobra para el
