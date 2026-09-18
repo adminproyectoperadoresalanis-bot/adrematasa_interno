@@ -624,14 +624,27 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       .progreso-texto strong { color: #1c1a17; font-weight: 600; }
       .progreso-texto.es-bad strong { color: #c8362a; }
       .progreso-texto.es-warn strong { color: #92400e; }
-      /* Nombre del operador asignado bajo el texto de estado (2026-09-14,
-         pedido de Ivan) — mismo tratamiento visual que celda-embarque-meta
-         (más chico, gris), para que se lea como dato secundario y no
-         compita con el estado. Se usa operadorAsignado (no el nombre
-         congelado de recepción/pre-entrega) porque es el mismo valor que
-         ya se muestra en el modal de detalle y en Reasignar operador — es
-         la fuente única de "quién es el operador de este embarque". */
-      .progreso-operador { font-size: 11px; color: #6b6558; margin-top: 1px; }
+      .progreso-texto.es-ok strong { color: #16a34a; }
+      /* Badge de etapa/rol bajo el texto de estado (2026-09-18, pedido de
+         Ivan, mockup aprobado el mismo día) — reemplaza el nombre del
+         operador que se mostraba aquí antes. Ese nombre dependía de
+         nombreOperador_() resuelto en vivo contra el catálogo espejo
+         operadores_alanis — no era un dato anclado al evento, era una
+         variable pintada en cada render (y el motivo real de la
+         inconsistencia de nombres entre tablas que se investigó antes).
+         El badge no tiene ese problema: 3 de las 4 etiquetas se derivan
+         por contexto (cuál etapa aplica, ver ETAPA_* y celdaProgreso más
+         abajo) y "Operaciones" usa validacion2.escaneadoPor.puesto, que
+         ya es un dato real guardado en el momento del evento. Mismo
+         estilo que el chip "N esperando iniciar" (semaforo-chip-espera)
+         para que se lea como el mismo tipo de información en toda la
+         pantalla. */
+      .etapa-badge {
+        display: inline-flex; align-items: center; gap: 5px; margin-top: 5px;
+        background: #eef2ff; color: #3730a3; font-size: 10.5px; font-weight: 600;
+        padding: 2.5px 9px; border-radius: 999px;
+      }
+      .etapa-badge .punto { width: 5px; height: 5px; border-radius: 50%; background: #6366f1; flex: none; }
 
       .detalle-historial-tarjeta { max-width: 580px; }
       .detalle-card { background: #fff; border: 1px solid #ded9d1; border-radius: 10px; margin: 0 0 12px; overflow: hidden; }
@@ -1520,12 +1533,43 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     }) || null;
   }
 
-  // Franja de progreso de 4 segmentos (Atención al Cliente / Operaciones /
-  // Operador recepción / Operador pre-entrega) + texto de estado actual —
-  // mismo mockup que Ivan aprobó (2026-09-14) para reemplazar las columnas
-  // de Atención al Cliente y 2da validación en la tabla. El detalle
-  // completo de cada etapa (quién, cuándo, badges de coincidencia) se
-  // quedó en el modal — aquí solo el resumen de un vistazo.
+  // Etiquetas de etapa/rol para el badge junto a la franja de progreso
+  // (2026-09-18, pedido de Ivan, mockup aprobado el mismo día). No
+  // dependen de ningún catálogo ni de resolver nada en vivo: las 4 se
+  // saben por CONTEXTO — cuál de los 4 pasos aplica — salvo que
+  // "Operaciones" en el fondo también podría llevar el puesto exacto
+  // (validacion2.escaneadoPor.puesto, ya guardado hoy) si algún día se
+  // quiere ese nivel de detalle; por ahora el mockup aprobado usa el
+  // nombre del área nada más, igual que las otras tres.
+  const ETAPA_ATENCION_CLIENTE = "Atención al Cliente";
+  const ETAPA_OPERACIONES = "Operaciones";
+  const ETAPA_CHECKPOINT1 = "Operador · Despacho (Checkpoint 1)";
+  const ETAPA_CHECKPOINT2 = "Operador · Pre-entrega (Checkpoint 2)";
+
+  function etapaBadge_(etiqueta) {
+    return `<span class="etapa-badge"><span class="punto"></span>${escapeHtml(etiqueta)}</span>`;
+  }
+
+  // Franja de progreso de 4 segmentos + texto de estado + badge de
+  // etapa/rol — rediseño 2026-09-18 (pedido de Ivan, mockup aprobado el
+  // mismo día) sobre el mockup anterior de 2026-09-14. El detalle completo
+  // de cada etapa (quién, cuándo, badges de coincidencia) se queda en el
+  // modal — aquí solo el resumen de un vistazo.
+  //
+  // Regla de contenido del badge, acordada con Ivan: en un estado
+  // TERMINAL o de ERROR (Validado / Discrepancia / Alerta) dice QUIÉN lo
+  // dejó así — ya no hay nada pendiente, así que tiene sentido nombrar al
+  // responsable del último paso. En un estado EN PROGRESO (nada ha
+  // fallado, sigue en cola) dice A QUIÉN LE TOCA actuar ahora — es más
+  // útil saber a quién ir a apurar que quién ya hizo su parte.
+  //
+  // El texto de estado (progreso-texto) se simplificó a solo el
+  // resultado (Validado/Discrepancia/Alerta/En tránsito/Pendiente/Sin
+  // escanear) — antes mezclaba resultado y etapa en el mismo string, con
+  // un formato distinto por cada rama ("· completo", "· pre-entrega",
+  // "· recepción", "(recepción)"...). Ahora esa responsabilidad es solo
+  // del badge, sin duplicar ni tener que inventar un formato nuevo cada
+  // vez que se agregue un estado.
   function celdaProgreso(f, r) {
     const seg1 = f.origenEscaneo ? "seg-ok" : "";
     const seg2 = f.validacion2 ? "seg-ok" : "";
@@ -1537,33 +1581,24 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     if (r && r.estatusValidacion === "VALIDADO") seg4 = "seg-ok";
     else if (r && r.estatusValidacion === "DISCREPANCIA") seg4 = "seg-bad";
 
-    let texto, clase = "";
-    if (r && r.estatusValidacion === "VALIDADO") { texto = "<strong>Validado</strong> · completo"; }
-    else if (r && r.estatusValidacion === "DISCREPANCIA") { texto = "<strong>Discrepancia</strong> · pre-entrega"; clase = "es-bad"; }
-    else if (r && r.recepcionResultado === "NO_COINCIDE_DOCUMENTO") { texto = "<strong>Discrepancia</strong> · recepción"; clase = "es-bad"; }
-    else if (r && r.recepcionResultado === "NO_COINCIDE_OPERADOR") { texto = "<strong>Alerta</strong> · operador (recepción)"; clase = "es-warn"; }
-    else if (r && r.recepcionResultado === "COINCIDE") { texto = "Operador <strong>en tránsito</strong>"; }
-    else if (f.validacion2) { texto = "Esperando <strong>operador</strong>"; }
-    else if (f.origenEscaneo) { texto = "Esperando <strong>2da validación</strong>"; }
-    else { texto = "<strong>Sin escanear</strong>"; }
-
-    // Nombre del operador asignado (2026-09-14, pedido de Ivan): se pone
-    // en el mismo lugar donde antes solo se leía "Operador en tránsito" /
-    // "Validado · completo" sin decir quién. Solo aparece si ya hay
-    // operador asignado (existe desde que Operaciones completa la 2da
-    // validación — ver registrarValidacion2) — antes de eso no hay nadie
-    // a quién nombrar.
-    // Se resuelve con nombreOperador_ (mismo helper que ya usa Recepción,
-    // 2026-09-14) en vez de leer operadorAsignado.nombre directo: ese
-    // nombre queda CONGELADO desde el momento de la asignación (viene de
-    // como se haya escrito/elegido entonces — "Irene", "Pepe Nieto", etc.)
-    // y no se actualiza si después se corrige el nombre oficial en Alanis
-    // Operadores. nombreOperador_ busca por uid contra listaOperadores
-    // (que sí refleja el nombre oficial vigente) y solo usa el nombre
-    // congelado como respaldo si el uid no se encuentra.
-    const nombreOperadorAsignado = f.operadorAsignado
-      ? nombreOperador_(f.operadorAsignado.uid, f.operadorAsignado.nombre)
-      : null;
+    let texto, clase = "", etapa;
+    if (r && r.estatusValidacion === "VALIDADO") {
+      texto = "<strong>Validado</strong>"; clase = "es-ok"; etapa = ETAPA_CHECKPOINT2;
+    } else if (r && r.estatusValidacion === "DISCREPANCIA") {
+      texto = "<strong>Discrepancia</strong>"; clase = "es-bad"; etapa = ETAPA_CHECKPOINT2;
+    } else if (r && r.recepcionResultado === "NO_COINCIDE_DOCUMENTO") {
+      texto = "<strong>Discrepancia</strong>"; clase = "es-bad"; etapa = ETAPA_CHECKPOINT1;
+    } else if (r && r.recepcionResultado === "NO_COINCIDE_OPERADOR") {
+      texto = "<strong>Alerta</strong>"; clase = "es-warn"; etapa = ETAPA_CHECKPOINT1;
+    } else if (r && r.recepcionResultado === "COINCIDE") {
+      texto = "En tránsito"; etapa = ETAPA_CHECKPOINT2;
+    } else if (f.validacion2) {
+      texto = "Pendiente"; etapa = ETAPA_CHECKPOINT1;
+    } else if (f.origenEscaneo) {
+      texto = "Pendiente"; etapa = ETAPA_OPERACIONES;
+    } else {
+      texto = "Sin escanear"; etapa = ETAPA_ATENCION_CLIENTE;
+    }
 
     return `
       <div class="progreso-franja">
@@ -1573,7 +1608,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <div class="progreso-seg ${seg4}"></div>
       </div>
       <div class="progreso-texto ${clase}">${texto}</div>
-      ${nombreOperadorAsignado ? `<div class="progreso-operador">${escapeHtml(nombreOperadorAsignado)}</div>` : ""}
+      ${etapaBadge_(etapa)}
     `;
   }
 
