@@ -7,7 +7,7 @@ import {
   numeroSemanaISO, formatearFechaDDMMYY, formatearFechaLargaCap,
   formatearFechaHoraGeneracion, escapeHtml as escapeHtmlCompartido,
   construirPaginaRH, construirPaginaNomina, construirHtmlReporteCompleto,
-  idsIncluidosEnReporte
+  idsIncluidosEnReporte, filtrarPendientes
 } from "./reportesHtml.js";
 
 function hoyLocalStr() {
@@ -66,6 +66,13 @@ function calcularHorasSemanales(horarioSemanal) {
   );
 }
 
+// "Semana N" a partir de una fecha suelta (para etiquetar de dónde viene un
+// atrasado en el desglose del Resumen del periodo) — mismo cálculo que ya
+// usa construirSeccionPendientes en reportesHtml.js para el PDF.
+function semanaOriginalDe(fechaStr) {
+  return numeroSemanaISO(sumarDias(calcularSemanaLaboral(fechaStr), 6));
+}
+
 function construirVista(contenedor, { esAdmin, uid }) {
   contenedor.innerHTML = `
     <section class="panel">
@@ -88,7 +95,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
 
     <section class="panel" style="margin-top:20px;">
       <h2>Resumen del periodo</h2>
-      <p class="nota">Horas extra, vacaciones y faltas juntas por empleado, para la semana elegida arriba. Es un preliminar — en cuanto definamos los formatos exactos que necesitas para nómina, lo ajustamos.</p>
+      <p class="nota">Horas extra, vacaciones y faltas juntas por empleado, para la semana elegida arriba. Es un preliminar — en cuanto definamos los formatos exactos que necesitas para nómina, lo ajustamos. Si viendo la semana actual hay algo aprobado de semanas anteriores que todavía no se manda a nóminas, se suma aquí para que no se atrase más — marcado en color, con el detalle de dónde viene.</p>
       <div class="acciones-form">
         <button type="button" class="secundario" id="btn-exportar-resumen">Exportar CSV</button>
       </div>
@@ -198,20 +205,37 @@ function construirVista(contenedor, { esAdmin, uid }) {
     const filtradasHoras = filtrar(listaHoras, "fecha");
     const filtradasVacaciones = filtrar(listaVacaciones, "fechaInicio");
     const filtradasFaltas = filtrar(listaFaltas, "fecha");
-    resumen = construirResumen(filtradasHoras, filtradasVacaciones, filtradasFaltas);
+
+    // Atrasados (aprobados, de semanas ya pasadas, que todavía no se
+    // mandan a nóminas — mismo criterio que usa el PDF en
+    // reportesHtml.js). Es una lista fija: se calcula contra la semana
+    // real actual, sin importar qué semana esté elegida en el filtro de
+    // arriba. Solo se suman al resumen cuando estás viendo la semana
+    // actual (la que sí se va a pagar) — si eliges una semana pasada nada
+    // más para consultar, ese resumen se queda tal cual fue, sin atrasados
+    // injertados.
+    const viendoSemanaActual = selectSemana.value === viernesSemanaActual;
+    const pendientes = viendoSemanaActual
+      ? filtrarPendientes({ listaHoras, listaVacaciones, listaFaltas, viernes: viernesSemanaActual })
+      : { horas: [], faltas: [], vacaciones: [] };
+
+    resumen = construirResumen(filtradasHoras, filtradasVacaciones, filtradasFaltas, pendientes);
     renderResumen();
   }
 
   // Junta horas extra, vacaciones y faltas del mismo rango en una fila por
-  // empleado. Preliminar: en cuanto se definan los 2 formatos exactos para
-  // nómina, esto se ajusta a lo que realmente hace falta.
-  function construirResumen(filtradasHoras, filtradasVacaciones, filtradasFaltas) {
+  // empleado, más lo atrasado de semanas anteriores que aún no se ha
+  // mandado a nóminas (se suma al total para pagarse ya, guardando el
+  // desglose en `atrasados` para mostrarlo aparte). Preliminar: en cuanto
+  // se definan los 2 formatos exactos para nómina, esto se ajusta a lo que
+  // realmente hace falta.
+  function construirResumen(filtradasHoras, filtradasVacaciones, filtradasFaltas, pendientes) {
     const porEmpleado = new Map();
 
     function obtener(id, nombre) {
       if (!id) return null;
       if (!porEmpleado.has(id)) {
-        porEmpleado.set(id, { nombre: nombre || "", horas: 0, vacaciones: 0, faltas: 0 });
+        porEmpleado.set(id, { nombre: nombre || "", horas: 0, vacaciones: 0, faltas: 0, atrasados: [] });
       }
       const e = porEmpleado.get(id);
       if (nombre && !e.nombre) e.nombre = nombre;
@@ -231,6 +255,27 @@ function construirVista(contenedor, { esAdmin, uid }) {
       if (e) e.faltas += 1;
     });
 
+    pendientes.horas.forEach(s => {
+      const e = obtener(s.empleadoId, s.empleadoNombre);
+      if (!e) return;
+      const horas = Number(s.horas) || 0;
+      e.horas += horas;
+      e.atrasados.push({ tipo: "Horas extra", semana: semanaOriginalDe(s.fecha), cantidad: `${horas} h` });
+    });
+    pendientes.vacaciones.forEach(v => {
+      const e = obtener(v.empleadoId, v.empleadoNombre);
+      if (!e) return;
+      const dias = Number(v.diasHabiles) || 0;
+      e.vacaciones += dias;
+      e.atrasados.push({ tipo: "Vacaciones", semana: semanaOriginalDe(v.fechaInicio), cantidad: `${dias} día${dias === 1 ? "" : "s"}` });
+    });
+    pendientes.faltas.forEach(f => {
+      const e = obtener(f.empleadoId, f.empleadoNombre);
+      if (!e) return;
+      e.faltas += 1;
+      e.atrasados.push({ tipo: "Falta", semana: semanaOriginalDe(f.fecha), cantidad: "1 día" });
+    });
+
     return [...porEmpleado.values()].sort((a, b) => (a.nombre || "").localeCompare(b.nombre || ""));
   }
 
@@ -239,14 +284,25 @@ function construirVista(contenedor, { esAdmin, uid }) {
       tbodyResumen.innerHTML = `<tr><td colspan="4">Sin registros para este filtro.</td></tr>`;
       return;
     }
-    tbodyResumen.innerHTML = resumen.map(e => `
-      <tr>
-        <td>${escapeHtmlCompartido(e.nombre)}</td>
-        <td>${e.horas}</td>
-        <td>${e.vacaciones}</td>
-        <td>${e.faltas}</td>
-      </tr>
-    `).join("");
+    tbodyResumen.innerHTML = resumen.map(e => {
+      const tieneAtrasados = e.atrasados.length > 0;
+      const detalleAtrasados = tieneAtrasados
+        ? `<details class="detalle-atrasados">
+            <summary>Incluye ${e.atrasados.length} atrasado${e.atrasados.length === 1 ? "" : "s"} de semana(s) anteriores</summary>
+            <ul>
+              ${e.atrasados.map(a => `<li>${escapeHtmlCompartido(a.tipo)} — Semana ${a.semana} — ${escapeHtmlCompartido(a.cantidad)}</li>`).join("")}
+            </ul>
+          </details>`
+        : "";
+      return `
+        <tr class="${tieneAtrasados ? "fila-con-atrasado" : ""}">
+          <td>${escapeHtmlCompartido(e.nombre)}${detalleAtrasados}</td>
+          <td>${e.horas}</td>
+          <td>${e.vacaciones}</td>
+          <td>${e.faltas}</td>
+        </tr>
+      `;
+    }).join("");
   }
 
   contenedor.querySelector("#btn-exportar-resumen").addEventListener("click", () => {

@@ -932,10 +932,22 @@ body.tiene-nav main#contenido-app { padding-bottom: 104px; }
   padding: 12px 28px;
   border-radius: 8px;
   font-size: 1rem;
-  #mensaje-recuperar:not(:empty) {
+}
+
+#mensaje-recuperar:not(:empty) {
   display: block;
   color: #2d6a4f;
   font-size: 14px;
   margin-top: 8px;
 }
-}
+
+/* "Resumen del periodo" (Reportes): fila con horas/vacaciones/faltas
+   atrasadas de semanas anteriores que aún no se mandan a nóminas — mismo
+   tono ámbar que ya usa el resto de la app para "pendiente" (badge-pendiente,
+   cal-muestra-pendiente, tile-alerta.alerta-activa), para que se sienta
+   consistente en vez de inventar un color nuevo. */
+.fila-con-atrasado { background: #fdecc8; }
+.fila-con-atrasado td:first-child { border-left: 3px solid #8a5a00; padding-left: 5px; }
+.detalle-atrasados { margin-top: 4px; }
+.detalle-atrasados summary { font-size: 0.78rem; font-weight: 600; color: #8a5a00; cursor: pointer; }
+.detalle-atrasados ul { margin: 4px 0 0; padding-left: 18px; font-size: 0.78rem; color: #6b5a44; }

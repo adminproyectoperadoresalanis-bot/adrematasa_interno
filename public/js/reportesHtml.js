@@ -235,7 +235,10 @@ export function construirPaginaRH({ listaHoras, mapUsuarios, viernes, jueves, nu
 // criterio — tanto construirPaginaNomina (para armar el HTML) como
 // idsIncluidosEnReporte (para que quien llama sepa qué ids marcar como
 // enviados tras la entrega real) parten de aquí, para que nunca se
-// desincronicen.
+// desincronicen. `filtrarPendientes` se exporta además porque js/reportes.js
+// la llama directamente para el "Resumen del periodo" en pantalla (con
+// `viernes` fijo a la semana real actual, sin importar qué semana esté
+// elegida en el filtro) — mismo criterio, un solo lugar donde vive.
 function filtrarActuales({ listaHoras, listaVacaciones, listaFaltas, viernes, jueves }) {
   const dentroDeSemana = (fechaStr) => fechaStr >= viernes && fechaStr <= jueves;
   return {
@@ -245,7 +248,7 @@ function filtrarActuales({ listaHoras, listaVacaciones, listaFaltas, viernes, ju
   };
 }
 
-function filtrarPendientes({ listaHoras, listaVacaciones, listaFaltas, viernes }) {
+export function filtrarPendientes({ listaHoras, listaVacaciones, listaFaltas, viernes }) {
   const yaPasada = (fechaStr) => fechaStr < viernes;
   return {
     horas: listaHoras.filter(s => s.estatus === "aprobada" && !s.enviadoANominaEn && yaPasada(s.fecha)),
