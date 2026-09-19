@@ -137,7 +137,14 @@ service cloud.firestore {
             request.resource.data.recorteSolicitud.diasHabilesNuevos < resource.data.diasHabiles
           )
         );
-
+      // Adelanto de vacaciones (sep 2026): el admin crea la solicitud
+      // directamente a nombre del empleado, ya aprobada, sin pasar por
+      // el flujo normal. Solo el admin puede hacer esto.
+      allow create: if esAdmin()
+        && request.resource.data.diasHabiles is number
+        && request.resource.data.diasHabiles > 0
+        && request.resource.data.estatus == 'aprobada'
+        && request.resource.data.get('esAdelanto', false) == true;
       allow update: if esAdmin();
       allow delete: if esAdmin();
     }

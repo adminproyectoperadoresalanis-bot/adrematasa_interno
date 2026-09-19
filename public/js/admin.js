@@ -914,11 +914,27 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
 
     await batch.commit();
 
-    // 3) Notificación al empleado (fuera del batch — no crítico si falla).
+       // 3) Notificación in-app al empleado (no crítico si falla).
     crearNotificacion(u.id, {
       titulo: "Adelanto de vacaciones autorizado",
       mensaje: `Tu adelanto de ${dias} día${dias !== 1 ? "s" : ""} de vacaciones (${inicio} al ${fin}) fue autorizado por administración.`,
       tipo: "aprobacion"
+    });
+
+    // 4) Correo vía EmailJS — mismo formato que una aprobación normal de
+    //    vacaciones, para que el empleado lo reconozca. No crítico si falla.
+    const { enviarCorreoResultado } = await import("./correo.js");
+    const correoEmpleado = u.email || null;
+    enviarCorreoResultado({
+      destinatarioEmail: correoEmpleado,
+      destinatarioNombre: u.nombre || "",
+      asunto: "Adelanto de vacaciones autorizado ✅",
+            mensaje: `<p style="margin:0 0 12px;">Tu solicitud de adelanto de vacaciones del ${inicio} al ${fin} (${dias} día${dias !== 1 ? "s" : ""}) fue:</p>
+<p style="margin:0 0 12px;"><span style="display:inline-block;padding:4px 12px;border-radius:4px;font-weight:bold;background:#e7f5ec;color:#1c7a41;">AUTORIZADA ✅</span></p>
+<p style="margin:0 0 12px;color:#555;font-size:0.9em;">Ingresa a la app para consultar los detalles de tu solicitud y tu saldo actualizado.</p>
+<p style="margin:12px 0 0;padding:10px 12px;background:#f5f3f0;border-radius:4px;font-size:0.9em;">📄 Imprime tu formato desde Adrematasa Interno para solicitar la firma autógrafa de tu Supervisor.</p>`
+    }).then(resultado => {
+      if (!resultado.ok) console.error("No se pudo enviar el correo de adelanto:", resultado.error);
     });
   }
   function cerrarModal() {
