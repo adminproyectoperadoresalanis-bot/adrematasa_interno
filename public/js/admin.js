@@ -330,7 +330,12 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
             <a href="#" class="link-editar-usuario${falta ? " link-editar-alerta" : ""}">${falta ? "⚠ " : ""}${escapeHtml(u.nombre || "")}</a>
             ${esUnoMismo ? '<span class="etiqueta-tu">(tú)</span>' : ""}
           </td>
-          <td>${celdaEstatus(u)}</td>
+                    <td style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            ${celdaEstatus(u)}
+            ${u.estatus === "activo" && u.fechaIngreso && !esUnoMismo
+              ? `<button type="button" class="btn-adelanto-vacaciones secundario" style="font-size:12px;padding:3px 10px;" title="Adelantar cheque de vacaciones">✈ Adelanto</button>`
+              : ""}
+          </td>
         </tr>
       `;
     }).join("");
@@ -341,6 +346,15 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
         const id = enlace.closest("tr").dataset.id;
         const u = listaUsuarios.find(x => x.id === id);
         if (u) abrirModalEditar(u);
+      });
+    });
+        tbody.querySelectorAll(".btn-adelanto-vacaciones").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const id = btn.closest("tr").dataset.id;
+        const u = listaUsuarios.find(x => x.id === id);
+        if (u) abrirModalAdelanto(u);
       });
     });
   }
@@ -722,7 +736,191 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
       }
     });
   }
+  // -----------------------------------------------------------------------
+  // Adelanto de vacaciones (sep 2026, política interna de Alanis):
+  // el empleado toma días antes de su aniversario; el admin cancela el saldo
+  // anterior, acredita el nuevo periodo LFT y descuenta los días adelantados
+  // en un solo writeBatch. Solo el admin puede hacer esto.
+  // -----------------------------------------------------------------------
+  function proximoAniversario(fechaIngreso) {
+    if (!fechaIngreso) return null;
+    const ingreso = new Date(fechaIngreso + "T12:00:00");
+    if (isNaN(ingreso)) return null;
+    const hoy = new Date();
+    let proximo = new Date(ingreso);
+    proximo.setFullYear(hoy.getFullYear());
+    if (proximo <= hoy) proximo.setFullYear(hoy.getFullYear() + 1);
+    return proximo;
+  }
 
+  function aniosAlProximoAniversario(fechaIngreso) {
+    const prox = proximoAniversario(fechaIngreso);
+    if (!prox) return null;
+    const ingreso = new Date(fechaIngreso + "T12:00:00");
+    return prox.getFullYear() - ingreso.getFullYear();
+  }
+
+  function abrirModalAdelanto(u) {
+    document.getElementById("modal-adelanto-vacaciones")?.remove();
+
+    const anios = aniosAlProximoAniversario(u.fechaIngreso);
+    const diasNuevoPeriodo = anios ? diasSegunAntiguedad(anios, umbralesActuales) : 0;
+    const prox = proximoAniversario(u.fechaIngreso);
+    const fechaAnivTexto = prox
+      ? prox.toLocaleDateString("es-MX", { day: "numeric", month: "long", year: "numeric" })
+      : "—";
+    const saldoActual = u.diasVacacionesDisponibles ?? 0;
+
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.id = "modal-adelanto-vacaciones";
+    overlay.innerHTML = `
+      <div class="modal-tarjeta">
+        <h2>Adelanto de vacaciones</h2>
+        <p class="nota" style="margin-bottom:12px;">
+          <strong>${escapeHtml(u.nombre)}</strong> — 
+          Próximo aniversario: ${fechaAnivTexto} (año ${anios ?? "?"} → ${diasNuevoPeriodo} días LFT).<br>
+          Saldo actual: <strong>${saldoActual} días</strong> (se cancela al confirmar el adelanto).
+        </p>
+        <div id="adelanto-error" class="error"></div>
+
+        <div class="modal-fila">
+          <label>Días que adelanta
+            <input type="number" id="adelanto-dias" min="1" max="${diasNuevoPeriodo}" value="1" step="1">
+          </label>
+          <label>Fecha inicio descanso
+            <input type="date" id="adelanto-fecha-inicio">
+          </label>
+          <label>Fecha fin descanso
+            <input type="date" id="adelanto-fecha-fin">
+          </label>
+        </div>
+
+        <div id="adelanto-resumen" style="margin:14px 0;padding:12px;background:#f5f3f0;border-radius:10px;font-size:13.5px;line-height:1.8;">
+          Selecciona los días y fechas para ver el resumen.
+        </div>
+
+        <div class="modal-acciones">
+          <button type="button" class="secundario" id="adelanto-btn-cancelar">Cancelar</button>
+          <button type="button" id="adelanto-btn-confirmar" disabled>Confirmar adelanto</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const inputDias = overlay.querySelector("#adelanto-dias");
+    const inputInicio = overlay.querySelector("#adelanto-fecha-inicio");
+    const inputFin = overlay.querySelector("#adelanto-fecha-fin");
+    const resumenDiv = overlay.querySelector("#adelanto-resumen");
+    const btnConfirmar = overlay.querySelector("#adelanto-btn-confirmar");
+    const errorDiv = overlay.querySelector("#adelanto-error");
+
+    function actualizarResumen() {
+      const dias = Math.round(Number(inputDias.value) || 0);
+      const inicio = inputInicio.value;
+      const fin = inputFin.value;
+      const valido = dias >= 1 && dias <= diasNuevoPeriodo && inicio && fin && fin >= inicio;
+      const saldoResultante = Math.max(0, diasNuevoPeriodo - dias);
+
+      if (valido) {
+        resumenDiv.innerHTML = `
+          <div>🚫 Saldo actual cancelado: <strong>${saldoActual} días</strong></div>
+          <div>📅 Nuevo periodo LFT (año ${anios}): <strong>${diasNuevoPeriodo} días</strong></div>
+          <div>✈ Días adelantados: <strong>${dias} días</strong> (${inicio} al ${fin})</div>
+          <hr style="margin:8px 0;border:none;border-top:1px solid #ded9d1;">
+          <div>✅ Saldo resultante: <strong>${saldoResultante} días</strong></div>
+        `;
+        btnConfirmar.disabled = false;
+      } else {
+        resumenDiv.textContent = "Selecciona los días y fechas para ver el resumen.";
+        btnConfirmar.disabled = true;
+      }
+    }
+
+    [inputDias, inputInicio, inputFin].forEach(el => el.addEventListener("input", actualizarResumen));
+
+    overlay.querySelector("#adelanto-btn-cancelar").addEventListener("click", () => overlay.remove());
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+    btnConfirmar.addEventListener("click", async () => {
+      errorDiv.textContent = "";
+      const dias = Math.round(Number(inputDias.value) || 0);
+      const inicio = inputInicio.value;
+      const fin = inputFin.value;
+
+      if (!dias || dias < 1 || dias > diasNuevoPeriodo || !inicio || !fin || fin < inicio) {
+        errorDiv.textContent = "Verifica los datos antes de confirmar.";
+        return;
+      }
+
+      const saldoResultante = Math.max(0, diasNuevoPeriodo - dias);
+      const confirmado = confirm(
+        `¿Confirmar adelanto de vacaciones para ${u.nombre}?\n\n` +
+        `• Saldo actual (${saldoActual} días) se cancela.\n` +
+        `• Nuevo periodo LFT: ${diasNuevoPeriodo} días.\n` +
+        `• Días adelantados: ${dias} (${inicio} al ${fin}).\n` +
+        `• Saldo resultante: ${saldoResultante} días.\n\n` +
+        `Esta acción no se puede deshacer.`
+      );
+      if (!confirmado) return;
+
+      btnConfirmar.disabled = true;
+      btnConfirmar.textContent = "Guardando…";
+
+      try {
+        await procesarAdelanto(u, { dias, inicio, fin, diasNuevoPeriodo, anios, saldoResultante });
+        overlay.remove();
+      } catch (err) {
+        errorDiv.textContent = "No se pudo guardar: " + err.message;
+        btnConfirmar.disabled = false;
+        btnConfirmar.textContent = "Confirmar adelanto";
+      }
+    });
+  }
+
+  async function procesarAdelanto(u, { dias, inicio, fin, diasNuevoPeriodo, anios, saldoResultante }) {
+    const { writeBatch, collection: col, doc: docRef, serverTimestamp } =
+      await import("https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js");
+
+    const batch = writeBatch(db);
+
+    // 1) Actualiza el saldo del empleado y marca el año como ya aplicado
+    //    para que el cálculo automático no lo vuelva a pisar.
+    batch.update(doc(db, "usuarios", u.id), {
+      diasVacacionesDisponibles: saldoResultante,
+      vacacionesAplicadasAnio: anios
+    });
+
+    // 2) Crea la solicitud de vacaciones ya aprobada (el admin la autorizó
+    //    directamente — no pasa por el flujo empleado → supervisor).
+    const refSolicitud = doc(col(db, "solicitudesVacaciones"));
+    batch.set(refSolicitud, {
+      empleadoId: u.id,
+      empleadoNombre: u.nombre,
+      supervisorId: u.supervisorId || null,
+      fechaInicio: inicio,
+      fechaFin: fin,
+      diasHabiles: dias,
+      motivo: `Adelanto de vacaciones — año ${anios} de antigüedad`,
+      estatus: "aprobada",
+      esAdelanto: true,
+      comentarioRevisor: `Adelanto autorizado por administración. Nuevo periodo LFT: ${diasNuevoPeriodo} días. Saldo resultante: ${saldoResultante} días.`,
+      revisadoPor: uidActual,
+      revisadoPorNombre: listaUsuarios.find(x => x.id === uidActual)?.nombre || "Admin",
+      enviadoANominaEn: null,
+      creadoEn: new Date().toISOString(),
+      resueltoEn: new Date().toISOString()
+    });
+
+    await batch.commit();
+
+    // 3) Notificación al empleado (fuera del batch — no crítico si falla).
+    crearNotificacion(u.id, {
+      titulo: "Adelanto de vacaciones autorizado",
+      mensaje: `Tu adelanto de ${dias} día${dias !== 1 ? "s" : ""} de vacaciones (${inicio} al ${fin}) fue autorizado por administración.`,
+      tipo: "aprobacion"
+    });
+  }
   function cerrarModal() {
     document.getElementById("modal-editar-usuario")?.remove();
   }
