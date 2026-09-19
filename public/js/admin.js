@@ -192,7 +192,7 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
       if (anios === null || anios < 1) return;
 
       const diasSugeridos = diasSegunAntiguedad(anios, umbralesActuales);
-      if (diasSugeridos <= 0 || u.vacacionesAplicadasAnio === anios) return;
+      if (diasSugeridos <= 0 || u.vacacionesAplicadasAnio >= anios) return;
 
       aplicandoIds.add(u.id);
       updateDoc(doc(db, "usuarios", u.id), {
