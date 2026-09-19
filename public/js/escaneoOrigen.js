@@ -645,6 +645,15 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         padding: 2.5px 9px; border-radius: 999px;
       }
       .etapa-badge .punto { width: 5px; height: 5px; border-radius: 50%; background: #6366f1; flex: none; }
+      /* Variante "hecho" (2026-09-19, pedido de Ivan): dos embarques podían
+         mostrar el MISMO badge de etapa por razones opuestas — uno porque
+         YA lo validó esa etapa (terminal), otro porque apenas LE TOCA
+         (en progreso) — indistinguibles con solo ver el badge, había que
+         leer el texto de arriba para saber cuál era cuál. Mismos colores
+         que ya usa .badge-aprobada/.progreso-texto.es-ok en vez de
+         inventar un verde nuevo. */
+      .etapa-badge.etapa-badge-hecho { background: #dcfce7; color: #166534; }
+      .etapa-badge.etapa-badge-hecho .punto { background: #16a34a; }
 
       .detalle-historial-tarjeta { max-width: 580px; }
       .detalle-card { background: #fff; border: 1px solid #ded9d1; border-radius: 10px; margin: 0 0 12px; overflow: hidden; }
@@ -1546,8 +1555,15 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const ETAPA_CHECKPOINT1 = "Operador · Despacho (Checkpoint 1)";
   const ETAPA_CHECKPOINT2 = "Operador · Pre-entrega (Checkpoint 2)";
 
-  function etapaBadge_(etiqueta) {
-    return `<span class="etapa-badge"><span class="punto"></span>${escapeHtml(etiqueta)}</span>`;
+  // hecho=true → "Hecho por: <etapa>" (terminal/error, badge verde) —
+  // hecho=false → "Falta: <etapa>" (en progreso, badge indigo). Sin este
+  // prefijo, dos embarques en etapas opuestas (uno ya validado en
+  // Checkpoint 2, otro apenas esperando Checkpoint 2) mostraban el mismo
+  // badge — ver nota en la regla de celdaProgreso más abajo.
+  function etapaBadge_(etiqueta, hecho) {
+    const prefijo = hecho ? "Hecho por" : "Falta";
+    const claseExtra = hecho ? " etapa-badge-hecho" : "";
+    return `<span class="etapa-badge${claseExtra}"><span class="punto"></span>${prefijo}: ${escapeHtml(etiqueta)}</span>`;
   }
 
   // Franja de progreso de 4 segmentos + texto de estado + badge de
@@ -1581,23 +1597,28 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     if (r && r.estatusValidacion === "VALIDADO") seg4 = "seg-ok";
     else if (r && r.estatusValidacion === "DISCREPANCIA") seg4 = "seg-bad";
 
-    let texto, clase = "", etapa;
+    // "hecho" (2026-09-19, pedido de Ivan): mismo criterio terminal/error
+    // vs. en-progreso que ya decide el badge de etapa — aquí decide,
+    // además, su color y su prefijo ("Hecho por" / "Falta"), para que dos
+    // embarques con el mismo ETAPA_* pero en momentos opuestos (uno ya
+    // pasó por ahí, otro apenas va a pasar) no se vean idénticos.
+    let texto, clase = "", etapa, hecho;
     if (r && r.estatusValidacion === "VALIDADO") {
-      texto = "<strong>Validado</strong>"; clase = "es-ok"; etapa = ETAPA_CHECKPOINT2;
+      texto = "<strong>Validado</strong>"; clase = "es-ok"; etapa = ETAPA_CHECKPOINT2; hecho = true;
     } else if (r && r.estatusValidacion === "DISCREPANCIA") {
-      texto = "<strong>Discrepancia</strong>"; clase = "es-bad"; etapa = ETAPA_CHECKPOINT2;
+      texto = "<strong>Discrepancia</strong>"; clase = "es-bad"; etapa = ETAPA_CHECKPOINT2; hecho = true;
     } else if (r && r.recepcionResultado === "NO_COINCIDE_DOCUMENTO") {
-      texto = "<strong>Discrepancia</strong>"; clase = "es-bad"; etapa = ETAPA_CHECKPOINT1;
+      texto = "<strong>Discrepancia</strong>"; clase = "es-bad"; etapa = ETAPA_CHECKPOINT1; hecho = true;
     } else if (r && r.recepcionResultado === "NO_COINCIDE_OPERADOR") {
-      texto = "<strong>Alerta</strong>"; clase = "es-warn"; etapa = ETAPA_CHECKPOINT1;
+      texto = "<strong>Alerta</strong>"; clase = "es-warn"; etapa = ETAPA_CHECKPOINT1; hecho = true;
     } else if (r && r.recepcionResultado === "COINCIDE") {
-      texto = "En tránsito"; etapa = ETAPA_CHECKPOINT2;
+      texto = "En tránsito"; etapa = ETAPA_CHECKPOINT2; hecho = false;
     } else if (f.validacion2) {
-      texto = "Pendiente"; etapa = ETAPA_CHECKPOINT1;
+      texto = "Pendiente"; etapa = ETAPA_CHECKPOINT1; hecho = false;
     } else if (f.origenEscaneo) {
-      texto = "Pendiente"; etapa = ETAPA_OPERACIONES;
+      texto = "Pendiente"; etapa = ETAPA_OPERACIONES; hecho = false;
     } else {
-      texto = "Sin escanear"; etapa = ETAPA_ATENCION_CLIENTE;
+      texto = "Sin escanear"; etapa = ETAPA_ATENCION_CLIENTE; hecho = false;
     }
 
     return `
@@ -1608,7 +1629,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <div class="progreso-seg ${seg4}"></div>
       </div>
       <div class="progreso-texto ${clase}">${texto}</div>
-      ${etapaBadge_(etapa)}
+      ${etapaBadge_(etapa, hecho)}
     `;
   }
 
