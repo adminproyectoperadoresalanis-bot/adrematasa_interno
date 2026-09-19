@@ -824,7 +824,7 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
 
       if (valido) {
         resumenDiv.innerHTML = `
-          <div>🚫 Saldo actual cancelado: <strong>${saldoActual} días</strong></div>
+          <div>📋 Periodo anterior (${saldoActual} días) se liquida por política interna</div>
           <div>📅 Nuevo periodo LFT (año ${anios}): <strong>${diasNuevoPeriodo} días</strong></div>
           <div>✈ Días adelantados: <strong>${dias} días</strong> (${inicio} al ${fin})</div>
           <hr style="margin:8px 0;border:none;border-top:1px solid #ded9d1;">
@@ -904,7 +904,7 @@ export function iniciarPanelAdmin(contenedor, uidActual) {
       motivo: `Adelanto de vacaciones — año ${anios} de antigüedad`,
       estatus: "aprobada",
       esAdelanto: true,
-      comentarioRevisor: `Adelanto autorizado por administración. Nuevo periodo LFT: ${diasNuevoPeriodo} días. Saldo resultante: ${saldoResultante} días.`,
+            comentarioRevisor: `Adelanto de vacaciones autorizado por administración.`,
       revisadoPor: uidActual,
       revisadoPorNombre: listaUsuarios.find(x => x.id === uidActual)?.nombre || "Admin",
       enviadoANominaEn: null,
