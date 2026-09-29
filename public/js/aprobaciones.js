@@ -32,6 +32,21 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
       </div>
     </section>
 
+    ${permiteRevertir ? `
+    <section class="panel" style="margin-top:20px;">
+      <h2>Ajustes pendientes</h2>
+      <p class="nota">Solicitudes de empleados para que se vuelva a revisar una solicitud de horas extra ya resuelta.</p>
+      <div class="tabla-wrap">
+        <table class="tabla" id="tabla-ajustes-pendientes">
+          <thead>
+            <tr><th>Empleado</th><th>Fecha</th><th>Horario</th><th>Resultado actual</th><th>Motivo del ajuste</th><th>Comentario</th><th>Acción</th></tr>
+          </thead>
+          <tbody id="tbody-ajustes-pendientes"><tr><td colspan="7">Cargando...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+    ` : ""}
+
     <section class="panel" style="margin-top:20px;">
       <h2>Historial de solicitudes</h2>
       <div class="tabla-wrap">
@@ -48,6 +63,7 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
   const errorDiv = contenedor.querySelector("#sol-error");
   const tbodyPendientes = contenedor.querySelector("#tbody-pendientes");
   const tbodyHistorial = contenedor.querySelector("#tbody-historial");
+  const tbodyAjustes = contenedor.querySelector("#tbody-ajustes-pendientes");
 
   let ultimoHistorial = [];
   let usuariosPorId = {};
@@ -61,6 +77,11 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
 
     renderPendientes(pendientes);
     renderHistorial();
+
+    if (permiteRevertir) {
+      const ajustesPendientes = todas.filter(s => s.estatus !== "pendiente" && s.ajusteSolicitud && s.ajusteSolicitud.estatus === "pendiente");
+      renderAjustesPendientes(ajustesPendientes);
+    }
   }, (err) => {
     errorDiv.textContent = "No se pudieron cargar las solicitudes: " + err.message;
   });
@@ -109,6 +130,56 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
     });
   }
 
+  // Tabla de ajustes pendientes (solo admin, igual que los recortes de
+  // vacaciones). Aprobar regresa la solicitud a "pendiente" (mismo efecto que
+  // el botón directo "Revertir a pendiente", pero aquí lo pidió el empleado)
+  // y deja registro en historialAjustes; rechazar solo marca el
+  // ajusteSolicitud como rechazado, la solicitud se queda resuelta como está.
+  function renderAjustesPendientes(lista) {
+    if (!tbodyAjustes) return;
+    if (lista.length === 0) {
+      tbodyAjustes.innerHTML = `<tr><td colspan="7">No hay ajustes pendientes.</td></tr>`;
+      return;
+    }
+    tbodyAjustes.innerHTML = lista.map(s => `
+      <tr data-id="${s.id}">
+        <td>${escapeHtml(s.empleadoNombre || "")}</td>
+        <td>${s.fecha}</td>
+        <td>${s.horaInicio}–${s.horaFin}</td>
+        <td><span class="badge badge-${s.estatus}">${ETIQUETAS_ESTATUS[s.estatus] || s.estatus}</span></td>
+        <td>${s.ajusteSolicitud.motivo ? escapeHtml(s.ajusteSolicitud.motivo) : "—"}</td>
+        <td><input type="text" class="input-comentario" placeholder="Comentario (opcional)"></td>
+        <td class="acciones">
+          <button type="button" class="btn-aprobar">Aprobar</button>
+          <button type="button" class="btn-rechazar">Rechazar</button>
+        </td>
+      </tr>
+    `).join("");
+
+    tbodyAjustes.querySelectorAll("tr[data-id]").forEach(fila => {
+      const id = fila.dataset.id;
+      const solicitud = lista.find(s => s.id === id);
+      const comentarioInput = fila.querySelector(".input-comentario");
+      fila.querySelector(".btn-aprobar").addEventListener("click", () => {
+        resolverAjuste(solicitud, "aprobada", comentarioInput.value.trim());
+      });
+      fila.querySelector(".btn-rechazar").addEventListener("click", () => {
+        resolverAjuste(solicitud, "rechazada", comentarioInput.value.trim());
+      });
+    });
+  }
+
+  // Ajuste (unificado, 28 sep 2026) pendiente sobre una solicitud ya
+  // resuelta: mismo badge/estilo que "Recorte en revisión" de vacaciones,
+  // para que se vea consistente en toda la app.
+  function badgeAjuste(s) {
+    const a = s.ajusteSolicitud;
+    if (!a) return "";
+    if (a.estatus === "pendiente") return ` <span class="badge badge-pendiente">Ajuste en revisión</span>`;
+    if (a.estatus === "rechazada") return ` <span class="badge badge-rechazada" title="${a.comentarioRevisor ? escapeHtml(a.comentarioRevisor) : "Sin comentario"}">Ajuste rechazado</span>`;
+    return "";
+  }
+
   function renderHistorial() {
     if (ultimoHistorial.length === 0) {
       tbodyHistorial.innerHTML = `<tr><td colspan="9">Todavía no hay historial.</td></tr>`;
@@ -121,7 +192,7 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
           <td>${s.horaInicio}–${s.horaFin}</td>
           <td>${s.horas}</td>
           <td>${escapeHtml(s.motivo)}</td>
-          <td><span class="badge badge-${s.estatus}">${ETIQUETAS_ESTATUS[s.estatus] || s.estatus}</span></td>
+          <td><span class="badge badge-${s.estatus}">${ETIQUETAS_ESTATUS[s.estatus] || s.estatus}</span>${badgeAjuste(s)}</td>
           <td>${s.comentarioRevisor ? escapeHtml(s.comentarioRevisor) : "—"}</td>
           <td>${s.revisadoPorNombre ? escapeHtml(s.revisadoPorNombre) : "—"}</td>
           <td>
@@ -207,19 +278,94 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
   // la fila de pendientes para resolverse correctamente. Bloqueado si ya se
   // mandó a nómina (enviadoANominaEn) — el botón ni siquiera se muestra en
   // ese caso, ver renderHistorial().
+  //
+  // Este es el atajo DIRECTO del admin — sin solicitud ni aprobación, porque
+  // si el propio admin se equivoca al resolver no tiene sentido que se
+  // autorice a sí mismo (28 sep 2026, pedido de Ivan). Aun así, para que el
+  // historial quede completo, se registra en historialAjustes igual que un
+  // ajuste solicitado por el empleado, marcado como "directo".
   async function revertirSolicitud(solicitud) {
     if (!confirm(`¿Regresar a "Pendiente" la solicitud de ${solicitud.empleadoNombre} del ${solicitud.fecha}? Vuelve a aparecer arriba para aprobarla o rechazarla de nuevo.`)) return;
     errorDiv.textContent = "";
     try {
+      const historialPrevio = Array.isArray(solicitud.historialAjustes) ? solicitud.historialAjustes : [];
+      const entradaHistorial = {
+        tipo: "revertir",
+        origen: "directo",
+        estatusAnterior: solicitud.estatus,
+        comentarioRevisorAnterior: solicitud.comentarioRevisor || null,
+        revisadoPorNombreAnterior: solicitud.revisadoPorNombre || null,
+        resueltoPor: uidRevisor,
+        resueltoPorNombre: nombreRevisor || null,
+        timestamp: new Date().toISOString()
+      };
       await updateDoc(doc(db, "solicitudes", solicitud.id), {
         estatus: "pendiente",
         comentarioRevisor: null,
         revisadoPor: null,
         revisadoPorNombre: null,
-        resueltoEn: null
+        resueltoEn: null,
+        historialAjustes: [...historialPrevio, entradaHistorial]
       });
     } catch (err) {
       errorDiv.textContent = "No se pudo revertir la solicitud: " + err.message;
+    }
+  }
+
+  // Resuelve un ajuste SOLICITADO POR EL EMPLEADO (28 sep 2026) sobre una
+  // solicitud de horas extra ya resuelta — a diferencia de revertirSolicitud()
+  // de arriba (atajo directo del admin), este pasa por la cola de "Ajustes
+  // pendientes" porque lo pidió el empleado, no el admin. Aprobar: mismo
+  // efecto que el atajo directo (regresa a "pendiente"), más el registro en
+  // historialAjustes con el motivo que dio el empleado. Rechazar: solo marca
+  // el ajusteSolicitud como rechazado, la solicitud se queda resuelta como
+  // estaba.
+  async function resolverAjuste(solicitud, decision, comentario) {
+    errorDiv.textContent = "";
+    try {
+      if (decision === "aprobada") {
+        const historialPrevio = Array.isArray(solicitud.historialAjustes) ? solicitud.historialAjustes : [];
+        const entradaHistorial = {
+          tipo: "revertir",
+          origen: "solicitado",
+          motivo: solicitud.ajusteSolicitud.motivo || null,
+          estatusAnterior: solicitud.estatus,
+          comentarioRevisorAnterior: solicitud.comentarioRevisor || null,
+          revisadoPorNombreAnterior: solicitud.revisadoPorNombre || null,
+          resueltoPor: uidRevisor,
+          resueltoPorNombre: nombreRevisor || null,
+          comentarioResolucion: comentario || null,
+          timestamp: new Date().toISOString()
+        };
+        await updateDoc(doc(db, "solicitudes", solicitud.id), {
+          estatus: "pendiente",
+          comentarioRevisor: null,
+          revisadoPor: null,
+          revisadoPorNombre: null,
+          resueltoEn: null,
+          ajusteSolicitud: null,
+          historialAjustes: [...historialPrevio, entradaHistorial]
+        });
+      } else {
+        await updateDoc(doc(db, "solicitudes", solicitud.id), {
+          "ajusteSolicitud.estatus": "rechazada",
+          "ajusteSolicitud.comentarioRevisor": comentario || null,
+          "ajusteSolicitud.revisadoPor": uidRevisor,
+          "ajusteSolicitud.revisadoPorNombre": nombreRevisor || null,
+          "ajusteSolicitud.resueltoEn": new Date().toISOString()
+        });
+      }
+
+      const aprobada = decision === "aprobada";
+      crearNotificacion(solicitud.empleadoId, {
+        titulo: aprobada ? "Ajuste de horas extra aprobado" : "Ajuste de horas extra rechazado",
+        mensaje: aprobada
+          ? `Tu solicitud del ${solicitud.fecha} (${solicitud.horaInicio}–${solicitud.horaFin}) volvió a "Pendiente" para revisarse de nuevo.`
+          : `Tu solicitud de ajuste sobre el ${solicitud.fecha} fue rechazada${comentario ? ": " + comentario : "."}`,
+        tipo: aprobada ? "aprobacion" : "rechazo"
+      });
+    } catch (err) {
+      errorDiv.textContent = "No se pudo resolver el ajuste: " + err.message;
     }
   }
 }

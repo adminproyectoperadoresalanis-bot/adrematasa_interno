@@ -60,6 +60,42 @@ service cloud.firestore {
         && resource.data.estatus == 'pendiente'
         && request.resource.data.estatus in ['aprobada', 'rechazada']
         && request.resource.data.empleadoId == resource.data.empleadoId;
+
+      // Ajuste (unificado, 28 sep 2026): el empleado puede solicitar que se
+      // revise de nuevo una solicitud de horas extra ya resuelta (aprobada o
+      // rechazada) — por ejemplo si el admin/supervisor se equivocó al
+      // resolverla. El admin ya podía regresarla a "pendiente" de forma
+      // directa (botón "Revertir a pendiente", sin pedir permiso a nadie —
+      // eso sigue igual, ver revertirSolicitud() en aprobaciones.js); esto
+      // solo agrega la vía para que el EMPLEADO la solicite y quede en la
+      // cola de "Ajustes pendientes" hasta que el admin la resuelva (cubierto
+      // por "allow update: if esAdmin();" de abajo, que ya tiene permiso
+      // total sobre el documento). Aquí solo se permite escribir el campo
+      // ajusteSolicitud; nada más del documento cambia en esta rama.
+      // Bloqueado si ya se mandó a nómina.
+      allow update: if isSignedIn()
+        && resource.data.empleadoId == request.auth.uid
+        && resource.data.estatus in ['aprobada', 'rechazada']
+        && resource.data.get('enviadoANominaEn', null) == null
+        && request.resource.data.estatus == resource.data.estatus
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ajusteSolicitud'])
+        && (
+          // Cancelar su propia solicitud de ajuste mientras siga pendiente.
+          (
+            resource.data.get('ajusteSolicitud', null) != null &&
+            resource.data.ajusteSolicitud.estatus == 'pendiente' &&
+            request.resource.data.ajusteSolicitud == null
+          ) ||
+          // Crear una solicitud de ajuste nueva (o volver a intentar tras un
+          // rechazo) — nunca mientras ya haya una pendiente sin resolver.
+          (
+            (resource.data.get('ajusteSolicitud', null) == null || resource.data.ajusteSolicitud.estatus != 'pendiente') &&
+            request.resource.data.ajusteSolicitud.estatus == 'pendiente' &&
+            request.resource.data.ajusteSolicitud.tipo == 'revertir' &&
+            request.resource.data.ajusteSolicitud.motivo is string
+          )
+        );
+
       allow update: if esAdmin();
       allow delete: if esAdmin();
     }
@@ -137,14 +173,70 @@ service cloud.firestore {
             request.resource.data.recorteSolicitud.diasHabilesNuevos < resource.data.diasHabiles
           )
         );
-      // Adelanto de vacaciones (sep 2026): el admin crea la solicitud
-      // directamente a nombre del empleado, ya aprobada, sin pasar por
-      // el flujo normal. Solo el admin puede hacer esto.
-      allow create: if esAdmin()
-        && request.resource.data.diasHabiles is number
-        && request.resource.data.diasHabiles > 0
+
+      // Ajuste (unificado, 28 sep 2026): generaliza el "recorte" de arriba a
+      // dos tipos — 'recorte' (igual que antes: solo puede achicar el rango
+      // desde un extremo, nunca ampliarlo) y 'cambioFechas' (fechas
+      // completamente nuevas, puede ganar o perder días hábiles frente al
+      // rango actual, con tope en el saldo disponible). El campo viejo
+      // recorteSolicitud (arriba) se queda intacto para solicitudes ya en
+      // vuelo — no se toca ni se migra; este es el campo nuevo que usan las
+      // pantallas a partir de ahora. Igual que el recorte viejo: no cambia
+      // fechaInicio/fechaFin/diasHabiles aquí, eso solo lo hace el admin al
+      // aprobar (ver resolverAjusteVacaciones() en aprobacionesVacaciones.js),
+      // junto con la transacción que ajusta el saldo del empleado.
+      allow update: if isSignedIn()
+        && resource.data.empleadoId == request.auth.uid
+        && resource.data.estatus == 'aprobada'
+        && resource.data.get('enviadoANominaEn', null) == null
         && request.resource.data.estatus == 'aprobada'
-        && request.resource.data.get('esAdelanto', false) == true;
+        && request.resource.data.fechaInicio == resource.data.fechaInicio
+        && request.resource.data.fechaFin == resource.data.fechaFin
+        && request.resource.data.diasHabiles == resource.data.diasHabiles
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ajusteSolicitud'])
+        && (
+          // Cancelar su propia solicitud de ajuste mientras siga pendiente.
+          (
+            resource.data.get('ajusteSolicitud', null) != null &&
+            resource.data.ajusteSolicitud.estatus == 'pendiente' &&
+            request.resource.data.ajusteSolicitud == null
+          ) ||
+          // Crear una solicitud de ajuste nueva (recorte o cambio de fechas)
+          // — nunca mientras ya haya una pendiente sin resolver.
+          (
+            (resource.data.get('ajusteSolicitud', null) == null || resource.data.ajusteSolicitud.estatus != 'pendiente') &&
+            request.resource.data.ajusteSolicitud.estatus == 'pendiente' &&
+            request.resource.data.ajusteSolicitud.fechaInicioNueva is string &&
+            request.resource.data.ajusteSolicitud.fechaFinNueva is string &&
+            request.resource.data.ajusteSolicitud.fechaInicioNueva <= request.resource.data.ajusteSolicitud.fechaFinNueva &&
+            request.resource.data.ajusteSolicitud.diasHabilesNuevos is number &&
+            request.resource.data.ajusteSolicitud.diasHabilesNuevos > 0 &&
+            (
+              (
+                // tipo 'recorte': mismas reglas que el recorteSolicitud viejo —
+                // nunca amplía, siempre dentro del rango ya aprobado,
+                // conservando un extremo igual al original.
+                request.resource.data.ajusteSolicitud.tipo == 'recorte' &&
+                request.resource.data.ajusteSolicitud.fechaInicioNueva >= resource.data.fechaInicio &&
+                request.resource.data.ajusteSolicitud.fechaFinNueva <= resource.data.fechaFin &&
+                (
+                  request.resource.data.ajusteSolicitud.fechaInicioNueva == resource.data.fechaInicio ||
+                  request.resource.data.ajusteSolicitud.fechaFinNueva == resource.data.fechaFin
+                ) &&
+                request.resource.data.ajusteSolicitud.diasHabilesNuevos < resource.data.diasHabiles
+              ) ||
+              (
+                // tipo 'cambioFechas': fechas completamente libres, pero nunca
+                // puede pedir más días hábiles de los que le alcanzarían con su
+                // saldo actual más los días que liberaría esta vacación al
+                // cambiarse (tope suave — el admin puede rechazar igual).
+                request.resource.data.ajusteSolicitud.tipo == 'cambioFechas' &&
+                request.resource.data.ajusteSolicitud.diasHabilesNuevos <= usuarioActual().get('diasVacacionesDisponibles', 0) + resource.data.diasHabiles
+              )
+            )
+          )
+        );
+
       allow update: if esAdmin();
       allow delete: if esAdmin();
     }

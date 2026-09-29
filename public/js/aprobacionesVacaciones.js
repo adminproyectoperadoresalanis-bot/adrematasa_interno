@@ -34,13 +34,26 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
     ${permiteRecortes ? `
     <section class="panel" style="margin-top:20px;">
       <h2>Recortes de vacaciones pendientes</h2>
-      <p class="nota">Solicitudes de empleados para recortar (desde un extremo) una vacación ya aprobada.</p>
+      <p class="nota">Solicitudes de empleados para recortar (desde un extremo) una vacación ya aprobada. (Formato anterior — se deja tal cual para las solicitudes que ya estaban en vuelo antes de unificar los ajustes.)</p>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-recortes-pendientes">
           <thead>
             <tr><th>Empleado</th><th>Rango aprobado</th><th>Rango nuevo</th><th>Días que libera</th><th>Motivo</th><th>Comentario</th><th>Acción</th></tr>
           </thead>
           <tbody id="tbody-recortes-pendientes"><tr><td colspan="7">Cargando...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-top:20px;">
+      <h2>Ajustes de vacaciones pendientes</h2>
+      <p class="nota">Solicitudes de empleados para recortar o cambiar de fechas una vacación ya aprobada.</p>
+      <div class="tabla-wrap">
+        <table class="tabla" id="tabla-ajustes-vac-pendientes">
+          <thead>
+            <tr><th>Empleado</th><th>Tipo</th><th>Rango aprobado</th><th>Rango nuevo</th><th>Días (antes → después)</th><th>Motivo</th><th>Comentario</th><th>Acción</th></tr>
+          </thead>
+          <tbody id="tbody-ajustes-vac-pendientes"><tr><td colspan="8">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -63,6 +76,7 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
   const tbodyPendientes = contenedor.querySelector("#tbody-vac-pendientes");
   const tbodyHistorial = contenedor.querySelector("#tbody-vac-historial");
   const tbodyRecortes = contenedor.querySelector("#tbody-recortes-pendientes");
+  const tbodyAjustes = contenedor.querySelector("#tbody-ajustes-vac-pendientes");
 
   let ultimoHistorial = [];
   let usuariosPorId = {};
@@ -80,6 +94,9 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
     if (permiteRecortes) {
       const recortesPendientes = todas.filter(s => s.estatus === "aprobada" && s.recorteSolicitud && s.recorteSolicitud.estatus === "pendiente");
       renderRecortesPendientes(recortesPendientes);
+
+      const ajustesPendientes = todas.filter(s => s.estatus === "aprobada" && s.ajusteSolicitud && s.ajusteSolicitud.estatus === "pendiente");
+      renderAjustesPendientes(ajustesPendientes);
     }
   }, (err) => {
     errorDiv.textContent = "No se pudieron cargar las solicitudes de vacaciones: " + err.message;
@@ -160,6 +177,51 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
       });
       fila.querySelector(".btn-rechazar").addEventListener("click", () => {
         resolverRecorte(solicitud, "rechazada", comentarioInput.value.trim());
+      });
+    });
+  }
+
+  // Ajuste (unificado, 28 sep 2026) pendiente de tipo 'recorte' o
+  // 'cambioFechas'. Aprobar: transacción atómica que ajusta fechaInicio/
+  // fechaFin/diasHabiles del documento, agrega la entrada a
+  // historialAjustes (fecha de cliente — un arreglo no acepta
+  // serverTimestamp()), limpia ajusteSolicitud, y ajusta el saldo del
+  // empleado por la diferencia (que puede ser positiva o negativa en
+  // 'cambioFechas', a diferencia del 'recorte' viejo que solo liberaba
+  // días). Rechazar: solo marca el ajusteSolicitud como rechazado, sin tocar
+  // fechas ni saldo.
+  function renderAjustesPendientes(lista) {
+    if (!tbodyAjustes) return;
+    if (lista.length === 0) {
+      tbodyAjustes.innerHTML = `<tr><td colspan="8">No hay ajustes pendientes.</td></tr>`;
+      return;
+    }
+    const ETIQUETAS_TIPO = { recorte: "Recorte", cambioFechas: "Cambio de fechas" };
+    tbodyAjustes.innerHTML = lista.map(s => `
+      <tr data-id="${s.id}">
+        <td>${escapeHtml(s.empleadoNombre || "")}</td>
+        <td>${ETIQUETAS_TIPO[s.ajusteSolicitud.tipo] || s.ajusteSolicitud.tipo}</td>
+        <td>${s.fechaInicio} al ${s.fechaFin}</td>
+        <td>${s.ajusteSolicitud.fechaInicioNueva} al ${s.ajusteSolicitud.fechaFinNueva}</td>
+        <td>${s.diasHabiles} → ${s.ajusteSolicitud.diasHabilesNuevos}</td>
+        <td>${s.ajusteSolicitud.motivo ? escapeHtml(s.ajusteSolicitud.motivo) : "—"}</td>
+        <td><input type="text" class="input-comentario" placeholder="Comentario (opcional)"></td>
+        <td class="acciones">
+          <button type="button" class="btn-aprobar">Aprobar</button>
+          <button type="button" class="btn-rechazar">Rechazar</button>
+        </td>
+      </tr>
+    `).join("");
+
+    tbodyAjustes.querySelectorAll("tr[data-id]").forEach(fila => {
+      const id = fila.dataset.id;
+      const solicitud = lista.find(s => s.id === id);
+      const comentarioInput = fila.querySelector(".input-comentario");
+      fila.querySelector(".btn-aprobar").addEventListener("click", () => {
+        resolverAjuste(solicitud, "aprobada", comentarioInput.value.trim());
+      });
+      fila.querySelector(".btn-rechazar").addEventListener("click", () => {
+        resolverAjuste(solicitud, "rechazada", comentarioInput.value.trim());
       });
     });
   }
@@ -363,6 +425,92 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
       });
     } catch (err) {
       errorDiv.textContent = "No se pudo resolver el recorte: " + err.message;
+    }
+  }
+
+  // Resuelve un ajuste unificado (28 sep 2026) — generaliza resolverRecorte()
+  // de arriba a los dos tipos ('recorte' y 'cambioFechas'). La fórmula de
+  // saldo es la misma en ambos casos: diferencia = días antes − días
+  // después; un recorte siempre da una diferencia positiva (regresa saldo),
+  // un cambio de fechas puede dar positiva o negativa (regresa o descuenta
+  // saldo). Se valida dentro de la transacción que el saldo no quede
+  // negativo, por si el saldo del empleado cambió entre que pidió el ajuste
+  // y que se aprobó.
+  async function resolverAjuste(solicitud, decision, comentario) {
+    errorDiv.textContent = "";
+    const id = solicitud.id;
+    const empleadoId = solicitud.empleadoId;
+    const ajuste = solicitud.ajusteSolicitud;
+    try {
+      if (decision === "aprobada") {
+        await runTransaction(db, async (tx) => {
+          const refSolicitud = doc(db, "solicitudesVacaciones", id);
+          const refEmpleado = doc(db, "usuarios", empleadoId);
+          const snapSolicitud = await tx.get(refSolicitud);
+          const snapEmpleado = await tx.get(refEmpleado);
+
+          if (!snapSolicitud.exists()) {
+            throw new Error("La solicitud ya no existe.");
+          }
+          const datosActuales = snapSolicitud.data();
+          if (!datosActuales.ajusteSolicitud || datosActuales.ajusteSolicitud.estatus !== "pendiente") {
+            throw new Error("Este ajuste ya fue resuelto por alguien más.");
+          }
+
+          const saldoActual = (snapEmpleado.data() || {}).diasVacacionesDisponibles || 0;
+          const diferencia = datosActuales.diasHabiles - ajuste.diasHabilesNuevos;
+          const saldoNuevo = saldoActual + diferencia;
+          if (saldoNuevo < 0) {
+            throw new Error(`El empleado solo tiene ${saldoActual} día(s) disponible(s) y este cambio requiere ${-diferencia} más. Recházalo o ajusta su saldo primero.`);
+          }
+
+          const historialPrevio = Array.isArray(datosActuales.historialAjustes) ? datosActuales.historialAjustes : [];
+          const entradaHistorial = {
+            tipo: ajuste.tipo,
+            fechaInicioAnterior: datosActuales.fechaInicio,
+            fechaFinAnterior: datosActuales.fechaFin,
+            diasHabilesAnterior: datosActuales.diasHabiles,
+            fechaInicioNueva: ajuste.fechaInicioNueva,
+            fechaFinNueva: ajuste.fechaFinNueva,
+            diasHabilesNuevos: ajuste.diasHabilesNuevos,
+            motivo: ajuste.motivo || null,
+            aprobadoPor: uidRevisor,
+            aprobadoPorNombre: nombreRevisor || null,
+            comentarioResolucion: comentario || null,
+            timestamp: new Date().toISOString()
+          };
+
+          tx.update(refSolicitud, {
+            fechaInicio: ajuste.fechaInicioNueva,
+            fechaFin: ajuste.fechaFinNueva,
+            diasHabiles: ajuste.diasHabilesNuevos,
+            ajusteSolicitud: null,
+            historialAjustes: [...historialPrevio, entradaHistorial]
+          });
+          tx.update(refEmpleado, {
+            diasVacacionesDisponibles: saldoNuevo
+          });
+        });
+      } else {
+        await updateDoc(doc(db, "solicitudesVacaciones", id), {
+          "ajusteSolicitud.estatus": "rechazada",
+          "ajusteSolicitud.comentarioRevisor": comentario || null,
+          "ajusteSolicitud.revisadoPor": uidRevisor,
+          "ajusteSolicitud.revisadoPorNombre": nombreRevisor || null,
+          "ajusteSolicitud.resueltoEn": new Date().toISOString()
+        });
+      }
+
+      const aprobada = decision === "aprobada";
+      crearNotificacion(empleadoId, {
+        titulo: aprobada ? "Ajuste de vacaciones aprobado" : "Ajuste de vacaciones rechazado",
+        mensaje: aprobada
+          ? `Tu vacación ahora es del ${ajuste.fechaInicioNueva} al ${ajuste.fechaFinNueva}.`
+          : `Tu solicitud de ajuste sobre el ${solicitud.fechaInicio} al ${solicitud.fechaFin} fue rechazada${comentario ? ": " + comentario : "."}`,
+        tipo: aprobada ? "aprobacion" : "rechazo"
+      });
+    } catch (err) {
+      errorDiv.textContent = "No se pudo resolver el ajuste: " + err.message;
     }
   }
 }
