@@ -223,7 +223,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
           ${s.estatus === "pendiente" ? `
             <button type="button" class="btn-editar">Editar</button>
             <button type="button" class="btn-eliminar btn-rechazar">Eliminar</button>
-          ` : "—"}
+          ` : celdaAjuste(s)}
         </td>
       </tr>
     `).join("");
@@ -241,7 +241,154 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
           errorDiv.textContent = "No se pudo eliminar la solicitud: " + err.message;
         }
       });
+      fila.querySelector(".btn-solicitar-ajuste")?.addEventListener("click", () => {
+        abrirModalAjuste(solicitud);
+      });
+      fila.querySelector(".btn-cancelar-ajuste")?.addEventListener("click", async () => {
+        if (!confirm("¿Cancelar tu solicitud de ajuste? La solicitud se queda como está.")) return;
+        try {
+          await updateDoc(doc(db, "solicitudes", id), { ajusteSolicitud: null });
+        } catch (err) {
+          errorDiv.textContent = "No se pudo cancelar la solicitud de ajuste: " + err.message;
+        }
+      });
+      fila.querySelector(".btn-ver-historial-ajustes")?.addEventListener("click", () => {
+        abrirModalHistorialAjustes(solicitud);
+      });
     });
+  }
+
+  // Botones/badge que van en la columna "Acción" de una solicitud ya
+  // resuelta (aprobada o rechazada) — unificado con el mismo patrón de
+  // "ajuste" que ya tiene vacaciones (28 sep 2026, ver ajusteSolicitud en el
+  // doc de diseño). Si ya se mandó a nómina (enviadoANominaEn) ya no se
+  // puede pedir ajuste — pero el historial (si ya tenía alguno) se sigue
+  // pudiendo consultar.
+  function celdaAjuste(s) {
+    const historial = historialAjustesDe(s);
+    const botonHistorial = historial.length > 0 ? ` <button type="button" class="secundario btn-ver-historial-ajustes">Ver historial</button>` : "";
+    if (s.enviadoANominaEn) {
+      return (botonHistorial || "—");
+    }
+    const a = s.ajusteSolicitud;
+    let accion;
+    if (a && a.estatus === "pendiente") {
+      accion = ` <span class="badge badge-pendiente">Ajuste en revisión</span> <button type="button" class="secundario btn-cancelar-ajuste">Cancelar ajuste</button>`;
+    } else if (a && a.estatus === "rechazada") {
+      accion = ` <span class="badge badge-rechazada" title="${a.comentarioRevisor ? escapeHtml(a.comentarioRevisor) : "Sin comentario"}">Ajuste rechazado</span> <button type="button" class="secundario btn-solicitar-ajuste">Solicitar de nuevo</button>`;
+    } else {
+      accion = ` <button type="button" class="secundario btn-solicitar-ajuste">Solicitar ajuste</button>`;
+    }
+    return accion + botonHistorial;
+  }
+
+  // Historial de ajustes (más reciente primero) — combina lo que dejó el
+  // atajo directo del admin ("Revertir a pendiente") con lo que dejó un
+  // ajuste solicitado por el empleado y luego aprobado; ambos casos
+  // escriben en el mismo arreglo historialAjustes (ver aprobaciones.js).
+  function historialAjustesDe(s) {
+    const entradas = Array.isArray(s.historialAjustes) ? s.historialAjustes : [];
+    return [...entradas].sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""));
+  }
+
+  // Modal para que el empleado solicite que se revise de nuevo una solicitud
+  // de horas extra ya resuelta (aprobada o rechazada) — por ejemplo si el
+  // admin/supervisor se equivocó al resolverla. A diferencia del atajo
+  // directo del admin ("Revertir a pendiente" en Gestión), esto queda en la
+  // cola de "Ajustes pendientes" hasta que el admin lo apruebe o rechace.
+  function abrirModalAjuste(solicitud) {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal-tarjeta">
+        <h2>Solicitar ajuste</h2>
+        <p class="nota">Solicitud del <strong>${solicitud.fecha}</strong> (${solicitud.horaInicio}–${solicitud.horaFin}), actualmente <strong>${ETIQUETAS_ESTATUS[solicitud.estatus] || solicitud.estatus}</strong>. Al aprobarse tu ajuste, vuelve a "Pendiente" para que se revise de nuevo.</p>
+        <div id="ajuste-error" class="error"></div>
+        <label>Motivo del ajuste
+          <textarea id="ajuste-motivo" rows="3"></textarea>
+        </label>
+        <div class="modal-acciones">
+          <button type="button" class="secundario" id="btn-cancelar-ajuste-modal">Cancelar</button>
+          <button type="button" id="btn-enviar-ajuste">Enviar solicitud</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const motivoA = overlay.querySelector("#ajuste-motivo");
+    const errorA = overlay.querySelector("#ajuste-error");
+
+    function cerrar() { overlay.remove(); }
+    overlay.querySelector("#btn-cancelar-ajuste-modal").addEventListener("click", cerrar);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) cerrar(); });
+
+    overlay.querySelector("#btn-enviar-ajuste").addEventListener("click", async () => {
+      errorA.textContent = "";
+      const motivo = motivoA.value.trim();
+      if (!motivo) {
+        errorA.textContent = "Explica brevemente por qué se debe revisar de nuevo.";
+        return;
+      }
+      try {
+        await updateDoc(doc(db, "solicitudes", solicitud.id), {
+          ajusteSolicitud: {
+            tipo: "revertir",
+            motivo,
+            estatus: "pendiente",
+            creadoEn: new Date().toISOString(),
+            comentarioRevisor: null,
+            revisadoPor: null,
+            revisadoPorNombre: null,
+            resueltoEn: null
+          }
+        });
+        cerrar();
+      } catch (err) {
+        errorA.textContent = "No se pudo enviar la solicitud: " + err.message;
+      }
+    });
+  }
+
+  // Historial de ajustes visible para el propio empleado (28 sep 2026,
+  // decisión de Ivan: mismo nivel de detalle que ve el admin, incluyendo
+  // quién lo autorizó — consistente con cómo ya se muestra "Autorizó" en el
+  // resto de la app).
+  function abrirModalHistorialAjustes(solicitud) {
+    const ETIQUETAS_ORIGEN = { directo: "Directo (por el admin)", solicitado: "Solicitado por ti" };
+    const entradas = historialAjustesDe(solicitud);
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal-tarjeta">
+        <h2>Historial de ajustes</h2>
+        <p class="nota">Solicitud del <strong>${solicitud.fecha}</strong> (${solicitud.horaInicio}–${solicitud.horaFin}).</p>
+        <div class="tabla-wrap">
+          <table class="tabla">
+            <thead>
+              <tr><th>Origen</th><th>Resultado anterior</th><th>Motivo</th><th>Resuelto por</th><th>Fecha</th></tr>
+            </thead>
+            <tbody>
+              ${entradas.length === 0 ? `<tr><td colspan="5">Sin movimientos.</td></tr>` : entradas.map(h => `
+                <tr>
+                  <td>${ETIQUETAS_ORIGEN[h.origen] || h.origen || "—"}</td>
+                  <td>${h.estatusAnterior ? (ETIQUETAS_ESTATUS[h.estatusAnterior] || h.estatusAnterior) : "—"}${h.comentarioRevisorAnterior ? ` — ${escapeHtml(h.comentarioRevisorAnterior)}` : ""}</td>
+                  <td>${h.motivo ? escapeHtml(h.motivo) : "—"}</td>
+                  <td>${h.resueltoPorNombre ? escapeHtml(h.resueltoPorNombre) : "—"}</td>
+                  <td>${h.timestamp ? new Date(h.timestamp).toLocaleString("es-MX") : "—"}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+        <div class="modal-acciones">
+          <button type="button" class="secundario" id="btn-cerrar-historial-ajustes">Cerrar</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    function cerrar() { overlay.remove(); }
+    overlay.querySelector("#btn-cerrar-historial-ajustes").addEventListener("click", cerrar);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) cerrar(); });
   }
 }
 

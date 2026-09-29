@@ -229,21 +229,45 @@ ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(mo
     errorDiv.textContent = "No se pudieron cargar tus solicitudes: " + err.message;
   });
 
-  // Botones/badge extra que van junto a "Imprimir formato" en una vacación
-  // ya aprobada, según el estado de su recorteSolicitud (18 sep 2026):
-  // sin recorte activo -> botón para pedirlo; pendiente -> aviso + cancelar;
-  // rechazado -> aviso con el comentario del admin + volver a intentar. Si
-  // ya se mandó a nómina (enviadoANominaEn), ya no se puede recortar.
-  function accionesRecorte(s) {
+  // Botones/badge extra que van junto a "Imprimir formato" en una vacación ya
+  // aprobada (28 sep 2026: unificado en "ajuste", que reemplaza al botón
+  // "Solicitar recorte" de antes — ver abrirModalAjuste). Revisa primero el
+  // campo NUEVO (ajusteSolicitud); si no hay nada ahí, revisa el campo VIEJO
+  // (recorteSolicitud) por compatibilidad con solicitudes que ya estaban en
+  // vuelo antes de este cambio — nunca los dos botones a la vez. Si ya se
+  // mandó a nómina (enviadoANominaEn), ya no se puede ajustar.
+  function accionesAjuste(s) {
     if (s.enviadoANominaEn) return "";
+    const a = s.ajusteSolicitud;
+    if (a && a.estatus === "pendiente") {
+      return ` <span class="badge badge-pendiente">Ajuste en revisión</span> <button type="button" class="secundario btn-cancelar-ajuste">Cancelar ajuste</button>`;
+    }
+    if (a && a.estatus === "rechazada") {
+      return ` <span class="badge badge-rechazada" title="${a.comentarioRevisor ? escapeHtml(a.comentarioRevisor) : "Sin comentario"}">Ajuste rechazado</span> <button type="button" class="secundario btn-solicitar-ajuste">Solicitar de nuevo</button>`;
+    }
+    // Campo viejo (recorteSolicitud) — solo por compatibilidad, para
+    // solicitudes que ya tenían un recorte en vuelo antes de unificar.
     const r = s.recorteSolicitud;
     if (r && r.estatus === "pendiente") {
       return ` <span class="badge badge-pendiente">Recorte en revisión</span> <button type="button" class="secundario btn-cancelar-recorte">Cancelar recorte</button>`;
     }
     if (r && r.estatus === "rechazada") {
-      return ` <span class="badge badge-rechazada" title="${r.comentarioRevisor ? escapeHtml(r.comentarioRevisor) : "Sin comentario"}">Recorte rechazado</span> <button type="button" class="secundario btn-solicitar-recorte">Solicitar de nuevo</button>`;
+      return ` <span class="badge badge-rechazada" title="${r.comentarioRevisor ? escapeHtml(r.comentarioRevisor) : "Sin comentario"}">Recorte rechazado</span> <button type="button" class="secundario btn-solicitar-ajuste">Solicitar de nuevo</button>`;
     }
-    return ` <button type="button" class="secundario btn-solicitar-recorte">Solicitar recorte</button>`;
+    return ` <button type="button" class="secundario btn-solicitar-ajuste">Solicitar ajuste</button>`;
+  }
+
+  // Historial combinado para mostrarle al empleado (28 sep 2026, decisión de
+  // Ivan: visibilidad completa, igual de detallada que lo que ya ve el
+  // admin, incluyendo quién lo autorizó — consistente con cómo ya se muestra
+  // "Autorizó" en el resto de la app). Junta el campo nuevo (historialAjustes)
+  // con el viejo (historialRecortes, que no traía "tipo" porque solo existía
+  // el recorte) y ordena todo del más reciente al más antiguo.
+  function historialCombinado(s) {
+    const nuevos = Array.isArray(s.historialAjustes) ? s.historialAjustes : [];
+    const viejos = (Array.isArray(s.historialRecortes) ? s.historialRecortes : [])
+      .map(h => ({ ...h, tipo: "recorte", aprobadoPorNombre: h.aprobadoPorNombre }));
+    return [...nuevos, ...viejos].sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""));
   }
 
   function renderTabla(filas) {
@@ -265,7 +289,7 @@ ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(mo
             <button type="button" class="btn-editar">Editar</button>
             <button type="button" class="btn-eliminar btn-rechazar">Eliminar</button>
           ` : s.estatus === "aprobada" ? `
-            <button type="button" class="secundario btn-imprimir-formato">Imprimir formato</button>${accionesRecorte(s)}
+            <button type="button" class="secundario btn-imprimir-formato">Imprimir formato</button>${accionesAjuste(s)}${historialCombinado(s).length > 0 ? ` <button type="button" class="secundario btn-ver-historial-ajustes">Ver historial</button>` : ""}
           ` : "—"}
         </td>
       </tr>
@@ -287,13 +311,24 @@ ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(mo
           errorDiv.textContent = "No se pudo eliminar la solicitud: " + err.message;
         }
       });
-      fila.querySelector(".btn-solicitar-recorte")?.addEventListener("click", () => {
+      fila.querySelector(".btn-solicitar-ajuste")?.addEventListener("click", () => {
         if (solicitud.fechaInicio <= hoyStr()) {
-          errorDiv.textContent = "Esta vacación ya inició; ya no se puede recortar desde aquí.";
+          errorDiv.textContent = "Esta vacación ya inició; ya no se puede ajustar desde aquí.";
           return;
         }
-        abrirModalRecorte(solicitud);
+        abrirModalAjuste(solicitud);
       });
+      fila.querySelector(".btn-cancelar-ajuste")?.addEventListener("click", async () => {
+        if (!confirm("¿Cancelar tu solicitud de ajuste? La vacación se queda como está.")) return;
+        try {
+          await updateDoc(doc(db, "solicitudesVacaciones", id), { ajusteSolicitud: null });
+        } catch (err) {
+          errorDiv.textContent = "No se pudo cancelar la solicitud de ajuste: " + err.message;
+        }
+      });
+      // Cancelar del campo viejo (recorteSolicitud) — solo aparece en
+      // solicitudes que ya tenían un recorte pendiente en vuelo antes de
+      // unificar (ver accionesAjuste), se deja funcionando tal cual estaba.
       fila.querySelector(".btn-cancelar-recorte")?.addEventListener("click", async () => {
         if (!confirm("¿Cancelar tu solicitud de recorte? La vacación se queda como está.")) return;
         try {
@@ -302,101 +337,162 @@ ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(mo
           errorDiv.textContent = "No se pudo cancelar la solicitud de recorte: " + err.message;
         }
       });
+      fila.querySelector(".btn-ver-historial-ajustes")?.addEventListener("click", () => {
+        abrirModalHistorialAjustes(solicitud);
+      });
     });
   }
 
-  // Modal para pedir recortar (desde un solo extremo) una vacación ya
-  // aprobada. Solo dos formas válidas: mover la fecha de inicio hacia
-  // adelante (conservando la fecha de fin original) o mover la fecha de fin
-  // hacia atrás (conservando la fecha de inicio original) — nunca ambas a la
-  // vez ni un hueco a la mitad, porque ese escenario no existe hoy (si se
-  // necesitara, la vía es cancelar todo el periodo). No descuenta ni
-  // regresa saldo aquí: eso solo ocurre cuando el admin aprueba el recorte.
-  function abrirModalRecorte(solicitud) {
+  // Modal unificada (28 sep 2026) para pedir un ajuste sobre una vacación ya
+  // aprobada — reemplaza al modal de "recorte" de antes, ofreciendo dos
+  // tipos:
+  //  - "recorte": igual que antes — solo mover UNA fecha hacia adentro
+  //    (conservando la otra igual al original), nunca ampliar ni mover
+  //    ambas a la vez.
+  //  - "cambioFechas": fechas completamente nuevas y libres, para el caso de
+  //    "ya no quiero estos días, quiero otros" (puede pedir más o menos días
+  //    hábiles que el rango actual, con tope en el saldo disponible).
+  // Ninguno de los dos descuenta ni regresa saldo aquí: eso solo ocurre
+  // cuando el admin aprueba el ajuste (ver resolverAjuste() en
+  // aprobacionesVacaciones.js).
+  function abrirModalAjuste(solicitud) {
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
     overlay.innerHTML = `
       <div class="modal-tarjeta">
-        <h2>Solicitar recorte de vacaciones</h2>
-        <p class="nota">Vacación aprobada actual: <strong>${solicitud.fechaInicio} al ${solicitud.fechaFin}</strong> (${solicitud.diasHabiles} día(s) hábil(es)). Recorta moviendo una sola fecha hacia adentro.</p>
-        <div id="recorte-error" class="error"></div>
+        <h2>Solicitar ajuste de vacaciones</h2>
+        <p class="nota">Vacación aprobada actual: <strong>${solicitud.fechaInicio} al ${solicitud.fechaFin}</strong> (${solicitud.diasHabiles} día(s) hábil(es)).</p>
+        <div class="modal-fila" style="margin-bottom:12px;">
+          <label><input type="radio" name="ajuste-tipo" value="recorte" checked> Recortar (acortar el rango actual)</label>
+          <label><input type="radio" name="ajuste-tipo" value="cambioFechas"> Cambiar fechas (pedir fechas distintas)</label>
+        </div>
+        <div id="ajuste-error" class="error"></div>
         <div class="modal-fila">
           <label>Nueva fecha de inicio
-            <input type="date" id="recorte-fecha-inicio" min="${solicitud.fechaInicio}" max="${solicitud.fechaFin}" value="${solicitud.fechaInicio}">
+            <input type="date" id="ajuste-fecha-inicio" value="${solicitud.fechaInicio}">
           </label>
           <label>Nueva fecha de fin
-            <input type="date" id="recorte-fecha-fin" min="${solicitud.fechaInicio}" max="${solicitud.fechaFin}" value="${solicitud.fechaFin}">
+            <input type="date" id="ajuste-fecha-fin" value="${solicitud.fechaFin}">
           </label>
           <div class="resultado-horas">
-            <span class="etiqueta-horas">Días liberados</span>
-            <span id="recorte-dias-liberados" class="valor-horas">0</span>
+            <span class="etiqueta-horas" id="ajuste-dias-etiqueta">Días liberados</span>
+            <span id="ajuste-dias-preview" class="valor-horas">0</span>
           </div>
         </div>
         <label>Motivo (opcional)
-          <textarea id="recorte-motivo" rows="2"></textarea>
+          <textarea id="ajuste-motivo" rows="2"></textarea>
         </label>
         <div class="modal-acciones">
-          <button type="button" class="secundario" id="btn-cancelar-recorte-modal">Cancelar</button>
-          <button type="button" id="btn-enviar-recorte">Enviar solicitud</button>
+          <button type="button" class="secundario" id="btn-cancelar-ajuste-modal">Cancelar</button>
+          <button type="button" id="btn-enviar-ajuste">Enviar solicitud</button>
         </div>
       </div>
     `;
     document.body.appendChild(overlay);
 
-    const inputInicioR = overlay.querySelector("#recorte-fecha-inicio");
-    const inputFinR = overlay.querySelector("#recorte-fecha-fin");
-    const diasLiberadosSpan = overlay.querySelector("#recorte-dias-liberados");
-    const motivoR = overlay.querySelector("#recorte-motivo");
-    const errorR = overlay.querySelector("#recorte-error");
+    const radiosTipo = overlay.querySelectorAll('input[name="ajuste-tipo"]');
+    const inputInicioA = overlay.querySelector("#ajuste-fecha-inicio");
+    const inputFinA = overlay.querySelector("#ajuste-fecha-fin");
+    const etiquetaDias = overlay.querySelector("#ajuste-dias-etiqueta");
+    const diasPreview = overlay.querySelector("#ajuste-dias-preview");
+    const motivoA = overlay.querySelector("#ajuste-motivo");
+    const errorA = overlay.querySelector("#ajuste-error");
+
+    function tipoActual() {
+      return overlay.querySelector('input[name="ajuste-tipo"]:checked').value;
+    }
+
+    function aplicarModoTipo() {
+      if (tipoActual() === "recorte") {
+        inputInicioA.min = solicitud.fechaInicio;
+        inputInicioA.max = solicitud.fechaFin;
+        inputFinA.min = solicitud.fechaInicio;
+        inputFinA.max = solicitud.fechaFin;
+        inputInicioA.value = solicitud.fechaInicio;
+        inputFinA.value = solicitud.fechaFin;
+        etiquetaDias.textContent = "Días liberados";
+      } else {
+        inputInicioA.removeAttribute("min");
+        inputInicioA.removeAttribute("max");
+        inputFinA.removeAttribute("min");
+        inputFinA.removeAttribute("max");
+        inputInicioA.value = "";
+        inputFinA.value = "";
+        etiquetaDias.textContent = "Días hábiles";
+      }
+      actualizarPreview();
+    }
+    radiosTipo.forEach(r => r.addEventListener("change", aplicarModoTipo));
 
     function actualizarPreview() {
-      const nuevaInicio = inputInicioR.value;
-      const nuevaFin = inputFinR.value;
-      if (!nuevaInicio || !nuevaFin) { diasLiberadosSpan.textContent = "0"; return; }
+      const nuevaInicio = inputInicioA.value;
+      const nuevaFin = inputFinA.value;
+      if (!nuevaInicio || !nuevaFin) { diasPreview.textContent = "0"; return; }
       const diasNuevos = calcularDiasHabiles(nuevaInicio, nuevaFin, diaDescansoActual);
-      diasLiberadosSpan.textContent = Math.max(0, solicitud.diasHabiles - diasNuevos);
+      if (tipoActual() === "recorte") {
+        diasPreview.textContent = Math.max(0, solicitud.diasHabiles - diasNuevos);
+      } else {
+        diasPreview.textContent = diasNuevos;
+      }
     }
-    inputInicioR.addEventListener("input", actualizarPreview);
-    inputFinR.addEventListener("input", actualizarPreview);
+    inputInicioA.addEventListener("input", actualizarPreview);
+    inputFinA.addEventListener("input", actualizarPreview);
     actualizarPreview();
 
     function cerrar() { overlay.remove(); }
-    overlay.querySelector("#btn-cancelar-recorte-modal").addEventListener("click", cerrar);
+    overlay.querySelector("#btn-cancelar-ajuste-modal").addEventListener("click", cerrar);
     overlay.addEventListener("click", (e) => { if (e.target === overlay) cerrar(); });
 
-    overlay.querySelector("#btn-enviar-recorte").addEventListener("click", async () => {
-      errorR.textContent = "";
-      const nuevaInicio = inputInicioR.value;
-      const nuevaFin = inputFinR.value;
+    overlay.querySelector("#btn-enviar-ajuste").addEventListener("click", async () => {
+      errorA.textContent = "";
+      const tipo = tipoActual();
+      const nuevaInicio = inputInicioA.value;
+      const nuevaFin = inputFinA.value;
 
       if (!nuevaInicio || !nuevaFin) {
-        errorR.textContent = "Completa ambas fechas.";
+        errorA.textContent = "Completa ambas fechas.";
         return;
       }
-      if (nuevaInicio < solicitud.fechaInicio || nuevaFin > solicitud.fechaFin || nuevaInicio > nuevaFin) {
-        errorR.textContent = "El nuevo rango debe caer dentro del rango ya aprobado.";
-        return;
-      }
-      if (nuevaInicio !== solicitud.fechaInicio && nuevaFin !== solicitud.fechaFin) {
-        errorR.textContent = "Solo puedes recortar desde el inicio o desde el fin, no mover ambas fechas a la vez.";
+      if (nuevaInicio > nuevaFin) {
+        errorA.textContent = "La fecha de fin debe ser igual o posterior a la de inicio.";
         return;
       }
 
       const diasHabilesNuevos = calcularDiasHabiles(nuevaInicio, nuevaFin, diaDescansoActual);
-      const diasLiberados = solicitud.diasHabiles - diasHabilesNuevos;
-      if (diasLiberados <= 0) {
-        errorR.textContent = "El nuevo rango debe ser más corto que el original.";
+      if (diasHabilesNuevos <= 0) {
+        errorA.textContent = "El rango debe cubrir al menos un día hábil.";
         return;
+      }
+
+      if (tipo === "recorte") {
+        if (nuevaInicio < solicitud.fechaInicio || nuevaFin > solicitud.fechaFin) {
+          errorA.textContent = "El nuevo rango debe caer dentro del rango ya aprobado.";
+          return;
+        }
+        if (nuevaInicio !== solicitud.fechaInicio && nuevaFin !== solicitud.fechaFin) {
+          errorA.textContent = "Solo puedes recortar desde el inicio o desde el fin, no mover ambas fechas a la vez.";
+          return;
+        }
+        if (diasHabilesNuevos >= solicitud.diasHabiles) {
+          errorA.textContent = "El nuevo rango debe ser más corto que el original.";
+          return;
+        }
+      } else {
+        const tope = saldoActual + solicitud.diasHabiles;
+        if (diasHabilesNuevos > tope) {
+          errorA.textContent = `No te alcanza el saldo: pides ${diasHabilesNuevos} día(s) y como máximo tienes ${tope} disponible(s) (tu saldo actual más los ${solicitud.diasHabiles} día(s) que liberaría esta vacación).`;
+          return;
+        }
       }
 
       try {
         await updateDoc(doc(db, "solicitudesVacaciones", solicitud.id), {
-          recorteSolicitud: {
+          ajusteSolicitud: {
+            tipo,
             fechaInicioNueva: nuevaInicio,
             fechaFinNueva: nuevaFin,
             diasHabilesNuevos,
-            diasLiberados,
-            motivo: motivoR.value.trim() || null,
+            motivo: motivoA.value.trim() || null,
             estatus: "pendiente",
             creadoEn: new Date().toISOString(),
             comentarioRevisor: null,
@@ -407,9 +503,52 @@ ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(mo
         });
         cerrar();
       } catch (err) {
-        errorR.textContent = "No se pudo enviar la solicitud: " + err.message;
+        errorA.textContent = "No se pudo enviar la solicitud: " + err.message;
       }
     });
+  }
+
+  // Historial de ajustes visible para el propio empleado (28 sep 2026,
+  // decisión de Ivan: mismo nivel de detalle que ve el admin, incluyendo
+  // quién lo autorizó). Junta el historial nuevo con el viejo (ver
+  // historialCombinado arriba) y lo muestra de más reciente a más antiguo.
+  function abrirModalHistorialAjustes(solicitud) {
+    const ETIQUETAS_TIPO = { recorte: "Recorte", cambioFechas: "Cambio de fechas", revertir: "Revertir" };
+    const entradas = historialCombinado(solicitud);
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal-tarjeta">
+        <h2>Historial de ajustes</h2>
+        <p class="nota">Vacación: <strong>${solicitud.fechaInicio} al ${solicitud.fechaFin}</strong> (${solicitud.diasHabiles} día(s) hábil(es) actual(es)).</p>
+        <div class="tabla-wrap">
+          <table class="tabla">
+            <thead>
+              <tr><th>Tipo</th><th>Antes</th><th>Después</th><th>Motivo</th><th>Autorizó</th><th>Fecha</th></tr>
+            </thead>
+            <tbody>
+              ${entradas.length === 0 ? `<tr><td colspan="6">Sin movimientos.</td></tr>` : entradas.map(h => `
+                <tr>
+                  <td>${ETIQUETAS_TIPO[h.tipo] || h.tipo || "—"}</td>
+                  <td>${h.fechaInicioAnterior || "—"} al ${h.fechaFinAnterior || "—"} (${h.diasHabilesAnterior ?? "—"} día(s))</td>
+                  <td>${h.fechaInicioNueva || "—"} al ${h.fechaFinNueva || "—"} (${h.diasHabilesNuevos ?? "—"} día(s))</td>
+                  <td>${h.motivo ? escapeHtml(h.motivo) : "—"}</td>
+                  <td>${h.aprobadoPorNombre || h.resueltoPorNombre ? escapeHtml(h.aprobadoPorNombre || h.resueltoPorNombre) : "—"}</td>
+                  <td>${h.timestamp ? new Date(h.timestamp).toLocaleString("es-MX") : "—"}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+        <div class="modal-acciones">
+          <button type="button" class="secundario" id="btn-cerrar-historial-ajustes">Cerrar</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    function cerrar() { overlay.remove(); }
+    overlay.querySelector("#btn-cerrar-historial-ajustes").addEventListener("click", cerrar);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) cerrar(); });
   }
 }
 
