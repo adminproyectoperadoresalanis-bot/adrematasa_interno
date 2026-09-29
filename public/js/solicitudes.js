@@ -343,6 +343,24 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
           }
         });
         cerrar();
+
+        // Aviso por correo + campanita a quien le toca resolver el ajuste
+        // (29 sep 2026, pedido de Ivan) — mismo mecanismo que ya usa una
+        // solicitud nueva. Mejor esfuerzo: si falla, no afecta el guardado
+        // de arriba, que ya quedó hecho.
+        avisarNuevaSolicitud({
+          datosUsuario,
+          asunto: `Solicitud de ajuste de horas extra de ${datosUsuario.nombre}`,
+          mensaje: `<p style="margin:0 0 12px;">${escapeHtml(datosUsuario.nombre)} solicitó que se revise de nuevo una solicitud de horas extra ya resuelta:</p>
+<p style="margin:0 0 4px;"><strong>Fecha:</strong> ${solicitud.fecha}</p>
+<p style="margin:0 0 4px;"><strong>Horario:</strong> ${solicitud.horaInicio}–${solicitud.horaFin} (${solicitud.horas} h)</p>
+<p style="margin:0 0 4px;"><strong>Resultado actual:</strong> ${ETIQUETAS_ESTATUS[solicitud.estatus] || solicitud.estatus}</p>
+<p style="margin:0 0 12px;"><strong>Motivo del ajuste:</strong> ${escapeHtml(motivo)}</p>
+<p style="margin:0;color:#555;font-size:0.9em;">Entra a Adrematasa Interno para aprobarlo o rechazarlo.</p>`,
+          tituloBell: "Solicitud de ajuste de horas extra",
+          mensajeBell: `${datosUsuario.nombre} solicitó un ajuste para tu revisión`,
+          fechaEventoBell: `${formatearFechaLarga(solicitud.fecha)}, ${solicitud.horaInicio}–${solicitud.horaFin}`
+        });
       } catch (err) {
         errorA.textContent = "No se pudo enviar la solicitud: " + err.message;
       }

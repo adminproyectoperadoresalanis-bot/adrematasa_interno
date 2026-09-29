@@ -281,6 +281,22 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
     };
   }
 
+  // Correo de resultado de un AJUSTE (29 sep 2026, pedido de Ivan) — mismo
+  // patrón que mensajeCorreoSolicitud de arriba, pero para la resolución de
+  // un ajusteSolicitud (recorte o cambio de fechas), no de la solicitud
+  // original.
+  const ETIQUETAS_TIPO_AJUSTE = { recorte: "recorte", cambioFechas: "cambio de fechas" };
+  function mensajeCorreoAjuste(s, ajuste, decision, comentario, usuario) {
+    const aprobada = decision === "aprobada";
+    return {
+      destinatarioEmail: usuario.email || "",
+      destinatarioNombre: s.empleadoNombre || usuario.nombre || "",
+      asunto: `Ajuste de vacaciones ${aprobada ? "aprobado" : "rechazado"} — Alanis`,
+      mensaje: `<p style="margin:0 0 12px;">Tu solicitud de ${ETIQUETAS_TIPO_AJUSTE[ajuste.tipo] || ajuste.tipo} sobre la vacación del ${s.fechaInicio} al ${s.fechaFin} fue:</p>
+<p style="margin:0 0 12px;"><span style="display:inline-block;padding:4px 12px;border-radius:4px;font-weight:bold;background:${aprobada ? "#e7f5ec" : "#fdecea"};color:${aprobada ? "#1c7a41" : "#c0392b"};">${aprobada ? "APROBADA ✅" : "RECHAZADA"}</span></p>${aprobada ? `<p style="margin:0 0 12px;">Tu vacación ahora es del ${ajuste.fechaInicioNueva} al ${ajuste.fechaFinNueva}.</p>` : ""}${comentario ? `<p style="margin:0;color:#555;font-size:0.9em;">Comentario: ${escapeHtml(comentario)}</p>` : ""}`
+    };
+  }
+
   async function resolverSolicitud(solicitud, estatus, comentario) {
     errorDiv.textContent = "";
     const id = solicitud.id;
@@ -509,6 +525,15 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
           : `Tu solicitud de ajuste sobre el ${solicitud.fechaInicio} al ${solicitud.fechaFin} fue rechazada${comentario ? ": " + comentario : "."}`,
         tipo: aprobada ? "aprobacion" : "rechazo"
       });
+
+      // Aviso por correo al empleado (29 sep 2026, pedido de Ivan) — mejor
+      // esfuerzo, igual que el de una solicitud normal: si falla no tumba
+      // la resolución del ajuste, que ya quedó guardada arriba.
+      const usuarioAjuste = usuariosPorId[empleadoId] || {};
+      enviarCorreoResultado(mensajeCorreoAjuste(solicitud, ajuste, decision, comentario, usuarioAjuste))
+        .then(resultado => {
+          if (!resultado.ok) console.error("No se pudo enviar el correo de aviso del ajuste:", resultado.error);
+        });
     } catch (err) {
       errorDiv.textContent = "No se pudo resolver el ajuste: " + err.message;
     }

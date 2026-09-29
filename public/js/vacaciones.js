@@ -485,6 +485,8 @@ ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(mo
         }
       }
 
+      const motivoTexto = motivoA.value.trim();
+
       try {
         await updateDoc(doc(db, "solicitudesVacaciones", solicitud.id), {
           ajusteSolicitud: {
@@ -492,7 +494,7 @@ ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(mo
             fechaInicioNueva: nuevaInicio,
             fechaFinNueva: nuevaFin,
             diasHabilesNuevos,
-            motivo: motivoA.value.trim() || null,
+            motivo: motivoTexto || null,
             estatus: "pendiente",
             creadoEn: new Date().toISOString(),
             comentarioRevisor: null,
@@ -502,6 +504,26 @@ ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(mo
           }
         });
         cerrar();
+
+        // Aviso por correo + campanita a quien le toca resolver el ajuste
+        // (29 sep 2026, pedido de Ivan) — mismo mecanismo que ya usa una
+        // solicitud nueva (avisarNuevaSolicitud calcula el destinatario:
+        // el supervisor del empleado, o un admin si no tiene). Mejor
+        // esfuerzo: si falla, no afecta el guardado de arriba, que ya
+        // quedó hecho.
+        const ETIQUETAS_TIPO_AJUSTE = { recorte: "recorte", cambioFechas: "cambio de fechas" };
+        avisarNuevaSolicitud({
+          datosUsuario: datosUsuarioActuales,
+          asunto: `Solicitud de ajuste de vacaciones de ${datosUsuarioActuales.nombre}`,
+          mensaje: `<p style="margin:0 0 12px;">${escapeHtml(datosUsuarioActuales.nombre)} solicitó un ${ETIQUETAS_TIPO_AJUSTE[tipo] || tipo} sobre una vacación ya aprobada:</p>
+<p style="margin:0 0 4px;"><strong>Vacación actual:</strong> ${solicitud.fechaInicio} al ${solicitud.fechaFin} (${solicitud.diasHabiles} día(s))</p>
+<p style="margin:0 0 4px;"><strong>Nuevo rango solicitado:</strong> ${nuevaInicio} al ${nuevaFin} (${diasHabilesNuevos} día(s))</p>
+${motivoTexto ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(motivoTexto)}</p>` : ""}
+<p style="margin:0;color:#555;font-size:0.9em;">Entra a Adrematasa Interno para aprobarlo o rechazarlo.</p>`,
+          tituloBell: "Solicitud de ajuste de vacaciones",
+          mensajeBell: `${datosUsuarioActuales.nombre} solicitó un ajuste para tu revisión`,
+          fechaEventoBell: formatearRangoFechas(nuevaInicio, nuevaFin)
+        });
       } catch (err) {
         errorA.textContent = "No se pudo enviar la solicitud: " + err.message;
       }
