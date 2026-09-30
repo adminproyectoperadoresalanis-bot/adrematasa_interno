@@ -386,6 +386,7 @@ service cloud.firestore {
       // ya existía, se re-sincroniza todo de nuevo con el valor corregido.
       allow update: if esSupervisorOAdmin()
         && resource.data.origenEscaneo != null
+        && resource.data.get('uuidEsperado', null) != null
         && request.resource.data.embarqueId == resource.data.embarqueId
         && request.resource.data.origenEscaneo.escaneadoPor == resource.data.origenEscaneo.escaneadoPor
         && request.resource.data.uuidEsperado is string
@@ -410,6 +411,7 @@ service cloud.firestore {
       allow update: if esValidador2()
         && resource.data.origenEscaneo != null
         && resource.data.get('validacion2', null) == null
+        && resource.data.get('uuidEsperado', null) != null
         && request.resource.data.embarqueId == resource.data.embarqueId
         && request.resource.data.uuidEsperado == resource.data.uuidEsperado
         && request.resource.data.receptorRFCEsperado == resource.data.receptorRFCEsperado

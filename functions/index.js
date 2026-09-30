@@ -47,6 +47,7 @@ const COLECCION_PENDIENTES = "embarques_pendientes_origen";
 const COLECCION_SOLICITUDES_BORRADO = "solicitudes_borrado_prueba";
 const COLECCION_SOLICITUDES_REINICIO = "solicitudes_reinicio_flujo";
 const COLECCION_HISTORIAL_REINICIOS = "historial_reinicios_flujo";
+const COLECCION_QR_INTERNOS = "qr_internos_generados";
 
 const brevoApiKey = defineSecret("BREVO_API_KEY");
 
@@ -162,6 +163,17 @@ exports.procesarSolicitudReinicioFlujo = onDocumentCreated(
       }
 
       await dbLocal.collection(COLECCION_LOCAL).doc(embarqueId).delete();
+
+      // FIX 2026-09-30 (Ivan): "Reiniciar flujo" nunca borraba el QR interno
+      // generado (qr_internos_generados es create-only). Si un embarque sin
+      // factura ya tenía un QR generado antes del reinicio, ese documento
+      // sobrevivía y bloqueaba a "Asignar operador y generar QR (sin
+      // factura)" con "Missing or insufficient permissions" — Firestore lo
+      // trataba como update (solo permite cambiar operadorNombre) en vez de
+      // create. .delete() en un doc que no existe no truena, así que es
+      // seguro llamarlo siempre, aunque el embarque haya sido con factura
+      // real y nunca haya tenido QR interno.
+      await dbLocal.collection(COLECCION_QR_INTERNOS).doc(embarqueId).delete();
     } catch (error) {
       logger.error(`[procesarSolicitudReinicioFlujo] embarqueId ${embarqueId}: ${error.message}`, error);
     } finally {
