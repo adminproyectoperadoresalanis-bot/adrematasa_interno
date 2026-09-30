@@ -2418,15 +2418,37 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     h2.textContent = "SIN FACTURA — CONTROL INTERNO";
     const info = document.createElement("p");
     info.textContent = infoQrInterno.textContent;
-    const imagenWrap = document.createElement("div");
+        const imagenWrap = document.createElement("div");
     imagenWrap.className = "qr-interno-imagen-wrap";
-    // Clona el contenedor ya dibujado por qrcodejs (deja un <img> con el QR
-    // como data URL adentro, así que clonarlo alcanza — no hace falta
-    // volver a generar el código). Se le quita el id para no dejar dos
-    // elementos con el mismo #qr-interno-canvas en el documento a la vez.
-    const clonImagenQr = contenedorQrInterno.cloneNode(true);
-    clonImagenQr.removeAttribute("id");
-    imagenWrap.appendChild(clonImagenQr);
+    // FIX (2026-09-30): antes se clonaba el contenedor de qrcodejs tal cual,
+    // asumiendo que la librería ya había terminado su swap interno de
+    // <canvas> a <img> (dibuja primero en canvas y DESPUÉS, de forma
+    // asíncrona, lo reemplaza por un <img> con el QR ya horneado como data
+    // URL, ocultando el canvas). Si se toca "Imprimir" antes de que ese
+    // swap termine, el contenedor todavía tenía solo el <canvas> vivo — y
+    // cloneNode() de un <canvas> NO copia el dibujo (el bitmap no es un
+    // atributo del DOM), así que la tarjeta impresa salía en blanco aunque
+    // en pantalla se viera bien un segundo antes. Ahora se arma la imagen a
+    // mano, sin depender de ese timing: busca un <img> ya listo (con src);
+    // si no existe todavía, lee el <canvas> directo con toDataURL(), que es
+    // síncrono y siempre refleja el dibujo actual.
+    let imgListo = contenedorQrInterno.querySelector("img");
+    if (!imgListo || !imgListo.src) {
+      const canvasQr = contenedorQrInterno.querySelector("canvas");
+      if (canvasQr) {
+        imgListo = document.createElement("img");
+        imgListo.src = canvasQr.toDataURL("image/png");
+        imgListo.width = canvasQr.width;
+        imgListo.height = canvasQr.height;
+      }
+    }
+    if (imgListo) {
+      const imagenQrImpresa = document.createElement("img");
+      imagenQrImpresa.src = imgListo.src;
+      imagenQrImpresa.width = imgListo.width || 220;
+      imagenQrImpresa.height = imgListo.height || 220;
+      imagenWrap.appendChild(imagenQrImpresa);
+    }
     const etiquetaImpresa = document.createElement("div");
     etiquetaImpresa.className = "qr-interno-etiqueta-impresa";
     etiquetaImpresa.textContent = etiquetaQrInterno.textContent;
