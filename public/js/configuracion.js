@@ -2,7 +2,7 @@ import { db } from "./firebase-config.js";
 import {
   doc, setDoc, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
-import { UMBRALES_DEFAULT } from "./vacacionesCalculo.js";
+import { UMBRALES_DEFAULT, FESTIVOS_DEFAULT } from "./vacacionesCalculo.js";
 import { AREAS_DEFAULT } from "./estructuraOrganizacional.js";
 
 export function iniciarConfiguracion(contenedor) {
@@ -33,6 +33,37 @@ export function iniciarConfiguracion(contenedor) {
       <div class="acciones-form" style="margin-top:14px;">
         <button type="button" id="btn-agregar-umbral" class="secundario">+ Agregar rango</button>
         <button type="button" id="btn-guardar-umbrales">Guardar cambios</button>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-top:20px;">
+      <h2>Días festivos oficiales</h2>
+      <p class="nota">
+        Catálogo de días festivos conforme al artículo 74 de la Ley Federal del Trabajo. Un
+        festivo que cae dentro de una vacación aprobada no se cobra del saldo (igual que el día
+        de descanso semanal de cada empleado), y si el "Retorno a labores" del formato ATAF050
+        cae justo en un festivo, se recorre automáticamente al siguiente día hábil. Varias de
+        estas fechas son móviles (el "lunes conmemorativo" de febrero, marzo y noviembre) o
+        pueden surgir festivos irregulares (jornadas electorales, etc.), así que este catálogo
+        debe revisarse y actualizarse cada año.
+      </p>
+      <div id="festivos-error" class="error"></div>
+      <p id="festivos-exito" class="nota oculto" style="color:#1c7a41;"></p>
+      <div class="tabla-wrap">
+        <table class="tabla" id="tabla-festivos">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Nombre</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tbody-festivos"></tbody>
+        </table>
+      </div>
+      <div class="acciones-form" style="margin-top:14px;">
+        <button type="button" id="btn-agregar-festivo" class="secundario">+ Agregar festivo</button>
+        <button type="button" id="btn-guardar-festivos">Guardar cambios</button>
       </div>
     </section>
 
@@ -153,6 +184,87 @@ export function iniciarConfiguracion(contenedor) {
       exitoP.classList.remove("oculto");
     } catch (err) {
       errorDiv.textContent = "No se pudo guardar: " + err.message;
+    }
+  });
+
+  // --- Días festivos oficiales (1 oct 2026) ---
+
+  const tbodyFestivos = contenedor.querySelector("#tbody-festivos");
+  const errorFestivosDiv = contenedor.querySelector("#festivos-error");
+  const exitoFestivosP = contenedor.querySelector("#festivos-exito");
+  const btnAgregarFestivo = contenedor.querySelector("#btn-agregar-festivo");
+  const btnGuardarFestivos = contenedor.querySelector("#btn-guardar-festivos");
+
+  const refFestivos = doc(db, "configuracion", "diasFestivos");
+  let festivos = [];
+
+  onSnapshot(refFestivos, (snap) => {
+    const datos = snap.exists() ? snap.data().festivos : null;
+    festivos = Array.isArray(datos) && datos.length > 0
+      ? [...datos].sort((a, b) => (a.fecha || "").localeCompare(b.fecha || ""))
+      : FESTIVOS_DEFAULT.map(f => ({ ...f }));
+    renderFestivos();
+  }, (err) => {
+    errorFestivosDiv.textContent = "No se pudo cargar la configuración: " + err.message;
+  });
+
+  function renderFestivos() {
+    if (festivos.length === 0) {
+      tbodyFestivos.innerHTML = `<tr><td colspan="3">No hay festivos definidos. Agrega al menos uno.</td></tr>`;
+      return;
+    }
+
+    tbodyFestivos.innerHTML = festivos.map((f, i) => `
+      <tr data-i="${i}">
+        <td><input type="date" class="input-festivo-fecha" value="${f.fecha || ""}"></td>
+        <td><input type="text" class="input-festivo-nombre" value="${escapeHtml(f.nombre || "")}" placeholder="Nombre del festivo"></td>
+        <td class="acciones"><button type="button" class="btn-rechazar btn-quitar-festivo">Quitar</button></td>
+      </tr>
+    `).join("");
+
+    tbodyFestivos.querySelectorAll("tr[data-i]").forEach(fila => {
+      const i = Number(fila.dataset.i);
+      fila.querySelector(".input-festivo-fecha").addEventListener("input", (e) => {
+        festivos[i].fecha = e.target.value;
+      });
+      fila.querySelector(".input-festivo-nombre").addEventListener("input", (e) => {
+        festivos[i].nombre = e.target.value;
+      });
+      fila.querySelector(".btn-quitar-festivo").addEventListener("click", () => {
+        festivos.splice(i, 1);
+        renderFestivos();
+      });
+    });
+  }
+
+  btnAgregarFestivo.addEventListener("click", () => {
+    festivos.push({ fecha: "", nombre: "" });
+    renderFestivos();
+  });
+
+  btnGuardarFestivos.addEventListener("click", async () => {
+    errorFestivosDiv.textContent = "";
+    exitoFestivosP.classList.add("oculto");
+
+    const limpios = festivos
+      .map(f => ({ fecha: (f.fecha || "").trim(), nombre: (f.nombre || "").trim() }))
+      .filter(f => f.fecha !== "")
+      .sort((a, b) => a.fecha.localeCompare(b.fecha));
+
+    const fechasUnicas = new Set(limpios.map(f => f.fecha));
+    if (fechasUnicas.size !== limpios.length) {
+      errorFestivosDiv.textContent = "Hay fechas repetidas en el catálogo de festivos.";
+      return;
+    }
+
+    try {
+      await setDoc(refFestivos, { festivos: limpios, actualizadoEn: new Date().toISOString() });
+      festivos = limpios;
+      renderFestivos();
+      exitoFestivosP.textContent = "Cambios guardados. Se aplicarán en el próximo cálculo de vacaciones (no afecta solicitudes ya hechas).";
+      exitoFestivosP.classList.remove("oculto");
+    } catch (err) {
+      errorFestivosDiv.textContent = "No se pudo guardar: " + err.message;
     }
   });
 

@@ -4,6 +4,14 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { abrirFormatoVacacionesImprimir } from "./formatoVacaciones.js";
 import { avisarNuevaSolicitud } from "./avisoNuevaSolicitud.js";
+import { suscribirFestivos, FESTIVOS_DEFAULT, esFestivo } from "./vacacionesCalculo.js";
+
+// Catálogo de festivos en vivo (1 oct 2026) — se usa para que un día festivo
+// oficial no cuente como hábil, igual que ya pasa con el día de descanso
+// semanal del empleado. Antes de que llegue el primer snapshot usa el
+// catálogo oficial por default, para no bloquear el primer cálculo.
+let festivosActuales = FESTIVOS_DEFAULT;
+suscribirFestivos((festivos) => { festivosActuales = festivos; });
 
 const ETIQUETAS_ESTATUS = {
   pendiente: "Pendiente",
@@ -14,17 +22,21 @@ const ETIQUETAS_ESTATUS = {
 const NOMBRES_DIA = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 
 // diaDescanso: 0=domingo ... 6=sabado — el único día de la semana que no cuenta como hábil para este empleado.
+// festivos: catálogo de días festivos oficiales (ver vacacionesCalculo.js) —
+// tampoco cuentan como hábiles, igual que ya no se cobra el día de descanso
+// semanal (1 oct 2026).
 // Exportada (18 sep 2026) para que el modal de "recorte de vacaciones" use
 // exactamente el mismo cálculo al mostrar cuántos días se liberarían, sin
 // duplicar la lógica.
-export function calcularDiasHabiles(fechaInicioStr, fechaFinStr, diaDescanso) {
+export function calcularDiasHabiles(fechaInicioStr, fechaFinStr, diaDescanso, festivos) {
   const inicio = new Date(fechaInicioStr + "T00:00:00");
   const fin = new Date(fechaFinStr + "T00:00:00");
   if (fin < inicio) return 0;
   let dias = 0;
   const cursor = new Date(inicio);
   while (cursor <= fin) {
-    if (cursor.getDay() !== diaDescanso) dias++;
+    const fechaStr = cursor.toISOString().slice(0, 10);
+    if (cursor.getDay() !== diaDescanso && !esFestivo(fechaStr, festivos)) dias++;
     cursor.setDate(cursor.getDate() + 1);
   }
   return dias;
@@ -115,7 +127,7 @@ export function iniciarVistaVacacionesEmpleado(contenedor, datosUsuario, uid) {
 
   function actualizarDiasPreview() {
     if (inputInicio.value && inputFin.value) {
-      const dias = calcularDiasHabiles(inputInicio.value, inputFin.value, diaDescansoActual);
+      const dias = calcularDiasHabiles(inputInicio.value, inputFin.value, diaDescansoActual, festivosActuales);
       diasCalculados.textContent = dias;
     } else {
       diasCalculados.textContent = "—";
@@ -160,7 +172,7 @@ export function iniciarVistaVacacionesEmpleado(contenedor, datosUsuario, uid) {
       return;
     }
 
-    const diasHabiles = calcularDiasHabiles(fechaInicio, fechaFin, diaDescansoActual);
+    const diasHabiles = calcularDiasHabiles(fechaInicio, fechaFin, diaDescansoActual, festivosActuales);
     if (diasHabiles <= 0) {
       errorDiv.textContent = "La fecha de fin debe ser igual o posterior a la de inicio (y cubrir al menos un día hábil).";
       return;
@@ -428,7 +440,7 @@ ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(mo
       const nuevaInicio = inputInicioA.value;
       const nuevaFin = inputFinA.value;
       if (!nuevaInicio || !nuevaFin) { diasPreview.textContent = "0"; return; }
-      const diasNuevos = calcularDiasHabiles(nuevaInicio, nuevaFin, diaDescansoActual);
+      const diasNuevos = calcularDiasHabiles(nuevaInicio, nuevaFin, diaDescansoActual, festivosActuales);
       if (tipoActual() === "recorte") {
         diasPreview.textContent = Math.max(0, solicitud.diasHabiles - diasNuevos);
       } else {
@@ -458,7 +470,7 @@ ${motivo ? `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(mo
         return;
       }
 
-      const diasHabilesNuevos = calcularDiasHabiles(nuevaInicio, nuevaFin, diaDescansoActual);
+      const diasHabilesNuevos = calcularDiasHabiles(nuevaInicio, nuevaFin, diaDescansoActual, festivosActuales);
       if (diasHabilesNuevos <= 0) {
         errorA.textContent = "El rango debe cubrir al menos un día hábil.";
         return;

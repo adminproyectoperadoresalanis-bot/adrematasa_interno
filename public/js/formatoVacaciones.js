@@ -1,4 +1,4 @@
-import { calcularAniosAntiguedad, diasSegunAntiguedad, suscribirUmbrales, UMBRALES_DEFAULT } from "./vacacionesCalculo.js";
+import { calcularAniosAntiguedad, diasSegunAntiguedad, suscribirUmbrales, UMBRALES_DEFAULT, suscribirFestivos, FESTIVOS_DEFAULT, esFestivo } from "./vacacionesCalculo.js";
 
 // Digitalización del ATAF050 "Formato de solicitud de días de vacaciones" —
 // mismo contenido/orden que el PDF oficial, pero pensado para imprimirse ya
@@ -6,6 +6,12 @@ import { calcularAniosAntiguedad, diasSegunAntiguedad, suscribirUmbrales, UMBRAL
 
 let umbralesActuales = UMBRALES_DEFAULT;
 suscribirUmbrales((umbrales) => { umbralesActuales = umbrales; });
+
+// Catálogo de festivos en vivo (1 oct 2026) — para que "Retorno a labores" no
+// caiga nunca en un día festivo oficial, igual que ya no cae en el día de
+// descanso semanal del empleado.
+let festivosActuales = FESTIVOS_DEFAULT;
+suscribirFestivos((festivos) => { festivosActuales = festivos; });
 
 const MESES_LARGO = [
   "enero", "febrero", "marzo", "abril", "mayo", "junio",
@@ -33,11 +39,17 @@ function sumarDias(fechaStr, n) {
 }
 
 // El día en que regresa a laborar es el siguiente al fin de vacaciones; si
-// ese día cae justo en su día de descanso, el regreso real es un día después.
-function calcularRetornoLabores(fechaFinStr, diaDescanso) {
+// ese día cae en su día de descanso semanal o es un festivo oficial, se
+// recorre al día siguiente, y así sucesivamente hasta caer en un día hábil
+// (1 oct 2026: antes solo se recorría un paso y solo por día de descanso —
+// ahora es un ciclo para cubrir festivos consecutivos con el descanso
+// semanal, por ejemplo un festivo justo antes o después del día libre).
+function calcularRetornoLabores(fechaFinStr, diaDescanso, festivos) {
   let retorno = sumarDias(fechaFinStr, 1);
-  const dow = new Date(retorno + "T00:00:00").getDay();
-  if (diaDescanso !== null && diaDescanso !== undefined && dow === diaDescanso) {
+  while (true) {
+    const dow = new Date(retorno + "T00:00:00").getDay();
+    const esDescanso = diaDescanso !== null && diaDescanso !== undefined && dow === diaDescanso;
+    if (!esDescanso && !esFestivo(retorno, festivos)) break;
     retorno = sumarDias(retorno, 1);
   }
   return retorno;
@@ -77,7 +89,7 @@ function escapeHtml(texto) {
 // saldoActual / diaDescansoActual: los valores más recientes que ya tiene la vista en memoria.
 export function abrirFormatoVacacionesImprimir(solicitud, datosUsuario, saldoActual, diaDescansoActual) {
   const periodo = calcularPeriodoVacacional(datosUsuario.fechaIngreso, solicitud.fechaInicio);
-  const retorno = calcularRetornoLabores(solicitud.fechaFin, diaDescansoActual);
+  const retorno = calcularRetornoLabores(solicitud.fechaFin, diaDescansoActual, festivosActuales);
   const logoUrl = window.location.origin + "/img/logo-alanis.png";
 
   const fechaDocumento = formatearFechaDDMMYYYY((solicitud.creadoEn || "").slice(0, 10)) || formatearFechaDDMMYYYY(solicitud.fechaInicio);
