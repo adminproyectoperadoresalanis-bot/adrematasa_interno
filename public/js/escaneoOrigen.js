@@ -370,6 +370,16 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         color: #6b6558; text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
       }
       .semaforo-ver-validados:hover { color: #2c1e0f; }
+      .semaforo-busqueda-info { color: #6b6558; font-size: 12.5px; }
+
+      /* Buscador tipo LIKE de Seguimiento e Historial (2026-10-05, pedido de Ivan) */
+      .buscador { position: relative; margin: 0 0 10px; max-width: 420px; }
+      .buscador input {
+        width: 100%; box-sizing: border-box; font: inherit; font-size: 13.5px; color: #2c1e0f;
+        border: 1px solid #e7e3dc; background: #fff; border-radius: 8px; padding: 9px 12px 9px 34px; margin: 0;
+      }
+      .buscador input:focus { outline: none; border-color: #2c1e0f; }
+      .buscador-icono { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: #a8a29a; pointer-events: none; font-size: 13px; line-height: 1; }
 
       .paginador { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 4px 2px; }
       .paginador:empty { display: none; }
@@ -719,6 +729,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <span class="semaforo-chip-espera oculto" id="semaforo-chip-espera"><span class="semaforo-chip-dot"></span><span id="semaforo-chip-espera-texto"></span></span>
       </div>
       <p class="nota">Embarques en proceso por las 4 etapas — los ya validados salen de aquí y se consultan en el Historial de escaneos. El color del número de embarque indica si ya sincronizó con Alanis Operadores (verde = sí, gris = en camino o esperando su turno, rojo = error).</p>
+      <div class="buscador"><span class="buscador-icono" aria-hidden="true">&#9906;</span><input type="search" id="buscar-semaforo" placeholder="Buscar embarque, caja, operador, UUID…" autocomplete="off" aria-label="Buscar en Seguimiento de embarques"></div>
       <div class="semaforo-resumen" id="semaforo-resumen"></div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-semaforo">
@@ -741,6 +752,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       <h2>Historial de escaneos</h2>
       <p class="nota">Da clic en un embarque para ver el detalle completo (UUID, RFC, las 4 validaciones). El color del nombre del embarque indica si ya sincronizó con Alanis Operadores (verde = sí, gris = en camino, rojo = error).</p>
       <div id="historial-origen-error" class="error"></div>
+      <div class="buscador"><span class="buscador-icono" aria-hidden="true">&#9906;</span><input type="search" id="buscar-historial" placeholder="Buscar embarque, caja, operador, UUID…" autocomplete="off" aria-label="Buscar en Historial de escaneos"></div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-historial-origen">
           <thead>
@@ -941,6 +953,9 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   let semaforoVerValidados = false;
   let historialPagina = 1;
   let historialPorPagina = 5;
+  // Búsqueda tipo LIKE (2026-10-05): texto crudo que escribe el usuario.
+  let busquedaSemaforo = "";
+  let busquedaHistorial = "";
 
   // Corrección de McCain (2026-09-09):
   // - correccionesReconocidas: ids de embarques cuyo banner de corrección
@@ -983,9 +998,26 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const semaforoResumen = contenedor.querySelector("#semaforo-resumen");
   const paginadorHistorial = contenedor.querySelector("#paginador-historial");
   let ultimoHtmlPaginador = null;
+  const inputBuscarSemaforo = contenedor.querySelector("#buscar-semaforo");
+  const inputBuscarHistorial = contenedor.querySelector("#buscar-historial");
 
   // Un solo listener por contenedor (el HTML interno se re-dibuja en cada
   // snapshot, así que se delega en vez de re-enganchar cada vez).
+  // Los inputs viven FUERA de lo que se re-dibuja (solo cambian los tbody),
+  // así que no pierden el foco ni lo escrito cuando llega un snapshot.
+  if (inputBuscarSemaforo) {
+    inputBuscarSemaforo.addEventListener("input", () => {
+      busquedaSemaforo = inputBuscarSemaforo.value;
+      renderSemaforo();
+    });
+  }
+  if (inputBuscarHistorial) {
+    inputBuscarHistorial.addEventListener("input", () => {
+      busquedaHistorial = inputBuscarHistorial.value;
+      historialPagina = 1;
+      renderHistorial();
+    });
+  }
   if (semaforoResumen) {
     semaforoResumen.addEventListener("click", (e) => {
       if (!e.target.closest(".semaforo-ver-validados")) return;
@@ -1455,15 +1487,47 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     return r.estatusValidacion === "DISCREPANCIA" || r.recepcionResultado === "NO_COINCIDE_DOCUMENTO";
   }
 
+  // Búsqueda tipo LIKE (2026-10-05, pedido de Ivan): sin importar mayúsculas
+  // ni acentos, y "contiene" en cualquier parte del texto. Varias palabras =
+  // todas deben aparecer (en cualquier orden): "faustino 6503" encuentra el
+  // embarque 6503… de Javier Faustino. Campos: embarque, caja, cliente,
+  // operador asignado (nombre y número), operador de Pre entrega, UUID y RFC.
+  function normalizarBusqueda_(t) {
+    return String(t == null ? "" : t).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  }
+  function tokensBusqueda_(texto) {
+    return normalizarBusqueda_(texto).split(/\s+/).filter(Boolean);
+  }
+  function textoBusquedaEmbarque_(f, r) {
+    const oa = f.operadorAsignado || {};
+    return normalizarBusqueda_([
+      f.embarqueId, f.id,
+      f.origenEscaneo && f.origenEscaneo.caja,
+      f.clienteNombre || "McCain",
+      oa.nombre, oa.numero,
+      r && nombreOperador_(r.recepcionOperadorUid, r.recepcionOperadorNombre),
+      f.uuidEsperado, f.receptorRFCEsperado
+    ].filter(v => v != null && v !== "").join(" "));
+  }
+  function coincideBusqueda_(tokens, f, r) {
+    if (tokens.length === 0) return true;
+    const t = textoBusquedaEmbarque_(f, r);
+    return tokens.every(k => t.includes(k));
+  }
+
   // Chips "N en proceso" / "N con discrepancia" + enlace "Ver validados (N)".
-  function renderResumenSemaforo_(todos, validados, resultadosPorId) {
+  // infoBusqueda (opcional): mientras se busca, el enlace se oculta (la
+  // búsqueda ya incluye validados) y se muestra el conteo de resultados.
+  function renderResumenSemaforo_(todos, validados, resultadosPorId, infoBusqueda) {
     if (!semaforoResumen) return;
     const nDisc = todos.filter(f => esEmbarqueConDiscrepancia_(resultadosPorId.get(f.id))).length;
     const nEnProceso = todos.length - validados.length - nDisc;
     let html = "";
     if (nEnProceso > 0) html += `<span class="semaforo-chip-espera"><span class="semaforo-chip-dot"></span>${nEnProceso} en proceso</span>`;
     if (nDisc > 0) html += `<span class="semaforo-chip-espera semaforo-chip-disc"><span class="semaforo-chip-dot"></span>${nDisc} con discrepancia</span>`;
-    if (validados.length > 0) {
+    if (infoBusqueda) {
+      html += `<span class="semaforo-busqueda-info">${infoBusqueda}</span>`;
+    } else if (validados.length > 0) {
       html += `<button type="button" class="semaforo-ver-validados">${semaforoVerValidados ? "Ocultar validados" : `Ver validados (${validados.length})`}</button>`;
     }
     semaforoResumen.innerHTML = html;
@@ -1486,7 +1550,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   // Se vuelve a escribir en cada snapshot, pero solo si el HTML cambió —
   // así un snapshot que llega con el selector "Por página" abierto no lo
   // cierra de golpe.
-  function renderPaginadorHistorial_(total, ini, fin, totalPaginas) {
+  function renderPaginadorHistorial_(total, ini, fin, totalPaginas, totalGeneral) {
     if (!paginadorHistorial) return;
     let html = "";
     if (total > 0) {
@@ -1501,7 +1565,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
           `<button type="button" class="paginador-btn" data-pag="${historialPagina + 1}" ${historialPagina === totalPaginas ? "disabled" : ""} aria-label="Página siguiente">›</button>`;
       }
       html = `
-        <div class="paginador-info">Mostrando ${ini + 1}–${fin} de ${total}</div>
+        <div class="paginador-info">Mostrando ${ini + 1}–${fin} de ${total}${totalGeneral > total ? ` (filtrado de ${totalGeneral})` : ""}</div>
         <div class="paginador-ctrl">
           <label for="paginador-por-pagina">Por página</label>
           <select id="paginador-por-pagina">${opciones}</select>
@@ -1575,12 +1639,24 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     // que se pida "Ver validados" — en ese caso quedan al final (el orden
     // por etapas cumplidas ya los manda abajo).
     const validados = historialOrdenado.filter(f => esEmbarqueValidado_(resultadosPorId.get(f.id)));
-    const visibles = semaforoVerValidados
-      ? historialOrdenado
-      : historialOrdenado.filter(f => !esEmbarqueValidado_(resultadosPorId.get(f.id)));
-    renderResumenSemaforo_(historialOrdenado, validados, resultadosPorId);
+    // Con búsqueda activa se busca en TODOS (validados incluidos): si no, un
+    // embarque ya validado "no existiría" para quien lo está buscando.
+    const tokens = tokensBusqueda_(busquedaSemaforo);
+    const buscando = tokens.length > 0;
+    let visibles;
+    if (buscando) {
+      visibles = historialOrdenado.filter(f => coincideBusqueda_(tokens, f, resultadosPorId.get(f.id)));
+    } else {
+      visibles = semaforoVerValidados
+        ? historialOrdenado
+        : historialOrdenado.filter(f => !esEmbarqueValidado_(resultadosPorId.get(f.id)));
+    }
+    renderResumenSemaforo_(historialOrdenado, validados, resultadosPorId,
+      buscando ? `${visibles.length} de ${historialOrdenado.length} · incluye validados` : "");
     if (visibles.length === 0) {
-      tbodySemaforo.innerHTML = `<tr><td colspan="2"><strong>Todo al día</strong> — no hay embarques pendientes.</td></tr>`;
+      tbodySemaforo.innerHTML = buscando
+        ? `<tr><td colspan="2">Sin coincidencias para «${escapeHtml(busquedaSemaforo.trim())}».</td></tr>`
+        : `<tr><td colspan="2"><strong>Todo al día</strong> — no hay embarques pendientes.</td></tr>`;
       return;
     }
 
@@ -1914,23 +1990,34 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   function renderHistorial() {
     if (listaHistorial.length === 0) {
       tbodyHistorial.innerHTML = `<tr><td colspan="${mostrarColumnaAcciones ? 3 : 2}">Todavía no hay escaneos de origen.</td></tr>`;
-      renderPaginadorHistorial_(0, 0, 0, 1);
+      renderPaginadorHistorial_(0, 0, 0, 1, 0);
       return;
     }
     const resultadosPorIdHistorial = new Map(listaResultados.map(r => [r.id, r]));
+    // Búsqueda tipo LIKE: se filtra ANTES de paginar, así el paginador cuenta
+    // y recorre solo los resultados.
+    const tokensHist = tokensBusqueda_(busquedaHistorial);
+    const filtradosHistorial = tokensHist.length === 0
+      ? listaHistorial
+      : listaHistorial.filter(f => coincideBusqueda_(tokensHist, f, resultadosPorIdHistorial.get(f.id)));
+    if (filtradosHistorial.length === 0) {
+      tbodyHistorial.innerHTML = `<tr><td colspan="${mostrarColumnaAcciones ? 3 : 2}">Sin coincidencias para «${escapeHtml(busquedaHistorial.trim())}».</td></tr>`;
+      renderPaginadorHistorial_(0, 0, 0, 1, listaHistorial.length);
+      return;
+    }
     // Paginado (2026-10-05, pedido de Ivan): por default 5 por página; "todos"
     // = sin paginar. La página se acomoda sola si la lista se encoge (un
     // snapshot en vivo puede quitar filas).
-    const totalHistorial = listaHistorial.length;
+    const totalHistorial = filtradosHistorial.length;
     const porPagina = historialPorPagina === "todos" ? totalHistorial : historialPorPagina;
     const totalPaginas = Math.max(1, Math.ceil(totalHistorial / porPagina));
     if (historialPagina > totalPaginas) historialPagina = totalPaginas;
     if (historialPagina < 1) historialPagina = 1;
     const iniHistorial = (historialPagina - 1) * porPagina;
     const finHistorial = Math.min(iniHistorial + porPagina, totalHistorial);
-    renderPaginadorHistorial_(totalHistorial, iniHistorial, finHistorial, totalPaginas);
+    renderPaginadorHistorial_(totalHistorial, iniHistorial, finHistorial, totalPaginas, listaHistorial.length);
 
-    tbodyHistorial.innerHTML = listaHistorial.slice(iniHistorial, finHistorial).map(f => {
+    tbodyHistorial.innerHTML = filtradosHistorial.slice(iniHistorial, finHistorial).map(f => {
       const cajaTexto = escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—");
       // "OK"/"No coincide" aquí es si la CAJA escaneada coincidió con la
       // esperada — nada que ver con sincronización (2026-09-14, aclarado a
