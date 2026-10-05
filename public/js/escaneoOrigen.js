@@ -358,6 +358,37 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       }
       .semaforo-chip-espera .semaforo-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: #6366f1; }
 
+      /* Resumen de "Seguimiento de embarques" + paginador de "Historial de
+         escaneos" (2026-10-05, pedido de Ivan, maqueta aprobada el mismo
+         día). Mismos tonos que el resto de la pantalla. */
+      .semaforo-resumen { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
+      .semaforo-resumen:empty { display: none; }
+      .semaforo-chip-disc { background: #fee2e2; color: #991b1b; }
+      .semaforo-chip-disc .semaforo-chip-dot { background: #dc2626; }
+      .semaforo-ver-validados {
+        background: none; border: none; padding: 4px; margin: 0; font: inherit; font-size: 12.5px;
+        color: #6b6558; text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+      }
+      .semaforo-ver-validados:hover { color: #2c1e0f; }
+
+      .paginador { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 4px 2px; }
+      .paginador:empty { display: none; }
+      .paginador-info { color: #6b6558; font-size: 12.5px; }
+      .paginador-ctrl { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      .paginador-ctrl label { color: #6b6558; font-size: 12.5px; margin-right: 2px; }
+      .paginador-ctrl select {
+        font: inherit; font-size: 12.5px; border: 1px solid #e7e3dc; background: #fff; color: #2c1e0f;
+        border-radius: 8px; padding: 6px 8px; margin-right: 8px; width: auto;
+      }
+      .paginador-btn {
+        min-width: 34px; height: 34px; padding: 0 10px; margin: 0; border: 1px solid #e7e3dc; background: #fff;
+        color: #2c1e0f; border-radius: 8px; font: inherit; font-size: 13px; cursor: pointer; width: auto;
+      }
+      .paginador-btn:hover:not(:disabled) { border-color: #2c1e0f; }
+      .paginador-btn[aria-current="page"] { background: #2c1e0f; border-color: #2c1e0f; color: #fff; font-weight: 700; }
+      .paginador-btn:disabled { opacity: .4; cursor: default; }
+      .paginador-gap { color: #6b6558; padding: 0 2px; }
+
       /* --------------------------------------------------------------
          Corrección de McCain (nuevo, 2026-09-09, pedido de Ivan):
          "no puede ser nada más que cambie de color, debe ser algo más
@@ -687,7 +718,8 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <h2>Seguimiento de embarques</h2>
         <span class="semaforo-chip-espera oculto" id="semaforo-chip-espera"><span class="semaforo-chip-dot"></span><span id="semaforo-chip-espera-texto"></span></span>
       </div>
-      <p class="nota">Vista rápida del avance de cada embarque por las 4 etapas del proceso — de un vistazo, sin tener que abrir cada tabla de abajo. El color del número de embarque indica si ya sincronizó con Alanis Operadores (verde = sí, gris = en camino o esperando su turno, rojo = error).</p>
+      <p class="nota">Embarques en proceso por las 4 etapas — los ya validados salen de aquí y se consultan en el Historial de escaneos. El color del número de embarque indica si ya sincronizó con Alanis Operadores (verde = sí, gris = en camino o esperando su turno, rojo = error).</p>
+      <div class="semaforo-resumen" id="semaforo-resumen"></div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-semaforo">
           <thead>
@@ -719,6 +751,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
           <tbody id="tbody-historial-origen"><tr><td colspan="${mostrarColumnaAcciones ? 3 : 2}">Cargando...</td></tr></tbody>
         </table>
       </div>
+      <div class="paginador" id="paginador-historial"></div>
     </section>
 
     <div id="modal-escaneo-origen" class="modal-overlay oculto">
@@ -901,6 +934,14 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   let listaResultados = [];
   let listaOperadores = [];
 
+  // Estado de vista (2026-10-05, pedido de Ivan) — solo en memoria, se
+  // reinicia al recargar la página: semaforoVerValidados = enlace "Ver
+  // validados" de Seguimiento; historialPagina/historialPorPagina = paginador
+  // de Historial ("todos" = sin paginar).
+  let semaforoVerValidados = false;
+  let historialPagina = 1;
+  let historialPorPagina = 5;
+
   // Corrección de McCain (2026-09-09):
   // - correccionesReconocidas: ids de embarques cuyo banner de corrección
   //   (caso "nadie ha validado todavía") ya fue revisado en esta sesión —
@@ -939,6 +980,33 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const tbodySemaforo = contenedor.querySelector("#tbody-semaforo");
   const chipEsperaSpan = contenedor.querySelector("#semaforo-chip-espera");
   const chipEsperaTexto = contenedor.querySelector("#semaforo-chip-espera-texto");
+  const semaforoResumen = contenedor.querySelector("#semaforo-resumen");
+  const paginadorHistorial = contenedor.querySelector("#paginador-historial");
+  let ultimoHtmlPaginador = null;
+
+  // Un solo listener por contenedor (el HTML interno se re-dibuja en cada
+  // snapshot, así que se delega en vez de re-enganchar cada vez).
+  if (semaforoResumen) {
+    semaforoResumen.addEventListener("click", (e) => {
+      if (!e.target.closest(".semaforo-ver-validados")) return;
+      semaforoVerValidados = !semaforoVerValidados;
+      renderSemaforo();
+    });
+  }
+  if (paginadorHistorial) {
+    paginadorHistorial.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-pag]");
+      if (!btn || btn.disabled) return;
+      historialPagina = Number(btn.dataset.pag) || 1;
+      renderHistorial();
+    });
+    paginadorHistorial.addEventListener("change", (e) => {
+      if (e.target.id !== "paginador-por-pagina") return;
+      historialPorPagina = e.target.value === "todos" ? "todos" : Number(e.target.value);
+      historialPagina = 1;
+      renderHistorial();
+    });
+  }
 
   onSnapshot(collection(db, "embarques_pendientes_origen"), (snap) => {
     listaPendientes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -1374,6 +1442,77 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     return n;
   }
 
+  // "Seguimiento de embarques" solo muestra lo pendiente (2026-10-05,
+  // pedido de Ivan): un embarque con Pre-entrega (Checkpoint 2) VALIDADO ya
+  // terminó su flujo y sale de esa tabla (sigue en el Historial). Una
+  // DISCREPANCIA NO sale — terminó pero alguien tiene que revisarla
+  // (confirmado por Ivan). Mismas reglas que ya usa celdaProgreso.
+  function esEmbarqueValidado_(r) {
+    return !!(r && r.estatusValidacion === "VALIDADO");
+  }
+  function esEmbarqueConDiscrepancia_(r) {
+    if (!r || r.estatusValidacion === "VALIDADO") return false;
+    return r.estatusValidacion === "DISCREPANCIA" || r.recepcionResultado === "NO_COINCIDE_DOCUMENTO";
+  }
+
+  // Chips "N en proceso" / "N con discrepancia" + enlace "Ver validados (N)".
+  function renderResumenSemaforo_(todos, validados, resultadosPorId) {
+    if (!semaforoResumen) return;
+    const nDisc = todos.filter(f => esEmbarqueConDiscrepancia_(resultadosPorId.get(f.id))).length;
+    const nEnProceso = todos.length - validados.length - nDisc;
+    let html = "";
+    if (nEnProceso > 0) html += `<span class="semaforo-chip-espera"><span class="semaforo-chip-dot"></span>${nEnProceso} en proceso</span>`;
+    if (nDisc > 0) html += `<span class="semaforo-chip-espera semaforo-chip-disc"><span class="semaforo-chip-dot"></span>${nDisc} con discrepancia</span>`;
+    if (validados.length > 0) {
+      html += `<button type="button" class="semaforo-ver-validados">${semaforoVerValidados ? "Ocultar validados" : `Ver validados (${validados.length})`}</button>`;
+    }
+    semaforoResumen.innerHTML = html;
+  }
+
+  // Números de página con "…" cuando son muchas: 1 … 4 5 6 … 12
+  function listaNumerosPagina_(total, actual) {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+    const s = new Set([1, total, actual, actual - 1, actual + 1]);
+    if (actual <= 3) { s.add(2); s.add(3); }
+    if (actual >= total - 2) { s.add(total - 1); s.add(total - 2); }
+    const arr = [...s].filter(n => n >= 1 && n <= total).sort((a, b) => a - b);
+    const out = [];
+    let prev = 0;
+    for (const n of arr) { if (n - prev > 1) out.push("…"); out.push(n); prev = n; }
+    return out;
+  }
+
+  // Paginador de "Historial de escaneos" (2026-10-05, pedido de Ivan).
+  // Se vuelve a escribir en cada snapshot, pero solo si el HTML cambió —
+  // así un snapshot que llega con el selector "Por página" abierto no lo
+  // cierra de golpe.
+  function renderPaginadorHistorial_(total, ini, fin, totalPaginas) {
+    if (!paginadorHistorial) return;
+    let html = "";
+    if (total > 0) {
+      const opciones = [5, 10, 25, 50, "todos"].map(n =>
+        `<option value="${n}"${n === historialPorPagina ? " selected" : ""}>${n === "todos" ? "Todos" : n}</option>`).join("");
+      let botones = "";
+      if (historialPorPagina !== "todos" && totalPaginas > 1) {
+        botones = `<button type="button" class="paginador-btn" data-pag="${historialPagina - 1}" ${historialPagina === 1 ? "disabled" : ""} aria-label="Página anterior">‹</button>` +
+          listaNumerosPagina_(totalPaginas, historialPagina).map(n =>
+            n === "…" ? `<span class="paginador-gap">…</span>`
+                       : `<button type="button" class="paginador-btn" data-pag="${n}"${n === historialPagina ? ' aria-current="page"' : ""}>${n}</button>`).join("") +
+          `<button type="button" class="paginador-btn" data-pag="${historialPagina + 1}" ${historialPagina === totalPaginas ? "disabled" : ""} aria-label="Página siguiente">›</button>`;
+      }
+      html = `
+        <div class="paginador-info">Mostrando ${ini + 1}–${fin} de ${total}</div>
+        <div class="paginador-ctrl">
+          <label for="paginador-por-pagina">Por página</label>
+          <select id="paginador-por-pagina">${opciones}</select>
+          ${botones}
+        </div>`;
+    }
+    if (html === ultimoHtmlPaginador) return;
+    ultimoHtmlPaginador = html;
+    paginadorHistorial.innerHTML = html;
+  }
+
   // Nombre del operador resuelto por uid (2026-09-14, pedido de Ivan) — los
   // operadores auto-capturan su nombre al validar en Alanis Operadores, y a
   // veces lo escriben con mayúsculas/minúsculas inconsistentes ("JOSE
@@ -1413,6 +1552,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     if (!tbodySemaforo) return;
     if (listaHistorial.length === 0) {
       tbodySemaforo.innerHTML = `<tr><td colspan="2">Todavía no hay embarques en proceso.</td></tr>`;
+      if (semaforoResumen) semaforoResumen.innerHTML = "";
       return;
     }
     const resultadosPorId = new Map(listaResultados.map(r => [r.id, r]));
@@ -1431,7 +1571,20 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       return etapasCumplidas_(a, resultadosPorId.get(a.id)) - etapasCumplidas_(b, resultadosPorId.get(b.id));
     });
 
-    tbodySemaforo.innerHTML = historialOrdenado.map(f => {
+    // Solo pendientes (2026-10-05): los VALIDADOS salen de esta tabla salvo
+    // que se pida "Ver validados" — en ese caso quedan al final (el orden
+    // por etapas cumplidas ya los manda abajo).
+    const validados = historialOrdenado.filter(f => esEmbarqueValidado_(resultadosPorId.get(f.id)));
+    const visibles = semaforoVerValidados
+      ? historialOrdenado
+      : historialOrdenado.filter(f => !esEmbarqueValidado_(resultadosPorId.get(f.id)));
+    renderResumenSemaforo_(historialOrdenado, validados, resultadosPorId);
+    if (visibles.length === 0) {
+      tbodySemaforo.innerHTML = `<tr><td colspan="2"><strong>Todo al día</strong> — no hay embarques pendientes.</td></tr>`;
+      return;
+    }
+
+    tbodySemaforo.innerHTML = visibles.map(f => {
       const r = resultadosPorId.get(f.id);
       const syncInfo = claseYTituloSync(f.estadoSync);
 
@@ -1761,10 +1914,23 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   function renderHistorial() {
     if (listaHistorial.length === 0) {
       tbodyHistorial.innerHTML = `<tr><td colspan="${mostrarColumnaAcciones ? 3 : 2}">Todavía no hay escaneos de origen.</td></tr>`;
+      renderPaginadorHistorial_(0, 0, 0, 1);
       return;
     }
     const resultadosPorIdHistorial = new Map(listaResultados.map(r => [r.id, r]));
-    tbodyHistorial.innerHTML = listaHistorial.map(f => {
+    // Paginado (2026-10-05, pedido de Ivan): por default 5 por página; "todos"
+    // = sin paginar. La página se acomoda sola si la lista se encoge (un
+    // snapshot en vivo puede quitar filas).
+    const totalHistorial = listaHistorial.length;
+    const porPagina = historialPorPagina === "todos" ? totalHistorial : historialPorPagina;
+    const totalPaginas = Math.max(1, Math.ceil(totalHistorial / porPagina));
+    if (historialPagina > totalPaginas) historialPagina = totalPaginas;
+    if (historialPagina < 1) historialPagina = 1;
+    const iniHistorial = (historialPagina - 1) * porPagina;
+    const finHistorial = Math.min(iniHistorial + porPagina, totalHistorial);
+    renderPaginadorHistorial_(totalHistorial, iniHistorial, finHistorial, totalPaginas);
+
+    tbodyHistorial.innerHTML = listaHistorial.slice(iniHistorial, finHistorial).map(f => {
       const cajaTexto = escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—");
       // "OK"/"No coincide" aquí es si la CAJA escaneada coincidió con la
       // esperada — nada que ver con sincronización (2026-09-14, aclarado a
