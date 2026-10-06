@@ -279,11 +279,19 @@ exports.enviarResetContrasena = onCall(
 //    servicio (dbAlanis) — no hace falta validar tokens de otro proyecto ni
 //    compartir ningún secreto.
 //
+//    Cubre los DOS checkpoints (ampliado 2026-10-06, pedido de Ivan: "si no
+//    pudo escanear el 1, tampoco va a poder el 2"): "recepcion" (Checkpoint 1,
+//    Despacho) y "pre_entrega" (Checkpoint 2). El 2 es la última barrera antes
+//    de entregar al cliente, así que exige además confirmacionManual: true
+//    (queda en la bitácora) y que el Checkpoint 1 ya esté en COINCIDE.
+//
 //    Contrato (acordado con el chat de Alanis Operadores):
-//      entrada : { embarqueId }   — todo lo demás se lee de repositorio_mccain
+//      entrada : { embarqueId, checkpoint?: "recepcion" | "pre_entrega",
+//                  confirmacionManual?: true }   — por defecto "recepcion";
+//                todo lo demás se lee de repositorio_mccain
 //      registro: enlaces_checkpoint/{sha256(codigo)} en alanis-operadores,
 //                con reglas "denegar todo" (solo Admin SDK lo toca).
-//      salida  : { ok, enlace, venceEnMs, operadorNombre, operadorNumero, embarqueId }
+//      salida  : { ok, enlace, venceEnMs, operadorNombre, operadorNumero, embarqueId, checkpoint }
 //    El código (32 bytes aleatorios, base64url) solo existe en esta respuesta.
 // ============================================================================
 const VIGENCIA_ENLACE_CHECKPOINT_HORAS = 12;
@@ -316,6 +324,14 @@ exports.generarEnlaceCheckpoint = onCall(
     if (!embarqueId || embarqueId.includes("/")) {
       throw new HttpsError("invalid-argument", "Falta el embarque.");
     }
+    const checkpoint = request.data && request.data.checkpoint !== undefined ? request.data.checkpoint : "recepcion";
+    if (checkpoint !== "recepcion" && checkpoint !== "pre_entrega") {
+      throw new HttpsError("invalid-argument", "Checkpoint no válido.");
+    }
+    const confirmacionManual = !!(request.data && request.data.confirmacionManual === true);
+    if (checkpoint === "pre_entrega" && !confirmacionManual) {
+      throw new HttpsError("failed-precondition", "Para el Checkpoint 2 debes confirmar que verificaste la documentación por otro medio.");
+    }
 
     try {
       // La fuente de verdad es repositorio_mccain (alanis-operadores), no lo
@@ -335,16 +351,24 @@ exports.generarEnlaceCheckpoint = onCall(
       if (d.estatusValidacion === "VALIDADO" || d.estatusValidacion === "DISCREPANCIA") {
         throw new HttpsError("failed-precondition", "El embarque ya terminó su flujo; no necesita enlace.");
       }
-      if (d.recepcionOperador && d.recepcionOperador.resultado) {
+      const resultadoCp1 = d.recepcionOperador && d.recepcionOperador.resultado;
+      if (checkpoint === "recepcion" && resultadoCp1) {
         throw new HttpsError("failed-precondition", "El operador ya hizo el Checkpoint 1 de este embarque.");
       }
+      // Mismo orden que impone la app del operador: el Checkpoint 2 solo se
+      // habilita con el Checkpoint 1 en COINCIDE.
+      if (checkpoint === "pre_entrega" && resultadoCp1 !== "COINCIDE") {
+        throw new HttpsError("failed-precondition", "El Checkpoint 2 solo se puede habilitar cuando el Checkpoint 1 ya está en COINCIDE.");
+      }
 
-      // Solo un enlace vivo por embarque: los anteriores quedan revocados.
+      // Solo un enlace vivo por embarque Y checkpoint: los anteriores del
+      // mismo checkpoint quedan revocados. (Registros viejos sin campo
+      // checkpoint se tratan como "recepcion".)
       const previos = await dbAlanis.collection(COLECCION_ENLACES_CHECKPOINT)
         .where("embarqueId", "==", embarqueId).get();
       const vivos = previos.docs.filter(x => {
         const e = x.data();
-        return e.usado !== true && e.revocado !== true;
+        return e.usado !== true && e.revocado !== true && (e.checkpoint || "recepcion") === checkpoint;
       });
       if (vivos.length > 0) {
         const lote = dbAlanis.batch();
@@ -371,7 +395,7 @@ exports.generarEnlaceCheckpoint = onCall(
         operadorUid: operador.uid,
         operadorNombre: operador.nombre || null,
         embarqueId,
-        checkpoint: "recepcion",
+        checkpoint,
         // Copia del UUID al generar: si después llega una corrección de
         // factura, el consumo debe rechazar el enlace (este enlace se salta
         // justo la prueba de la factura física).
@@ -389,13 +413,15 @@ exports.generarEnlaceCheckpoint = onCall(
         embarqueId,
         operadorUid: operador.uid,
         operadorNombre: operador.nombre || null,
+        checkpoint,
+        confirmacionManual,
         generadoPor: creadoPor,
         timestamp: FieldValue.serverTimestamp(),
         venceEn: Timestamp.fromMillis(venceEnMs),
         enlacesAnterioresRevocados: vivos.length,
       });
 
-      logger.info(`[generarEnlaceCheckpoint] ${embarqueId} → operador ${operador.uid}, generado por ${uid}, revocados previos: ${vivos.length}`);
+      logger.info(`[generarEnlaceCheckpoint] ${embarqueId} (${checkpoint}) → operador ${operador.uid}, generado por ${uid}, revocados previos: ${vivos.length}`);
       return {
         ok: true,
         enlace: `${URL_ENLACE_CHECKPOINT}?enlace=${codigo}`,
@@ -403,6 +429,7 @@ exports.generarEnlaceCheckpoint = onCall(
         operadorNombre: operador.nombre || null,
         operadorNumero: operador.numero || null,
         embarqueId,
+        checkpoint,
       };
     } catch (error) {
       if (error instanceof HttpsError) throw error;

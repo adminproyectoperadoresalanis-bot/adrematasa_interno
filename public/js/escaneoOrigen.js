@@ -297,7 +297,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const seccionPendientesValidacion3 = `
     <section class="panel" style="margin-top:20px;">
       <h2>Embarques pendientes de tercera validación (Operador)</h2>
-      <p class="nota">Embarques que ya pasaron las dos validaciones de aquí y ya se sincronizaron con Alanis Operadores, esperando que el operador haga su propio escaneo en el checkpoint. Esa validación se hace desde Alanis Operadores, no desde aquí.${puedeValidar2 ? " Si el operador no logra escanear (ni con la foto del QR), Operaciones puede generarle un enlace de respaldo para hacer el Checkpoint 1 sin escanear." : ""}</p>
+      <p class="nota">Embarques que ya pasaron las dos validaciones de aquí y ya se sincronizaron con Alanis Operadores, esperando que el operador haga su Checkpoint 1 (Despacho) o su Checkpoint 2 (Pre Entrega). Esa validación se hace desde Alanis Operadores, no desde aquí.${puedeValidar2 ? " Si el operador no logra escanear (ni con la foto del QR), Operaciones puede generarle un enlace de respaldo para hacer ese checkpoint sin escanear." : ""}</p>
       <div id="pendientes-validacion3-error" class="error"></div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-pendientes-validacion3">
@@ -900,20 +900,27 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
          solicitud; por eso no hay nada que "deshacer" desde aquí una vez
          confirmado — de ahí el checklist + la casilla obligatoria antes de
          dejar hacer clic en el botón rojo. -->
-    <!-- Enlace de respaldo para el Checkpoint 1 (2026-10-06, pedido de Ivan):
-         Operaciones/admin lo generan cuando el operador no pudo escanear ni
-         con la foto. El enlace lo valida/consume Alanis Operadores. -->
+    <!-- Enlace de respaldo para el Checkpoint 1 / 2 (2026-10-06, pedido de
+         Ivan): Operaciones/admin lo generan cuando el operador no pudo
+         escanear ni con la foto. El enlace lo valida/consume Alanis
+         Operadores. -->
     <div id="modal-enlace-checkpoint" class="modal-overlay oculto">
       <div class="modal-tarjeta">
-        <h2>Enlace de respaldo — Checkpoint 1</h2>
+        <h2 id="enlace-cp-titulo">Enlace de respaldo</h2>
         <p class="nota" id="enlace-cp-resumen"></p>
         <div id="enlace-cp-paso1">
-          <p class="nota">Úsalo solo si el operador ya intentó escanear y también subir la foto del QR, y no pudo. Con este enlace hace el Checkpoint 1 <strong>sin escanear</strong>, es decir, se salta la comprobación de que tiene la factura en la mano. Queda registrado que lo generaste tú.</p>
+          <p class="nota" id="enlace-cp-aviso"></p>
           <ul class="reiniciar-flujo-checklist">
             <li>Vale 12 horas y se puede usar una sola vez.</li>
             <li>Solo funciona si el operador inicia sesión con su propio usuario.</li>
-            <li>Si generas otro para este embarque, el anterior deja de funcionar.</li>
+            <li>Si generas otro para este embarque y este checkpoint, el anterior deja de funcionar.</li>
           </ul>
+          <div id="enlace-cp-confirmar-wrap" class="oculto">
+            <label class="reiniciar-flujo-confirmar">
+              <input type="checkbox" id="enlace-cp-confirmar">
+              <span>Verifiqué por otro medio (foto, llamada o en persona) que la documentación que lleva el operador corresponde a este embarque.</span>
+            </label>
+          </div>
           <div id="enlace-cp-error" class="error"></div>
           <div class="modal-acciones">
             <button type="button" class="secundario" id="enlace-cp-cancelar">Cancelar</button>
@@ -1463,16 +1470,35 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   // Alanis Operadores, no desde esta app. "Pendiente" = ya se sincronizó
   // hacia allá (estadoSync === "sincronizado") pero todavía no llega un
   // resultado (verificaciones_cfdi_resultado) de vuelta.
+  // Etapa que le toca al operador en un embarque (2026-10-06): "recepcion"
+  // = Checkpoint 1 (Despacho) pendiente; "pre_entrega" = Checkpoint 1 ya
+  // COINCIDE y falta el Checkpoint 2; null = ya terminó, o el Checkpoint 1
+  // quedó con discrepancia (ahí ya no hay nada "pendiente" que reintentar
+  // con enlace — se revisa desde el Seguimiento).
+  const ETIQUETA_CHECKPOINT = {
+    recepcion: "Checkpoint 1 (Despacho)",
+    pre_entrega: "Checkpoint 2 (Pre Entrega)"
+  };
+  function etapaPendienteOperador_(f, r) {
+    if (f.estadoSync !== "sincronizado") return null;
+    if (r && (r.estatusValidacion === "VALIDADO" || r.estatusValidacion === "DISCREPANCIA")) return null;
+    if (!r || !r.recepcionResultado) return "recepcion";
+    if (r.recepcionResultado === "COINCIDE") return "pre_entrega";
+    return null;
+  }
+
   function renderPendientesValidacion3() {
     if (!tbodyValidacion3) return;
     const colsV3 = puedeValidar2 ? 6 : 5;
-    const idsConResultado = new Set(listaResultados.map(r => r.id));
-    const pendientes = listaHistorial.filter(f => f.estadoSync === "sincronizado" && !idsConResultado.has(f.id));
+    const resultadosPorIdV3 = new Map(listaResultados.map(r => [r.id, r]));
+    const pendientes = listaHistorial
+      .map(f => ({ f, etapa: etapaPendienteOperador_(f, resultadosPorIdV3.get(f.id)) }))
+      .filter(x => x.etapa);
     if (pendientes.length === 0) {
       tbodyValidacion3.innerHTML = `<tr><td colspan="${colsV3}">No hay embarques esperando el escaneo del operador.</td></tr>`;
       return;
     }
-    tbodyValidacion3.innerHTML = pendientes.map(f => {
+    tbodyValidacion3.innerHTML = pendientes.map(({ f, etapa }) => {
       // Operador asignado (2026-10-06): se muestra bajo el embarque para que
       // quien genera el enlace de respaldo vea para QUIÉN es.
       const op = f.operadorAsignado || null;
@@ -1483,32 +1509,42 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <td>${escapeHtml(f.clienteNombre || "McCain")}</td>
         <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—")}</td>
         <td>${escapeHtml((f.validacion2 && f.validacion2.escaneadoPor && f.validacion2.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.validacion2 && f.validacion2.timestamp)}</td>
-        <td><span class="nota" style="margin:0;">Esperando escaneo del operador</span></td>
-        ${puedeValidar2 ? `<td>${op && op.uid ? `<button type="button" class="secundario btn-enlace-checkpoint" title="Genera un enlace para que el operador haga el Checkpoint 1 sin escanear">Enlace de respaldo</button>` : ""}</td>` : ""}
+        <td><span class="nota" style="margin:0;">Esperando ${ETIQUETA_CHECKPOINT[etapa]}</span></td>
+        ${puedeValidar2 ? `<td>${op && op.uid ? `<button type="button" class="secundario btn-enlace-checkpoint" data-checkpoint="${etapa}" title="Genera un enlace para que el operador haga el ${ETIQUETA_CHECKPOINT[etapa]} sin escanear">Enlace de respaldo</button>` : ""}</td>` : ""}
       </tr>`;
     }).join("");
   }
 
   // --------------------------------------------------------------------
-  // Enlace de respaldo para el Checkpoint 1 (2026-10-06, pedido de Ivan).
-  // Solo Operaciones (los mismos puestos que la 2da validación) y admin —
-  // lo hace cumplir también la Cloud Function generarEnlaceCheckpoint,
-  // esto solo evita mostrar un botón que igual sería rechazado. La función
-  // vive en este proyecto y escribe el registro en alanis-operadores; el
+  // Enlace de respaldo para el Checkpoint 1 y 2 (2026-10-06, pedido de
+  // Ivan: "si no pudo escanear el 1, tampoco va a poder el 2"). Solo
+  // Operaciones (los mismos puestos que la 2da validación) y admin — lo
+  // hace cumplir también la Cloud Function generarEnlaceCheckpoint, esto
+  // solo evita mostrar un botón que igual sería rechazado. La función vive
+  // en este proyecto y escribe el registro en alanis-operadores; el
   // operador lo consume allá (consumirEnlaceCheckpoint). El código real
   // del enlace solo existe en la respuesta de la función: no se guarda en
   // ningún lado, por eso no se puede volver a mostrar.
+  //
+  // El Checkpoint 2 es la última barrera antes de entregar al cliente, así
+  // que pide además marcar una confirmación explícita (queda en la
+  // bitácora de la función).
   // --------------------------------------------------------------------
   const modalEnlaceCp = contenedor.querySelector("#modal-enlace-checkpoint");
+  const tituloEnlaceCp = contenedor.querySelector("#enlace-cp-titulo");
   const resumenEnlaceCp = contenedor.querySelector("#enlace-cp-resumen");
+  const avisoEnlaceCp = contenedor.querySelector("#enlace-cp-aviso");
   const paso1EnlaceCp = contenedor.querySelector("#enlace-cp-paso1");
   const paso2EnlaceCp = contenedor.querySelector("#enlace-cp-paso2");
   const errorEnlaceCp = contenedor.querySelector("#enlace-cp-error");
   const urlEnlaceCp = contenedor.querySelector("#enlace-cp-url");
   const venceEnlaceCp = contenedor.querySelector("#enlace-cp-vence");
+  const confirmarWrapEnlaceCp = contenedor.querySelector("#enlace-cp-confirmar-wrap");
+  const checkConfirmarEnlaceCp = contenedor.querySelector("#enlace-cp-confirmar");
   const botonGenerarEnlaceCp = contenedor.querySelector("#enlace-cp-generar");
   const botonCopiarEnlaceCp = contenedor.querySelector("#enlace-cp-copiar");
   let enlaceCpEmbarqueId = null;
+  let enlaceCpCheckpoint = null;
   let enlaceCpResultado = null;
   let enlaceCpGenerando = false;
 
@@ -1518,17 +1554,27 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     // El enlace ya generado se descarta de memoria al cerrar.
     enlaceCpResultado = null;
     enlaceCpEmbarqueId = null;
+    enlaceCpCheckpoint = null;
     urlEnlaceCp.value = "";
   }
 
-  function abrirModalEnlaceCp(id, f) {
+  function abrirModalEnlaceCp(id, f, checkpoint) {
     if (!puedeValidar2 || !f || !f.operadorAsignado || !f.operadorAsignado.uid) return;
+    if (!ETIQUETA_CHECKPOINT[checkpoint]) return;
     enlaceCpEmbarqueId = id;
+    enlaceCpCheckpoint = checkpoint;
     enlaceCpResultado = null;
     const opNombre = nombreOperador_(f.operadorAsignado.uid, f.operadorAsignado.nombre) || "—";
+    tituloEnlaceCp.textContent = `Enlace de respaldo — ${ETIQUETA_CHECKPOINT[checkpoint]}`;
     resumenEnlaceCp.textContent = `Embarque ${f.embarqueId || id} · Operador: ${opNombre}`;
+    const esCp2 = checkpoint === "pre_entrega";
+    avisoEnlaceCp.innerHTML = esCp2
+      ? "Úsalo solo si el operador ya intentó escanear y también subir la foto del QR, y no pudo. Con este enlace hace el Checkpoint 2 <strong>sin escanear</strong>: es la última comprobación antes de presentar la documentación al cliente, y con este enlace se salta la prueba de que lleva la documentación correcta. Queda registrado que lo generaste tú."
+      : "Úsalo solo si el operador ya intentó escanear y también subir la foto del QR, y no pudo. Con este enlace hace el Checkpoint 1 <strong>sin escanear</strong>, es decir, se salta la comprobación de que tiene la factura en la mano. Queda registrado que lo generaste tú.";
+    confirmarWrapEnlaceCp.classList.toggle("oculto", !esCp2);
+    checkConfirmarEnlaceCp.checked = false;
     errorEnlaceCp.textContent = "";
-    botonGenerarEnlaceCp.disabled = false;
+    botonGenerarEnlaceCp.disabled = esCp2;
     botonGenerarEnlaceCp.textContent = "Generar enlace";
     paso1EnlaceCp.classList.remove("oculto");
     paso2EnlaceCp.classList.add("oculto");
@@ -1537,14 +1583,20 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   }
 
   async function generarEnlaceCp() {
-    if (enlaceCpGenerando || !enlaceCpEmbarqueId) return;
+    if (enlaceCpGenerando || !enlaceCpEmbarqueId || !enlaceCpCheckpoint) return;
+    const esCp2 = enlaceCpCheckpoint === "pre_entrega";
+    if (esCp2 && !checkConfirmarEnlaceCp.checked) return;
     enlaceCpGenerando = true;
     errorEnlaceCp.textContent = "";
     botonGenerarEnlaceCp.disabled = true;
     botonGenerarEnlaceCp.textContent = "Generando…";
     try {
       const llamar = httpsCallable(getFunctions(getApp(), "us-central1"), "generarEnlaceCheckpoint");
-      const resp = await llamar({ embarqueId: enlaceCpEmbarqueId });
+      const resp = await llamar({
+        embarqueId: enlaceCpEmbarqueId,
+        checkpoint: enlaceCpCheckpoint,
+        confirmacionManual: esCp2 ? true : undefined
+      });
       const d = resp && resp.data;
       if (!d || !d.ok || !d.enlace) throw new Error("La respuesta del servidor no trajo el enlace.");
       enlaceCpResultado = d;
@@ -1578,7 +1630,8 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   function enviarEnlaceCpPorWhatsApp() {
     if (!enlaceCpResultado) return;
     const d = enlaceCpResultado;
-    const texto = `Hola ${d.operadorNombre || ""}, este es tu enlace para hacer el Checkpoint 1 (Despacho) del embarque ${d.embarqueId}. Ábrelo desde tu celular e inicia sesión con tu usuario de Alanis Operadores:\n\n${d.enlace}\n\nVence en 12 horas y solo funciona una vez.`;
+    const etiqueta = ETIQUETA_CHECKPOINT[d.checkpoint] || "checkpoint";
+    const texto = `Hola ${d.operadorNombre || ""}, este es tu enlace para hacer el ${etiqueta} del embarque ${d.embarqueId}. Ábrelo desde tu celular e inicia sesión con tu usuario de Alanis Operadores:\n\n${d.enlace}\n\nVence en 12 horas y solo funciona una vez.`;
     window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, "_blank", "noopener");
   }
 
@@ -1588,11 +1641,14 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       if (!btn) return;
       const id = btn.closest("tr").dataset.id;
       const f = listaHistorial.find(x => x.id === id);
-      if (f) abrirModalEnlaceCp(id, f);
+      if (f) abrirModalEnlaceCp(id, f, btn.dataset.checkpoint);
     });
   }
   contenedor.querySelector("#enlace-cp-cancelar").addEventListener("click", cerrarModalEnlaceCp);
   contenedor.querySelector("#enlace-cp-cerrar").addEventListener("click", cerrarModalEnlaceCp);
+  checkConfirmarEnlaceCp.addEventListener("change", () => {
+    if (enlaceCpCheckpoint === "pre_entrega" && !enlaceCpGenerando) botonGenerarEnlaceCp.disabled = !checkConfirmarEnlaceCp.checked;
+  });
   botonGenerarEnlaceCp.addEventListener("click", generarEnlaceCp);
   botonCopiarEnlaceCp.addEventListener("click", copiarEnlaceCp);
   contenedor.querySelector("#enlace-cp-whatsapp").addEventListener("click", enviarEnlaceCpPorWhatsApp);
