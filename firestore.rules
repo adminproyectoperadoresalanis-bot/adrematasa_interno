@@ -611,5 +611,13 @@ service cloud.firestore {
       allow read: if esAdmin();
       allow write: if false;
     }
+
+    // Bitácora de enlaces de respaldo del Checkpoint 1 (2026-10-06) — la llena
+    // generarEnlaceCheckpoint (cuenta de servicio); nunca guarda el código del
+    // enlace, solo quién lo generó, para quién y cuándo.
+    match /historial_enlaces_checkpoint/{id} {
+      allow read: if esAdmin();
+      allow write: if false;
+    }
   }
 }

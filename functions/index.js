@@ -25,7 +25,8 @@ const { onDocumentWritten, onDocumentCreated } = require("firebase-functions/v2/
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const { initializeApp, applicationDefault } = require("firebase-admin/app");
-const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
+const { randomBytes, createHash } = require("crypto");
 const { getAuth } = require("firebase-admin/auth");
 const https = require("https");
 const logger = require("firebase-functions/logger");
@@ -48,6 +49,8 @@ const COLECCION_SOLICITUDES_BORRADO = "solicitudes_borrado_prueba";
 const COLECCION_SOLICITUDES_REINICIO = "solicitudes_reinicio_flujo";
 const COLECCION_HISTORIAL_REINICIOS = "historial_reinicios_flujo";
 const COLECCION_QR_INTERNOS = "qr_internos_generados";
+const COLECCION_ENLACES_CHECKPOINT = "enlaces_checkpoint";            // vive en alanis-operadores
+const COLECCION_HISTORIAL_ENLACES = "historial_enlaces_checkpoint";   // bitácora en este proyecto
 
 const brevoApiKey = defineSecret("BREVO_API_KEY");
 
@@ -259,5 +262,152 @@ exports.enviarResetContrasena = onCall(
 
     logger.info(`[enviarResetContrasena] correo de restablecimiento enviado a ${email}`);
     return { ok: true };
+  }
+);
+
+// ============================================================================
+// 8) Enlace de respaldo para el Checkpoint 1 (2026-10-06, pedido de Ivan).
+//
+//    Cuando el operador no puede escanear (ni con la foto del QR), Operaciones
+//    o un admin generan aquí un enlace de un solo uso. Lo manda por WhatsApp y
+//    el operador hace el Checkpoint 1 sin escanear. Quien CONSUME el enlace es
+//    consumirEnlaceCheckpoint, en alanis-operadores (otro chat/otra pieza).
+//
+//    Por qué vive aquí y no en alanis-operadores: quien lo genera es usuario de
+//    ESTE proyecto (Auth y rol/área/puesto están en usuarios/{uid} de aquí), y
+//    estas funciones ya escriben en alanis-operadores con la cuenta de
+//    servicio (dbAlanis) — no hace falta validar tokens de otro proyecto ni
+//    compartir ningún secreto.
+//
+//    Contrato (acordado con el chat de Alanis Operadores):
+//      entrada : { embarqueId }   — todo lo demás se lee de repositorio_mccain
+//      registro: enlaces_checkpoint/{sha256(codigo)} en alanis-operadores,
+//                con reglas "denegar todo" (solo Admin SDK lo toca).
+//      salida  : { ok, enlace, venceEnMs, operadorNombre, operadorNumero, embarqueId }
+//    El código (32 bytes aleatorios, base64url) solo existe en esta respuesta.
+// ============================================================================
+const VIGENCIA_ENLACE_CHECKPOINT_HORAS = 12;
+const URL_ENLACE_CHECKPOINT = "https://alanis-operadores.web.app/operador.html";
+const AREA_OPERACIONES_MEX = "Operaciones MEX";
+const PUESTOS_VALIDADOR2 = ["Coordinador", "Supervisor", "Auxiliar", "Despachador"];
+
+exports.generarEnlaceCheckpoint = onCall(
+  { region: REGION },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Inicia sesión para generar el enlace.");
+    }
+    const uid = request.auth.uid;
+
+    // Mismo criterio que esValidador2() en firestore.rules: usuario activo y
+    // (admin, o área Operaciones MEX con uno de los 4 puestos).
+    const snapUsuario = await dbLocal.collection("usuarios").doc(uid).get();
+    const u = snapUsuario.exists ? snapUsuario.data() : null;
+    const activo = !!u && u.estatus === "activo" && ["admin", "supervisor", "empleado"].includes(u.rol);
+    const autorizado = activo && (
+      u.rol === "admin" ||
+      (u.area === AREA_OPERACIONES_MEX && PUESTOS_VALIDADOR2.includes(u.puesto))
+    );
+    if (!autorizado) {
+      throw new HttpsError("permission-denied", "Solo Operaciones o un administrador pueden generar este enlace.");
+    }
+
+    const embarqueId = request.data && typeof request.data.embarqueId === "string" ? request.data.embarqueId.trim() : "";
+    if (!embarqueId || embarqueId.includes("/")) {
+      throw new HttpsError("invalid-argument", "Falta el embarque.");
+    }
+
+    try {
+      // La fuente de verdad es repositorio_mccain (alanis-operadores), no lo
+      // que mande el navegador: de ahí salen el operador y las condiciones.
+      const snapEmbarque = await dbAlanis.collection(COLECCION_REPO).doc(embarqueId).get();
+      if (!snapEmbarque.exists) {
+        throw new HttpsError("not-found", "El embarque no existe en Alanis Operadores.");
+      }
+      const d = snapEmbarque.data();
+      const operador = d.operadorAsignado || null;
+      if (!operador || !operador.uid) {
+        throw new HttpsError("failed-precondition", "El embarque no tiene operador asignado.");
+      }
+      if (!d.uuidEsperado) {
+        throw new HttpsError("failed-precondition", "El embarque todavía no tiene la factura validada (sin UUID esperado).");
+      }
+      if (d.estatusValidacion === "VALIDADO" || d.estatusValidacion === "DISCREPANCIA") {
+        throw new HttpsError("failed-precondition", "El embarque ya terminó su flujo; no necesita enlace.");
+      }
+      if (d.recepcionOperador && d.recepcionOperador.resultado) {
+        throw new HttpsError("failed-precondition", "El operador ya hizo el Checkpoint 1 de este embarque.");
+      }
+
+      // Solo un enlace vivo por embarque: los anteriores quedan revocados.
+      const previos = await dbAlanis.collection(COLECCION_ENLACES_CHECKPOINT)
+        .where("embarqueId", "==", embarqueId).get();
+      const vivos = previos.docs.filter(x => {
+        const e = x.data();
+        return e.usado !== true && e.revocado !== true;
+      });
+      if (vivos.length > 0) {
+        const lote = dbAlanis.batch();
+        vivos.forEach(x => lote.update(x.ref, {
+          revocado: true,
+          revocadoEn: FieldValue.serverTimestamp(),
+          revocadoPor: uid,
+        }));
+        await lote.commit();
+      }
+
+      const codigo = randomBytes(32).toString("base64url");               // 256 bits
+      const idRegistro = createHash("sha256").update(codigo).digest("hex"); // el código en claro no se guarda
+      const ahoraMs = Date.now();
+      const venceEnMs = ahoraMs + VIGENCIA_ENLACE_CHECKPOINT_HORAS * 60 * 60 * 1000;
+      const creadoPor = {
+        uid,
+        nombre: u.nombre || null,
+        correo: request.auth.token.email || null,
+        proyecto: "appadrematasainterno",
+      };
+
+      await dbAlanis.collection(COLECCION_ENLACES_CHECKPOINT).doc(idRegistro).create({
+        operadorUid: operador.uid,
+        operadorNombre: operador.nombre || null,
+        embarqueId,
+        checkpoint: "recepcion",
+        // Copia del UUID al generar: si después llega una corrección de
+        // factura, el consumo debe rechazar el enlace (este enlace se salta
+        // justo la prueba de la factura física).
+        uuidEsperado: d.uuidEsperado,
+        creadoPor,
+        creadoEn: FieldValue.serverTimestamp(),
+        venceEn: Timestamp.fromMillis(venceEnMs),
+        usado: false,
+        usadoEn: null,
+        revocado: false,
+      });
+
+      // Bitácora en este proyecto (sin el código).
+      await dbLocal.collection(COLECCION_HISTORIAL_ENLACES).add({
+        embarqueId,
+        operadorUid: operador.uid,
+        operadorNombre: operador.nombre || null,
+        generadoPor: creadoPor,
+        timestamp: FieldValue.serverTimestamp(),
+        venceEn: Timestamp.fromMillis(venceEnMs),
+        enlacesAnterioresRevocados: vivos.length,
+      });
+
+      logger.info(`[generarEnlaceCheckpoint] ${embarqueId} → operador ${operador.uid}, generado por ${uid}, revocados previos: ${vivos.length}`);
+      return {
+        ok: true,
+        enlace: `${URL_ENLACE_CHECKPOINT}?enlace=${codigo}`,
+        venceEnMs,
+        operadorNombre: operador.nombre || null,
+        operadorNumero: operador.numero || null,
+        embarqueId,
+      };
+    } catch (error) {
+      if (error instanceof HttpsError) throw error;
+      logger.error(`[generarEnlaceCheckpoint] falló para ${embarqueId}: ${error.message}`);
+      throw new HttpsError("internal", "No se pudo generar el enlace. Intenta de nuevo.");
+    }
   }
 );
