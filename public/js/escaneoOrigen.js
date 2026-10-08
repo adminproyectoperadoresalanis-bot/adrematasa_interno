@@ -2,7 +2,7 @@ import { db } from "./firebase-config.js";
 import { getApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
 import {
-  collection, doc, setDoc, getDoc, onSnapshot, serverTimestamp
+  collection, doc, setDoc, getDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
 // ----------------------------------------------------------------------
@@ -297,7 +297,8 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const seccionPendientesValidacion3 = `
     <section class="panel" style="margin-top:20px;">
       <h2>Embarques pendientes de tercera validación (Operador)</h2>
-      <p class="nota">Embarques que ya pasaron las dos validaciones de aquí y ya se sincronizaron con Alanis Operadores, esperando que el operador haga su Checkpoint 1 (Despacho) o su Checkpoint 2 (Pre Entrega). Esa validación se hace desde Alanis Operadores, no desde aquí.${puedeValidar2 ? " Si el operador no logra escanear (ni con la foto del QR), Operaciones puede generarle un enlace de respaldo para hacer ese checkpoint sin escanear." : ""}</p>
+      <p class="nota">Embarques que ya pasaron las dos validaciones de aquí y ya se sincronizaron con Alanis Operadores, esperando que el operador haga su Checkpoint 1 (Despacho) o su Checkpoint 2 (Pre Entrega). Esa validación se hace desde Alanis Operadores, no desde aquí.${puedeValidar2 ? " Si el operador no logra escanear (ni con la foto del QR), Operaciones puede solicitar un enlace de respaldo; solo se genera cuando un administrador lo autoriza." : ""}</p>
+      ${puedeValidar2 ? `<div class="enl-resumen" id="enlace-resumen"></div>` : ""}
       <div id="pendientes-validacion3-error" class="error"></div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-pendientes-validacion3">
@@ -730,7 +731,55 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         width: 100%; box-sizing: border-box; font: inherit; font-size: 12.5px; color: #2c1e0f;
         border: 1px solid #e7e3dc; background: #faf8f5; border-radius: 8px; padding: 10px 12px; margin: 0 0 8px;
       }
-      .btn-enlace-checkpoint { white-space: nowrap; }
+      /* Autorización del enlace de respaldo (2026-10-08): solicitud de
+         Operaciones + autorización del admin, con iconos en vez de
+         etiquetas largas. Maqueta aprobada por Ivan el mismo día. */
+      .enl-resumen { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; min-height: 28px; }
+      .enl-chip {
+        display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600;
+        padding: 4px 11px; border-radius: 999px; border: 0; font-family: inherit; line-height: 1.3; white-space: nowrap;
+      }
+      .enl-chip svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+      .enl-chip.amb { background: #fef3c7; color: #92400e; }
+      .enl-chip.grn { background: #dcfce7; color: #166534; }
+      .enl-chip.red { background: #fee2e2; color: #991b1b; }
+      .enl-chip.gry { background: #f1f2f4; color: #4b5563; }
+      button.enl-chip { cursor: pointer; }
+      .enl-acc { display: flex; align-items: center; gap: 6px; justify-content: flex-end; flex-wrap: nowrap; min-width: 96px; }
+      button.enl-ib {
+        position: relative; width: 36px; height: 36px; min-width: 36px; margin: 0; padding: 0; line-height: 1;
+        border-radius: 10px; border: 1px solid #e7e3dc; background: #fff; color: #2c1e0f;
+        display: inline-grid; place-items: center; cursor: pointer; box-shadow: none;
+      }
+      button.enl-ib svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+      button.enl-ib:hover { border-color: #2c1e0f; }
+      button.enl-ib.solido { background: #2c1e0f; color: #fff; border-color: #2c1e0f; }
+      button.enl-ib.bloq { color: #6b6558; }
+      button.enl-ib.ok { background: #dcfce7; color: #166534; border-color: transparent; }
+      button.enl-ib.no { background: #fee2e2; color: #991b1b; border-color: transparent; }
+      button.enl-ib.chico { width: 30px; height: 30px; min-width: 30px; border-radius: 8px; }
+      button.enl-ib.chico svg { width: 16px; height: 16px; }
+      button.enl-ib[data-tip]::after {
+        content: attr(data-tip); position: absolute; right: 0; bottom: calc(100% + 8px);
+        background: #2c1e0f; color: #fff; font-size: 12px; font-weight: 500; line-height: 1.3;
+        padding: 6px 9px; border-radius: 7px; white-space: nowrap; opacity: 0; pointer-events: none;
+        transition: opacity .12s; z-index: 6;
+      }
+      button.enl-ib[data-tip]:hover::after, button.enl-ib[data-tip]:focus-visible::after { opacity: 1; }
+      .enl-l2 { display: block; font-size: 12px; margin-top: 3px; }
+      .enl-l2.amb { color: #92400e; } .enl-l2.grn { color: #166534; } .enl-l2.red { color: #991b1b; }
+      @keyframes enl-flash { 0%, 60% { background: #fef3c7; } 100% { background: transparent; } }
+      tr.enl-flash td { animation: enl-flash 1.6s ease; }
+      .enl-campo { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 5px; color: #2c1e0f; }
+      .enl-input {
+        width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; color: #2c1e0f; background: #fff;
+        border: 1px solid #e7e3dc; border-radius: 9px; padding: 9px 10px; margin: 0;
+      }
+      textarea.enl-input { min-height: 64px; resize: vertical; }
+      .enl-caja { background: #faf8f5; border: 1px solid #eee; border-radius: 10px; padding: 9px 12px; margin: 0 0 10px; font-size: 13.5px; color: #2c1e0f; }
+      .enl-caja b { display: block; font-size: 11.5px; color: #6b6558; font-weight: 600; margin-bottom: 2px; letter-spacing: .03em; text-transform: uppercase; }
+      .btn-verde { background: #166534; border-color: #166534; color: #fff; }
+      .btn-rojo { background: #991b1b; border-color: #991b1b; color: #fff; }
     </style>
     <section class="panel">
       <div class="semaforo-titulo-fila">
@@ -904,6 +953,65 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
          Ivan): Operaciones/admin lo generan cuando el operador no pudo
          escanear ni con la foto. El enlace lo valida/consume Alanis
          Operadores. -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+      <symbol id="enl-i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/></symbol>
+      <symbol id="enl-i-linklock" viewBox="0 0 24 24"><g transform="translate(-1.2,-1.6) scale(.82)"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/></g><rect x="13.5" y="15" width="8.5" height="6.5" rx="1.6" fill="#fff"/><path d="M15.5 15v-1.6a2.25 2.25 0 0 1 4.5 0V15"/></symbol>
+      <symbol id="enl-i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="enl-i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+      <symbol id="enl-i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+      <symbol id="enl-i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/></symbol>
+    </svg>
+
+    <!-- Solicitar enlace de respaldo (2026-10-08): lo usa Operaciones; el
+         admin lo autoriza desde el mismo renglón. -->
+    <div id="modal-enlace-solicitud" class="modal-overlay oculto">
+      <div class="modal-tarjeta">
+        <h2>Solicitar enlace de respaldo</h2>
+        <p class="nota" id="enl-sol-resumen"></p>
+        <p class="nota">Un administrador recibirá tu solicitud y, si la autoriza, se habilitará el botón para generar el enlace.</p>
+        <label class="enl-campo" for="enl-sol-motivo">¿Qué pasó?</label>
+        <select id="enl-sol-motivo" class="enl-input">
+          <option value="">Selecciona un motivo…</option>
+          <option>Cámara del teléfono no funciona</option>
+          <option>QR dañado o ilegible</option>
+          <option>Sin señal o datos en el teléfono</option>
+          <option>Otro</option>
+        </select>
+        <label class="enl-campo" for="enl-sol-detalle">Detalle (obligatorio si es "Otro")</label>
+        <textarea id="enl-sol-detalle" class="enl-input" maxlength="300" placeholder="Ej.: ya intentó escanear y subir la foto, no logra leer el QR"></textarea>
+        <div id="enl-sol-error" class="error"></div>
+        <div class="modal-acciones">
+          <button type="button" class="secundario" id="enl-sol-cancelar">Cancelar</button>
+          <button type="button" id="enl-sol-enviar" disabled>Enviar solicitud</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Revisar solicitud (solo admin). -->
+    <div id="modal-enlace-revision" class="modal-overlay oculto">
+      <div class="modal-tarjeta">
+        <h2>Solicitud de enlace de respaldo</h2>
+        <p class="nota" id="enl-rev-resumen"></p>
+        <div class="enl-caja"><b>Pidió</b><span id="enl-rev-pidio"></span></div>
+        <div class="enl-caja"><b>Motivo</b><span id="enl-rev-motivo"></span></div>
+        <p class="nota">Con este enlace el operador completa el checkpoint <strong>sin escanear</strong>: se salta la comprobación de que tiene la factura en la mano. Vale 12 horas y se usa una sola vez.</p>
+        <div id="enl-rev-cp2-wrap" class="oculto">
+          <label class="reiniciar-flujo-confirmar">
+            <input type="checkbox" id="enl-rev-cp2">
+            <span>Verifiqué por otro medio (foto, llamada o en persona) que la documentación que lleva el operador corresponde a este embarque.</span>
+          </label>
+        </div>
+        <label class="enl-campo" for="enl-rev-comentario">Comentario (opcional, lo ve quien solicitó)</label>
+        <input type="text" id="enl-rev-comentario" class="enl-input" maxlength="300" placeholder="Ej.: autorizado, ya hablé con el operador">
+        <div id="enl-rev-error" class="error"></div>
+        <div class="modal-acciones">
+          <button type="button" class="secundario" id="enl-rev-cerrar">Cerrar</button>
+          <button type="button" class="btn-rojo" id="enl-rev-rechazar">Rechazar</button>
+          <button type="button" class="btn-verde" id="enl-rev-autorizar">Autorizar</button>
+        </div>
+      </div>
+    </div>
+
     <div id="modal-enlace-checkpoint" class="modal-overlay oculto">
       <div class="modal-tarjeta">
         <h2 id="enlace-cp-titulo">Enlace de respaldo</h2>
@@ -1487,37 +1595,157 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     return null;
   }
 
+  // ---- Autorización del enlace de respaldo (2026-10-08) ----------------
+  // Estado de UN renglón (embarque + checkpoint), derivado de la solicitud
+  // (solicitudes_enlace_checkpoint/{embarque}__{checkpoint}). La autorización
+  // dura 12 h desde que el admin la resuelve; esa cuenta la hace también la
+  // Cloud Function, esto solo decide qué botón dibujar.
+  //   none | solicitada | autorizada | emitida | rechazada
+  const VIGENCIA_AUTORIZACION_ENLACE_MS = 12 * 60 * 60 * 1000;
+  const mapaSolicitudesEnlace = new Map();
+  function msDe_(ts, siNulo) {
+    if (ts && typeof ts.toMillis === "function") return ts.toMillis();
+    return siNulo;
+  }
+  function estadoSolicitudEnlace_(f, etapa) {
+    const sol = mapaSolicitudesEnlace.get(`${f.id}__${etapa}`);
+    if (!sol) return { estado: "none", sol: null };
+    const opUid = f.operadorAsignado && f.operadorAsignado.uid;
+    if (sol.operadorUid !== opUid) return { estado: "none", sol: null };   // cambió el operador: no aplica
+    if (sol.estado === "solicitada") return { estado: "solicitada", sol };
+    if (sol.estado === "rechazada") return { estado: "rechazada", sol };
+    if (sol.estado === "autorizada") {
+      // resueltoEn todavía null = el servidor aún no confirma la escritura: se toma "ahora".
+      const resueltoMs = msDe_(sol.resueltoEn, Date.now());
+      const restaMs = resueltoMs + VIGENCIA_AUTORIZACION_ENLACE_MS - Date.now();
+      if (restaMs <= 0) return { estado: "none", sol: null };                // venció
+      const venceEnlaceMs = msDe_(sol.ultimoEnlace && sol.ultimoEnlace.venceEn, 0);
+      if (venceEnlaceMs > Date.now()) return { estado: "emitida", sol, restaMs, venceEnlaceMs };
+      return { estado: "autorizada", sol, restaMs };
+    }
+    return { estado: "none", sol: null };
+  }
+  function haceCuanto_(ms) {
+    if (!ms) return "hace un momento";
+    const min = Math.max(0, Math.round((Date.now() - ms) / 60000));
+    if (min < 1) return "hace un momento";
+    if (min < 60) return `hace ${min} min`;
+    const h = Math.floor(min / 60);
+    if (h < 24) return `hace ${h} h`;
+    return `hace ${Math.floor(h / 24)} d`;
+  }
+  function restaTexto_(ms) {
+    const totalMin = Math.max(1, Math.floor(ms / 60000));
+    const h = Math.floor(totalMin / 60), m = totalMin % 60;
+    return h > 0 ? `${h} h ${m} min` : `${m} min`;
+  }
+  const enlSvg_ = (n) => `<svg aria-hidden="true"><use href="#enl-i-${n}"/></svg>`;
+  function enlBoton_(act, cp, icono, tip, clases) {
+    return `<button type="button" class="enl-ib ${clases || ""}" data-act="${act}" data-checkpoint="${cp}" data-tip="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}">${enlSvg_(icono)}</button>`;
+  }
+  function enlChip_(clase, icono, texto) {
+    return `<span class="enl-chip ${clase}">${enlSvg_(icono)}${escapeHtml(texto)}</span>`;
+  }
+  function accionesEnlace_(st, etapa) {
+    switch (st.estado) {
+      case "none":
+        return esAdmin
+          ? enlBoton_("generar", etapa, "link", "Generar enlace (admin: sin solicitud)", "solido")
+          : enlBoton_("solicitar", etapa, "linklock", "Solicitar enlace de respaldo", "bloq");
+      case "solicitada":
+        return esAdmin
+          ? enlBoton_("autorizar", etapa, "check", "Revisar y autorizar", "ok") + enlBoton_("rechazar", etapa, "x", "Revisar y rechazar", "no")
+          : enlChip_("amb", "clock", "Solicitud enviada") + enlBoton_("cancelar", etapa, "x", "Cancelar mi solicitud", "no chico");
+      case "autorizada":
+        return enlBoton_("generar", etapa, "link", "Generar enlace de respaldo", "solido");
+      case "emitida":
+        return enlChip_("grn", "link", "Emitido") + enlBoton_("generar", etapa, "refresh", "Volver a generar (el anterior se anula)", "chico");
+      case "rechazada":
+        return enlChip_("red", "x", "Rechazada") + (esAdmin
+          ? enlBoton_("generar", etapa, "link", "Generar enlace (admin)", "solido chico")
+          : enlBoton_("solicitar", etapa, "linklock", "Solicitar de nuevo", "bloq chico"));
+    }
+    return "";
+  }
+  function estadoTextoEnlace_(st, etapa) {
+    const base = `Esperando ${ETIQUETA_CHECKPOINT[etapa]}`;
+    const sol = st.sol;
+    if (!sol) return escapeHtml(base);
+    if (st.estado === "solicitada") {
+      const por = (sol.solicitadoPor && sol.solicitadoPor.nombre) || "Operaciones";
+      return `${escapeHtml(base)}<span class="enl-l2 amb">Pidió ${escapeHtml(por)} · ${haceCuanto_(msDe_(sol.solicitadoEn, 0))} · «${escapeHtml(sol.motivo === "Otro" ? (sol.detalle || "Otro") : (sol.motivo || ""))}»</span>`;
+    }
+    if (st.estado === "autorizada") {
+      const quien = (sol.resueltoPor && sol.resueltoPor.nombre) || "un administrador";
+      return `${escapeHtml(base)}<span class="enl-l2 grn">Autorizado por ${escapeHtml(quien)} · quedan ${restaTexto_(st.restaMs)}</span>`;
+    }
+    if (st.estado === "emitida") {
+      return `${escapeHtml(base)}<span class="enl-l2 grn">Enlace vigente hasta las ${new Date(st.venceEnlaceMs).toLocaleTimeString("es-MX", { hour: "numeric", minute: "2-digit" })}</span>`;
+    }
+    if (st.estado === "rechazada") {
+      const quien = (sol.resueltoPor && sol.resueltoPor.nombre) || "un administrador";
+      const nota = sol.comentarioAdmin ? `: «${escapeHtml(sol.comentarioAdmin)}»` : "";
+      return `${escapeHtml(base)}<span class="enl-l2 red">Rechazada por ${escapeHtml(quien)}${nota}</span>`;
+    }
+    return escapeHtml(base);
+  }
+
   function renderPendientesValidacion3() {
     if (!tbodyValidacion3) return;
     const colsV3 = puedeValidar2 ? 6 : 5;
     const resultadosPorIdV3 = new Map(listaResultados.map(r => [r.id, r]));
-    const pendientes = listaHistorial
+    let pendientes = listaHistorial
       .map(f => ({ f, etapa: etapaPendienteOperador_(f, resultadosPorIdV3.get(f.id)) }))
-      .filter(x => x.etapa);
+      .filter(x => x.etapa)
+      .map(x => ({ ...x, st: puedeValidar2 ? estadoSolicitudEnlace_(x.f, x.etapa) : { estado: "none", sol: null } }));
+    if (puedeValidar2) {
+      const nSol = pendientes.filter(x => x.st.estado === "solicitada").length;
+      const resumenDiv = contenedor.querySelector("#enlace-resumen");
+      if (resumenDiv) {
+        if (esAdmin) {
+          resumenDiv.innerHTML = nSol
+            ? `<button type="button" class="enl-chip amb" id="enlace-resumen-pendientes">${enlSvg_("clock")}${nSol} ${nSol === 1 ? "solicitud" : "solicitudes"} de enlace por autorizar</button>`
+            : `<span class="enl-chip grn">${enlSvg_("check")}Sin solicitudes pendientes</span>`;
+        } else {
+          resumenDiv.innerHTML = nSol
+            ? `<span class="enl-chip gry">${enlSvg_("clock")}${nSol} ${nSol === 1 ? "solicitud" : "solicitudes"} esperando al admin</span>`
+            : "";
+        }
+      }
+      // Al admin le salen primero las que tiene que resolver.
+      if (esAdmin) {
+        const orden = { solicitada: 0, autorizada: 1, none: 2, rechazada: 3, emitida: 4 };
+        pendientes = pendientes.map((x, i) => ({ x, i }))
+          .sort((a, b) => (orden[a.x.st.estado] - orden[b.x.st.estado]) || (a.i - b.i))
+          .map(o => o.x);
+      }
+    }
     if (pendientes.length === 0) {
       tbodyValidacion3.innerHTML = `<tr><td colspan="${colsV3}">No hay embarques esperando el escaneo del operador.</td></tr>`;
       return;
     }
-    tbodyValidacion3.innerHTML = pendientes.map(({ f, etapa }) => {
+    tbodyValidacion3.innerHTML = pendientes.map(({ f, etapa, st }) => {
       // Operador asignado (2026-10-06): se muestra bajo el embarque para que
       // quien genera el enlace de respaldo vea para QUIÉN es.
       const op = f.operadorAsignado || null;
       const opNombre = op ? nombreOperador_(op.uid, op.nombre) : "";
       return `
-      <tr data-id="${f.id}">
+      <tr data-id="${escapeHtml(f.id)}" data-etapa="${etapa}">
         <td>${escapeHtml(f.embarqueId || f.id)}${opNombre ? `<span class="celda-embarque-meta">Operador: ${escapeHtml(opNombre)}</span>` : ""}</td>
         <td>${escapeHtml(f.clienteNombre || "McCain")}</td>
         <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—")}</td>
         <td>${escapeHtml((f.validacion2 && f.validacion2.escaneadoPor && f.validacion2.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.validacion2 && f.validacion2.timestamp)}</td>
-        <td><span class="nota" style="margin:0;">Esperando ${ETIQUETA_CHECKPOINT[etapa]}</span></td>
-        ${puedeValidar2 ? `<td>${op && op.uid ? `<button type="button" class="secundario btn-enlace-checkpoint" data-checkpoint="${etapa}" title="Genera un enlace para que el operador haga el ${ETIQUETA_CHECKPOINT[etapa]} sin escanear">Enlace de respaldo</button>` : ""}</td>` : ""}
+        <td><span class="nota" style="margin:0;">${puedeValidar2 ? estadoTextoEnlace_(st, etapa) : `Esperando ${ETIQUETA_CHECKPOINT[etapa]}`}</span></td>
+        ${puedeValidar2 ? `<td>${op && op.uid ? `<div class="enl-acc">${accionesEnlace_(st, etapa)}</div>` : ""}</td>` : ""}
       </tr>`;
     }).join("");
   }
 
   // --------------------------------------------------------------------
   // Enlace de respaldo para el Checkpoint 1 y 2 (2026-10-06, pedido de
-  // Ivan: "si no pudo escanear el 1, tampoco va a poder el 2"). Solo
+  // Ivan: "si no pudo escanear el 1, tampoco va a poder el 2"). Desde
+  // 2026-10-08 requiere solicitud de Operaciones + autorización de un admin
+  // (o que el admin lo genere directo). Solo
   // Operaciones (los mismos puestos que la 2da validación) y admin — lo
   // hace cumplir también la Cloud Function generarEnlaceCheckpoint, esto
   // solo evita mostrar un botón que igual sería rechazado. La función vive
@@ -1545,6 +1773,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const botonCopiarEnlaceCp = contenedor.querySelector("#enlace-cp-copiar");
   let enlaceCpEmbarqueId = null;
   let enlaceCpCheckpoint = null;
+  let enlaceCpRequiereConfirmar = false;
   let enlaceCpResultado = null;
   let enlaceCpGenerando = false;
 
@@ -1568,13 +1797,23 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     tituloEnlaceCp.textContent = `Enlace de respaldo — ${ETIQUETA_CHECKPOINT[checkpoint]}`;
     resumenEnlaceCp.textContent = `Embarque ${f.embarqueId || id} · Operador: ${opNombre}`;
     const esCp2 = checkpoint === "pre_entrega";
-    avisoEnlaceCp.innerHTML = esCp2
-      ? "Úsalo solo si el operador ya intentó escanear y también subir la foto del QR, y no pudo. Con este enlace hace el Checkpoint 2 <strong>sin escanear</strong>: es la última comprobación antes de presentar la documentación al cliente, y con este enlace se salta la prueba de que lleva la documentación correcta. Queda registrado que lo generaste tú."
-      : "Úsalo solo si el operador ya intentó escanear y también subir la foto del QR, y no pudo. Con este enlace hace el Checkpoint 1 <strong>sin escanear</strong>, es decir, se salta la comprobación de que tiene la factura en la mano. Queda registrado que lo generaste tú.";
-    confirmarWrapEnlaceCp.classList.toggle("oculto", !esCp2);
+    const stEnl = estadoSolicitudEnlace_(f, checkpoint);
+    const autorizado = stEnl.estado === "autorizada" || stEnl.estado === "emitida";
+    // Con una solicitud ya autorizada, la verificación del Checkpoint 2 la
+    // hizo el admin al autorizar. Solo un admin que genera DIRECTO el
+    // Checkpoint 2 (sin solicitud autorizada) confirma aquí.
+    enlaceCpRequiereConfirmar = esCp2 && esAdmin && !autorizado;
+    const quienAutorizo = autorizado ? ((stEnl.sol.resueltoPor && stEnl.sol.resueltoPor.nombre) || "un administrador") : "";
+    const nota = autorizado
+      ? `<br><br>Autorizado por <strong>${escapeHtml(quienAutorizo)}</strong>.`
+      : (esAdmin ? "<br><br>Como administrador no necesitas solicitud; queda registrado que lo generaste tú." : "");
+    avisoEnlaceCp.innerHTML = (esCp2
+      ? "Con este enlace el operador hace el Checkpoint 2 <strong>sin escanear</strong>: es la última comprobación antes de presentar la documentación al cliente, y con este enlace se salta la prueba de que lleva la documentación correcta."
+      : "Con este enlace el operador hace el Checkpoint 1 <strong>sin escanear</strong>, es decir, se salta la comprobación de que tiene la factura en la mano.") + nota;
+    confirmarWrapEnlaceCp.classList.toggle("oculto", !enlaceCpRequiereConfirmar);
     checkConfirmarEnlaceCp.checked = false;
     errorEnlaceCp.textContent = "";
-    botonGenerarEnlaceCp.disabled = esCp2;
+    botonGenerarEnlaceCp.disabled = enlaceCpRequiereConfirmar;
     botonGenerarEnlaceCp.textContent = "Generar enlace";
     paso1EnlaceCp.classList.remove("oculto");
     paso2EnlaceCp.classList.add("oculto");
@@ -1584,8 +1823,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
 
   async function generarEnlaceCp() {
     if (enlaceCpGenerando || !enlaceCpEmbarqueId || !enlaceCpCheckpoint) return;
-    const esCp2 = enlaceCpCheckpoint === "pre_entrega";
-    if (esCp2 && !checkConfirmarEnlaceCp.checked) return;
+    if (enlaceCpRequiereConfirmar && !checkConfirmarEnlaceCp.checked) return;
     enlaceCpGenerando = true;
     errorEnlaceCp.textContent = "";
     botonGenerarEnlaceCp.disabled = true;
@@ -1595,7 +1833,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       const resp = await llamar({
         embarqueId: enlaceCpEmbarqueId,
         checkpoint: enlaceCpCheckpoint,
-        confirmacionManual: esCp2 ? true : undefined
+        confirmacionManual: enlaceCpRequiereConfirmar ? true : undefined
       });
       const d = resp && resp.data;
       if (!d || !d.ok || !d.enlace) throw new Error("La respuesta del servidor no trajo el enlace.");
@@ -1635,19 +1873,206 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, "_blank", "noopener");
   }
 
-  if (tbodyValidacion3 && puedeValidar2) {
-    tbodyValidacion3.addEventListener("click", (e) => {
-      const btn = e.target.closest(".btn-enlace-checkpoint");
-      if (!btn) return;
-      const id = btn.closest("tr").dataset.id;
-      const f = listaHistorial.find(x => x.id === id);
-      if (f) abrirModalEnlaceCp(id, f, btn.dataset.checkpoint);
+  // ---- Solicitar / revisar / cancelar (2026-10-08) ----------------------
+  const COLECCION_SOLICITUDES_ENLACE = "solicitudes_enlace_checkpoint";
+  const modalSol = contenedor.querySelector("#modal-enlace-solicitud");
+  const solResumen = contenedor.querySelector("#enl-sol-resumen");
+  const solMotivo = contenedor.querySelector("#enl-sol-motivo");
+  const solDetalle = contenedor.querySelector("#enl-sol-detalle");
+  const solError = contenedor.querySelector("#enl-sol-error");
+  const solEnviar = contenedor.querySelector("#enl-sol-enviar");
+  let solEmbarqueId = null, solEtapa = null, solEnviando = false;
+
+  function validarFormSolicitud_() {
+    const m = solMotivo.value;
+    solEnviar.disabled = solEnviando || !m || (m === "Otro" && !solDetalle.value.trim());
+  }
+  function cerrarModalSolicitud_() {
+    if (solEnviando) return;
+    modalSol.classList.add("oculto");
+    solEmbarqueId = null; solEtapa = null;
+  }
+  function abrirModalSolicitud_(id, f, etapa) {
+    const op = f.operadorAsignado;
+    if (!op || !op.uid) return;
+    solEmbarqueId = id; solEtapa = etapa;
+    solResumen.textContent = `${f.embarqueId || id} · ${ETIQUETA_CHECKPOINT[etapa]} · Operador: ${nombreOperador_(op.uid, op.nombre)}`;
+    solMotivo.value = "";
+    solDetalle.value = "";
+    solError.textContent = "";
+    solEnviar.textContent = "Enviar solicitud";
+    validarFormSolicitud_();
+    modalSol.classList.remove("oculto");
+  }
+  async function enviarSolicitud_() {
+    if (solEnviando || !solEmbarqueId) return;
+    const f = listaHistorial.find(x => x.id === solEmbarqueId);
+    const op = f && f.operadorAsignado;
+    if (!op || !op.uid) { solError.textContent = "Este embarque ya no tiene operador asignado."; return; }
+    const motivo = solMotivo.value;
+    const detalle = solDetalle.value.trim();
+    if (!motivo || (motivo === "Otro" && !detalle)) return;
+    solEnviando = true;
+    solEnviar.disabled = true;
+    solEnviar.textContent = "Enviando…";
+    solError.textContent = "";
+    try {
+      await setDoc(doc(db, COLECCION_SOLICITUDES_ENLACE, `${solEmbarqueId}__${solEtapa}`), {
+        embarqueId: solEmbarqueId,
+        checkpoint: solEtapa,
+        estado: "solicitada",
+        operadorUid: op.uid,
+        operadorNombre: nombreOperador_(op.uid, op.nombre) || "",
+        motivo,
+        detalle,
+        solicitadoPor: { uid, nombre: datosUsuario.nombre || "" },
+        solicitadoEn: serverTimestamp()
+      });
+      solEnviando = false;
+      cerrarModalSolicitud_();
+    } catch (e) {
+      console.error("[solicitud enlace]", e);
+      solEnviando = false;
+      solError.textContent = "No se pudo enviar la solicitud: " + ((e && e.message) || "intenta de nuevo.");
+      solEnviar.textContent = "Enviar solicitud";
+      validarFormSolicitud_();
+    }
+  }
+  async function cancelarSolicitud_(id, etapa, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      await deleteDoc(doc(db, COLECCION_SOLICITUDES_ENLACE, `${id}__${etapa}`));
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      window.alert("No se pudo cancelar la solicitud: " + ((e && e.message) || ""));
+    }
+  }
+
+  const modalRev = contenedor.querySelector("#modal-enlace-revision");
+  const revResumen = contenedor.querySelector("#enl-rev-resumen");
+  const revPidio = contenedor.querySelector("#enl-rev-pidio");
+  const revMotivo = contenedor.querySelector("#enl-rev-motivo");
+  const revCp2Wrap = contenedor.querySelector("#enl-rev-cp2-wrap");
+  const revCp2 = contenedor.querySelector("#enl-rev-cp2");
+  const revComentario = contenedor.querySelector("#enl-rev-comentario");
+  const revError = contenedor.querySelector("#enl-rev-error");
+  const revAutorizar = contenedor.querySelector("#enl-rev-autorizar");
+  const revRechazar = contenedor.querySelector("#enl-rev-rechazar");
+  let revEmbarqueId = null, revEtapa = null, revResolviendo = false;
+
+  function cerrarModalRevision_() {
+    if (revResolviendo) return;
+    modalRev.classList.add("oculto");
+    revEmbarqueId = null; revEtapa = null;
+  }
+  function abrirModalRevision_(id, f, etapa) {
+    if (!esAdmin) return;
+    const st = estadoSolicitudEnlace_(f, etapa);
+    if (st.estado !== "solicitada") return;
+    const sol = st.sol;
+    revEmbarqueId = id; revEtapa = etapa;
+    const op = f.operadorAsignado;
+    revResumen.textContent = `${f.embarqueId || id} · ${ETIQUETA_CHECKPOINT[etapa]} · Operador: ${nombreOperador_(op.uid, op.nombre)}`;
+    revPidio.textContent = `${(sol.solicitadoPor && sol.solicitadoPor.nombre) || "—"} · ${haceCuanto_(msDe_(sol.solicitadoEn, 0))}`;
+    revMotivo.textContent = sol.motivo === "Otro" ? `Otro: ${sol.detalle || ""}` : `${sol.motivo || ""}${sol.detalle ? " — " + sol.detalle : ""}`;
+    const esCp2 = etapa === "pre_entrega";
+    revCp2Wrap.classList.toggle("oculto", !esCp2);
+    revCp2.checked = false;
+    revComentario.value = "";
+    revError.textContent = "";
+    revAutorizar.disabled = esCp2;
+    revRechazar.disabled = false;
+    modalRev.classList.remove("oculto");
+  }
+  async function resolverSolicitud_(autorizar) {
+    if (revResolviendo || !revEmbarqueId) return;
+    const esCp2 = revEtapa === "pre_entrega";
+    if (autorizar && esCp2 && !revCp2.checked) return;
+    revResolviendo = true;
+    revAutorizar.disabled = true;
+    revRechazar.disabled = true;
+    revError.textContent = "";
+    try {
+      await updateDoc(doc(db, COLECCION_SOLICITUDES_ENLACE, `${revEmbarqueId}__${revEtapa}`), {
+        estado: autorizar ? "autorizada" : "rechazada",
+        resueltoPor: { uid, nombre: datosUsuario.nombre || "" },
+        resueltoEn: serverTimestamp(),
+        comentarioAdmin: revComentario.value.trim(),
+        verificacionManual: !!(autorizar && esCp2)
+      });
+      revResolviendo = false;
+      cerrarModalRevision_();
+    } catch (e) {
+      console.error("[resolver solicitud enlace]", e);
+      revResolviendo = false;
+      revError.textContent = "No se pudo guardar: " + ((e && e.message) || "intenta de nuevo.");
+      revRechazar.disabled = false;
+      revAutorizar.disabled = esCp2 && !revCp2.checked;
+    }
+  }
+
+  if (puedeValidar2) {
+    if (tbodyValidacion3) {
+      tbodyValidacion3.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-act]");
+        if (!btn) return;
+        const tr = btn.closest("tr");
+        const id = tr.dataset.id;
+        const etapa = btn.dataset.checkpoint;
+        const f = listaHistorial.find(x => x.id === id);
+        if (!f) return;
+        const act = btn.dataset.act;
+        if (act === "solicitar") abrirModalSolicitud_(id, f, etapa);
+        else if (act === "autorizar" || act === "rechazar") abrirModalRevision_(id, f, etapa);
+        else if (act === "cancelar") cancelarSolicitud_(id, etapa, btn);
+        else if (act === "generar") abrirModalEnlaceCp(id, f, etapa);
+      });
+    }
+    // Chip del admin: lleva a la primera solicitud pendiente.
+    contenedor.querySelector("#enlace-resumen").addEventListener("click", (e) => {
+      if (!e.target.closest("#enlace-resumen-pendientes")) return;
+      const filas = Array.from(tbodyValidacion3.querySelectorAll("tr[data-id]"));
+      const tr = filas.find(r => {
+        const f = listaHistorial.find(x => x.id === r.dataset.id);
+        return f && estadoSolicitudEnlace_(f, r.dataset.etapa).estado === "solicitada";
+      });
+      if (!tr) return;
+      tr.classList.remove("enl-flash"); void tr.offsetWidth; tr.classList.add("enl-flash");
+      tr.scrollIntoView({ behavior: "smooth", block: "center" });
     });
+
+    solMotivo.addEventListener("change", validarFormSolicitud_);
+    solDetalle.addEventListener("input", validarFormSolicitud_);
+    solEnviar.addEventListener("click", enviarSolicitud_);
+    contenedor.querySelector("#enl-sol-cancelar").addEventListener("click", cerrarModalSolicitud_);
+    modalSol.addEventListener("click", (e) => { if (e.target === modalSol) cerrarModalSolicitud_(); });
+
+    revCp2.addEventListener("change", () => { if (!revResolviendo) revAutorizar.disabled = !revCp2.checked; });
+    revAutorizar.addEventListener("click", () => resolverSolicitud_(true));
+    revRechazar.addEventListener("click", () => resolverSolicitud_(false));
+    contenedor.querySelector("#enl-rev-cerrar").addEventListener("click", cerrarModalRevision_);
+    modalRev.addEventListener("click", (e) => { if (e.target === modalRev) cerrarModalRevision_(); });
+
+    // Solicitudes en vivo: todos los que ven la columna (Operaciones y admin).
+    onSnapshot(collection(db, COLECCION_SOLICITUDES_ENLACE), (snap) => {
+      mapaSolicitudesEnlace.clear();
+      snap.docs.forEach(d => mapaSolicitudesEnlace.set(d.id, d.data()));
+      renderPendientesValidacion3();
+    }, (err) => {
+      if (errorValidacion3Div) errorValidacion3Div.textContent = "No se pudieron cargar las solicitudes de enlace: " + err.message;
+    });
+
+    // "quedan N h" / "hace N min" y el vencimiento de autorizaciones se
+    // refrescan solos cada minuto (se detiene si la sección ya no está en pantalla).
+    const relojEnlaces = setInterval(() => {
+      if (!contenedor.isConnected) { clearInterval(relojEnlaces); return; }
+      renderPendientesValidacion3();
+    }, 60000);
   }
   contenedor.querySelector("#enlace-cp-cancelar").addEventListener("click", cerrarModalEnlaceCp);
   contenedor.querySelector("#enlace-cp-cerrar").addEventListener("click", cerrarModalEnlaceCp);
   checkConfirmarEnlaceCp.addEventListener("change", () => {
-    if (enlaceCpCheckpoint === "pre_entrega" && !enlaceCpGenerando) botonGenerarEnlaceCp.disabled = !checkConfirmarEnlaceCp.checked;
+    if (enlaceCpRequiereConfirmar && !enlaceCpGenerando) botonGenerarEnlaceCp.disabled = !checkConfirmarEnlaceCp.checked;
   });
   botonGenerarEnlaceCp.addEventListener("click", generarEnlaceCp);
   botonCopiarEnlaceCp.addEventListener("click", copiarEnlaceCp);

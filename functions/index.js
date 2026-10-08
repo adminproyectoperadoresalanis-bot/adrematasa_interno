@@ -51,6 +51,30 @@ const COLECCION_HISTORIAL_REINICIOS = "historial_reinicios_flujo";
 const COLECCION_QR_INTERNOS = "qr_internos_generados";
 const COLECCION_ENLACES_CHECKPOINT = "enlaces_checkpoint";            // vive en alanis-operadores
 const COLECCION_HISTORIAL_ENLACES = "historial_enlaces_checkpoint";   // bitácora en este proyecto
+const COLECCION_SOLICITUDES_ENLACE = "solicitudes_enlace_checkpoint"; // solicitud/autorización del enlace (este proyecto)
+const CHECKPOINTS_ENLACE = ["recepcion", "pre_entrega"];
+
+// Al reiniciar el flujo o borrar un embarque de prueba: borra sus solicitudes
+// de enlace y revoca los enlaces que sigan vivos (en alanis-operadores), para
+// que una autorización o un enlace viejo no sobreviva a un embarque "nuevo".
+// Nunca debe tumbar la operación principal: quien lo llama lo envuelve.
+async function limpiarEnlacesYSolicitudes_(embarqueId) {
+  await Promise.all(CHECKPOINTS_ENLACE.map(c =>
+    dbLocal.collection(COLECCION_SOLICITUDES_ENLACE).doc(`${embarqueId}__${c}`).delete()
+  ));
+  const previos = await dbAlanis.collection(COLECCION_ENLACES_CHECKPOINT)
+    .where("embarqueId", "==", embarqueId).get();
+  const vivos = previos.docs.filter(x => x.data().usado !== true && x.data().revocado !== true);
+  if (vivos.length > 0) {
+    const lote = dbAlanis.batch();
+    vivos.forEach(x => lote.update(x.ref, {
+      revocado: true,
+      revocadoEn: FieldValue.serverTimestamp(),
+      revocadoPor: "sistema:flujo-reiniciado-o-borrado",
+    }));
+    await lote.commit();
+  }
+}
 
 const brevoApiKey = defineSecret("BREVO_API_KEY");
 
@@ -104,6 +128,8 @@ exports.procesarSolicitudBorradoPrueba = onDocumentCreated(
       await dbAlanis.collection(COLECCION_REPO).doc(embarqueId).delete();
       await dbLocal.collection(COLECCION_LOCAL).doc(embarqueId).delete();
       await dbLocal.collection(COLECCION_PENDIENTES).doc(embarqueId).delete();
+      try { await limpiarEnlacesYSolicitudes_(embarqueId); }
+      catch (e) { logger.warn(`[procesarSolicitudBorradoPrueba] no se pudieron limpiar enlaces/solicitudes de ${embarqueId}: ${e.message}`); }
     } catch (error) {
       logger.error(`[procesarSolicitudBorradoPrueba] embarqueId ${embarqueId}: ${error.message}`, error);
     } finally {
@@ -177,6 +203,11 @@ exports.procesarSolicitudReinicioFlujo = onDocumentCreated(
       // seguro llamarlo siempre, aunque el embarque haya sido con factura
       // real y nunca haya tenido QR interno.
       await dbLocal.collection(COLECCION_QR_INTERNOS).doc(embarqueId).delete();
+
+      // Una autorización o un enlace de respaldo de ANTES del reinicio no
+      // debe valer para el embarque "nuevo" (2026-10-08).
+      try { await limpiarEnlacesYSolicitudes_(embarqueId); }
+      catch (e) { logger.warn(`[procesarSolicitudReinicioFlujo] no se pudieron limpiar enlaces/solicitudes de ${embarqueId}: ${e.message}`); }
     } catch (error) {
       logger.error(`[procesarSolicitudReinicioFlujo] embarqueId ${embarqueId}: ${error.message}`, error);
     } finally {
@@ -285,9 +316,21 @@ exports.enviarResetContrasena = onCall(
 //    de entregar al cliente, así que exige además confirmacionManual: true
 //    (queda en la bitácora) y que el Checkpoint 1 ya esté en COINCIDE.
 //
+//    AUTORIZACIÓN (2026-10-08, pedido de Ivan: "que no se use
+//    indiscriminadamente"): Operaciones ya no genera el enlace por su cuenta.
+//    Primero SOLICITA uno (solicitudes_enlace_checkpoint/{embarque}__{cp},
+//    escrito desde el navegador con reglas) y un ADMIN lo autoriza. La
+//    autorización dura 12 h desde que se resuelve y permite regenerar el
+//    enlace dentro de esa ventana (p. ej. si el operador lo pierde). Un admin
+//    puede generarlo directo sin solicitud; queda registrado como
+//    "admin_directo". Esta función es quien lo hace cumplir de verdad (el
+//    botón de la pantalla es solo comodidad).
+//
 //    Contrato (acordado con el chat de Alanis Operadores):
 //      entrada : { embarqueId, checkpoint?: "recepcion" | "pre_entrega",
 //                  confirmacionManual?: true }   — por defecto "recepcion";
+//                confirmacionManual solo se pide a un admin que genera el
+//                Checkpoint 2 directo (sin solicitud autorizada);
 //                todo lo demás se lee de repositorio_mccain
 //      registro: enlaces_checkpoint/{sha256(codigo)} en alanis-operadores,
 //                con reglas "denegar todo" (solo Admin SDK lo toca).
@@ -329,9 +372,7 @@ exports.generarEnlaceCheckpoint = onCall(
       throw new HttpsError("invalid-argument", "Checkpoint no válido.");
     }
     const confirmacionManual = !!(request.data && request.data.confirmacionManual === true);
-    if (checkpoint === "pre_entrega" && !confirmacionManual) {
-      throw new HttpsError("failed-precondition", "Para el Checkpoint 2 debes confirmar que verificaste la documentación por otro medio.");
-    }
+    const esAdminUsuario = u.rol === "admin";
 
     try {
       // La fuente de verdad es repositorio_mccain (alanis-operadores), no lo
@@ -359,6 +400,51 @@ exports.generarEnlaceCheckpoint = onCall(
       // habilita con el Checkpoint 1 en COINCIDE.
       if (checkpoint === "pre_entrega" && resultadoCp1 !== "COINCIDE") {
         throw new HttpsError("failed-precondition", "El Checkpoint 2 solo se puede habilitar cuando el Checkpoint 1 ya está en COINCIDE.");
+      }
+
+      // ---- Autorización (2026-10-08) ----
+      const idSolicitud = `${embarqueId}__${checkpoint}`;
+      const refSolicitud = dbLocal.collection(COLECCION_SOLICITUDES_ENLACE).doc(idSolicitud);
+      const snapSolicitud = await refSolicitud.get();
+      const sol = snapSolicitud.exists ? snapSolicitud.data() : null;
+      const resueltoEnMs = sol && sol.resueltoEn && typeof sol.resueltoEn.toMillis === "function" ? sol.resueltoEn.toMillis() : 0;
+      const vigenciaMs = VIGENCIA_ENLACE_CHECKPOINT_HORAS * 60 * 60 * 1000;
+      const mismoOperador = !!sol && sol.operadorUid === operador.uid;
+      const autorizacionVigente = !!sol && sol.estado === "autorizada" && mismoOperador
+        && resueltoEnMs > 0 && (resueltoEnMs + vigenciaMs) > Date.now();
+
+      let autorizacion;
+      let operacionSolicitud;   // qué hacer con el documento de solicitud al terminar
+      const nombreUsuario = u.nombre || null;
+      if (autorizacionVigente) {
+        if (checkpoint === "pre_entrega" && sol.verificacionManual !== true) {
+          throw new HttpsError("failed-precondition", "La autorización del Checkpoint 2 no incluye la verificación manual de la documentación. Solicítala de nuevo.");
+        }
+        autorizacion = {
+          tipo: "solicitud",
+          solicitadoPor: sol.solicitadoPor || null,
+          motivo: sol.motivo || null,
+          autorizadoPor: sol.resueltoPor || null,
+        };
+        operacionSolicitud = "solo_ultimo_enlace";
+      } else if (esAdminUsuario) {
+        // Admin sin solicitud autorizada vigente: puede generar directo; para
+        // el Checkpoint 2 el cliente debe haber confirmado la verificación.
+        if (checkpoint === "pre_entrega" && !confirmacionManual) {
+          throw new HttpsError("failed-precondition", "Para el Checkpoint 2 debes confirmar que verificaste la documentación por otro medio.");
+        }
+        autorizacion = { tipo: "admin_directo", solicitadoPor: null, motivo: null, autorizadoPor: { uid, nombre: nombreUsuario } };
+        operacionSolicitud = (sol && sol.estado === "solicitada" && mismoOperador) ? "admin_resuelve_pendiente" : "admin_reemplaza";
+      } else if (!sol) {
+        throw new HttpsError("permission-denied", "Este enlace necesita la autorización de un administrador. Solicítala primero.");
+      } else if (!mismoOperador) {
+        throw new HttpsError("failed-precondition", "El operador asignado cambió desde que se hizo la solicitud. Solicita el enlace de nuevo.");
+      } else if (sol.estado === "solicitada") {
+        throw new HttpsError("failed-precondition", "La solicitud sigue esperando la autorización de un administrador.");
+      } else if (sol.estado === "rechazada") {
+        throw new HttpsError("permission-denied", "Un administrador rechazó la solicitud. Puedes enviar otra.");
+      } else {
+        throw new HttpsError("failed-precondition", "La autorización venció (dura 12 horas). Solicita el enlace de nuevo.");
       }
 
       // Solo un enlace vivo por embarque Y checkpoint: los anteriores del
@@ -415,13 +501,58 @@ exports.generarEnlaceCheckpoint = onCall(
         operadorNombre: operador.nombre || null,
         checkpoint,
         confirmacionManual,
+        autorizacion,
         generadoPor: creadoPor,
         timestamp: FieldValue.serverTimestamp(),
         venceEn: Timestamp.fromMillis(venceEnMs),
         enlacesAnterioresRevocados: vivos.length,
       });
 
-      logger.info(`[generarEnlaceCheckpoint] ${embarqueId} (${checkpoint}) → operador ${operador.uid}, generado por ${uid}, revocados previos: ${vivos.length}`);
+      // Deja en la solicitud el rastro del último enlace emitido (la pantalla
+      // lo usa para mostrar "Emitido"). Si esto falla, el enlace ya existe:
+      // no se tumba la respuesta, solo se avisa en el log.
+      try {
+        const ultimoEnlace = {
+          generadoPor: { uid, nombre: nombreUsuario },
+          generadoEn: Timestamp.fromMillis(ahoraMs),
+          venceEn: Timestamp.fromMillis(venceEnMs),
+        };
+        if (operacionSolicitud === "solo_ultimo_enlace") {
+          await refSolicitud.update({ ultimoEnlace });
+        } else if (operacionSolicitud === "admin_resuelve_pendiente") {
+          await refSolicitud.update({
+            estado: "autorizada",
+            resueltoPor: { uid, nombre: nombreUsuario },
+            resueltoEn: Timestamp.fromMillis(ahoraMs),
+            comentarioAdmin: "Generado directo por el administrador.",
+            verificacionManual: checkpoint === "pre_entrega" ? true : false,
+            directoAdmin: true,
+            ultimoEnlace,
+          });
+        } else {
+          await refSolicitud.set({
+            embarqueId,
+            checkpoint,
+            estado: "autorizada",
+            operadorUid: operador.uid,
+            operadorNombre: operador.nombre || "",
+            motivo: "Generado directo por admin",
+            detalle: "",
+            solicitadoPor: { uid, nombre: nombreUsuario || "" },
+            solicitadoEn: Timestamp.fromMillis(ahoraMs),
+            resueltoPor: { uid, nombre: nombreUsuario || "" },
+            resueltoEn: Timestamp.fromMillis(ahoraMs),
+            comentarioAdmin: "",
+            verificacionManual: checkpoint === "pre_entrega" ? true : false,
+            directoAdmin: true,
+            ultimoEnlace,
+          });
+        }
+      } catch (eSol) {
+        logger.warn(`[generarEnlaceCheckpoint] no se pudo actualizar la solicitud ${idSolicitud}: ${eSol.message}`);
+      }
+
+      logger.info(`[generarEnlaceCheckpoint] ${embarqueId} (${checkpoint}) → operador ${operador.uid}, generado por ${uid} (${autorizacion.tipo}), revocados previos: ${vivos.length}`);
       return {
         ok: true,
         enlace: `${URL_ENLACE_CHECKPOINT}?enlace=${codigo}`,
