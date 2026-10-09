@@ -30,6 +30,9 @@ const { randomBytes, createHash } = require("crypto");
 const { getAuth } = require("firebase-admin/auth");
 const https = require("https");
 const logger = require("firebase-functions/logger");
+// Checkpoint 2 (Pre Entrega) validado por Operaciones en nombre del operador
+// (2026-10-08). El archivo vive junto a este index.js, dentro de functions/.
+const { ejecutarValidacionRemota, ErrorValidacion, COL_BITACORA: COL_BITACORA_VALIDACIONES_REMOTAS } = require("./validacionRemotaPreEntrega");
 
 const REGION = "us-central1";
 
@@ -310,6 +313,10 @@ exports.enviarResetContrasena = onCall(
 //    servicio (dbAlanis) — no hace falta validar tokens de otro proyecto ni
 //    compartir ningún secreto.
 //
+//    (2026-10-08) El enlace de pre_entrega YA NO SE GENERA: Alanis Operadores no
+//    lo acepta ("checkpoint_distinto"). Solo sigue vigente el de "recepcion";
+//    el Checkpoint 2 sin escanear es validarPreEntregaRemota (sección 9).
+//
 //    Cubre los DOS checkpoints (ampliado 2026-10-06, pedido de Ivan: "si no
 //    pudo escanear el 1, tampoco va a poder el 2"): "recepcion" (Checkpoint 1,
 //    Despacho) y "pre_entrega" (Checkpoint 2). El 2 es la última barrera antes
@@ -370,6 +377,13 @@ exports.generarEnlaceCheckpoint = onCall(
     const checkpoint = request.data && request.data.checkpoint !== undefined ? request.data.checkpoint : "recepcion";
     if (checkpoint !== "recepcion" && checkpoint !== "pre_entrega") {
       throw new HttpsError("invalid-argument", "Checkpoint no válido.");
+    }
+    // 2026-10-08: Alanis Operadores no acepta enlaces de pre_entrega (los
+    // rechaza con "checkpoint_distinto") y ya no se usan: el Checkpoint 2
+    // sin escanear se resuelve con validarPreEntregaRemota. Los de
+    // "recepcion" siguen igual.
+    if (checkpoint === "pre_entrega") {
+      throw new HttpsError("failed-precondition", "Los enlaces del Checkpoint 2 ya no se usan. Usa la validación remota.");
     }
     const confirmacionManual = !!(request.data && request.data.confirmacionManual === true);
     const esAdminUsuario = u.rol === "admin";
@@ -569,3 +583,177 @@ exports.generarEnlaceCheckpoint = onCall(
     }
   }
 );
+
+// ============================================================================
+// 9) Checkpoint 2 (Pre Entrega) por validación REMOTA — Operaciones valida en
+//    nombre del operador que no puede escanear (2026-10-08).
+//
+//    Reemplaza a los enlaces de pre_entrega. Operaciones recibe por WhatsApp la
+//    foto de la factura que lleva el operador, lee el QR (o teclea folio y RFC)
+//    en ADREMATASA Interno, y esta función compara contra la factura esperada
+//    DEL LADO DEL SERVIDOR (el navegador nunca ve el UUID/RFC esperado) y
+//    escribe el resultado en repositorio_mccain igual que la app del operador.
+//    La lógica vive en validacionRemotaPreEntrega.js (probada aparte).
+//
+//    Primera etapa: igual que el enlace del Checkpoint 1, necesita que un admin
+//    haya AUTORIZADO la solicitud (solicitudes_enlace_checkpoint/{id}__pre_entrega,
+//    vigente 12 h, mismo operador asignado). Un admin puede validar directo.
+//
+//    El "actor" sale SOLO de usuarios/{uid} de este proyecto, nunca de lo que
+//    mande el navegador.
+// ============================================================================
+async function leerActorOperaciones_(request) {
+  const uid = request.auth.uid;
+  const snapUsuario = await dbLocal.collection("usuarios").doc(uid).get();
+  const u = snapUsuario.exists ? snapUsuario.data() : null;
+  const activo = !!u && u.estatus === "activo" && ["admin", "supervisor", "empleado"].includes(u.rol);
+  const autorizado = activo && (
+    u.rol === "admin" ||
+    (u.area === AREA_OPERACIONES_MEX && PUESTOS_VALIDADOR2.includes(u.puesto))
+  );
+  if (!autorizado) {
+    throw new HttpsError("permission-denied", "Solo Operaciones o un administrador pueden hacer esta validación.");
+  }
+  return {
+    u,
+    actor: {
+      uid,
+      nombre: u.nombre || null,
+      correo: u.correo || u.email || request.auth.token.email || null,
+      rol: u.rol || null,
+      puesto: u.puesto || null,
+      area: u.area || null,
+      proyecto: "appadrematasainterno",
+    },
+  };
+}
+
+exports.validarPreEntregaRemota = onCall(
+  { region: REGION },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+    }
+    const { u, actor } = await leerActorOperaciones_(request);
+    const entrada = request.data || {};
+    const embarqueId = typeof entrada.embarqueId === "string" ? entrada.embarqueId.trim() : "";
+    if (!embarqueId || embarqueId.includes("/")) {
+      throw new HttpsError("invalid-argument", "Falta el embarque.");
+    }
+    const esAdminUsuario = u.rol === "admin";
+
+    try {
+      // ---- Autorización del admin (solo para quien no es admin) ----
+      const refSolicitud = dbLocal.collection(COLECCION_SOLICITUDES_ENLACE).doc(`${embarqueId}__pre_entrega`);
+      const [snapSol, snapEmb] = await Promise.all([
+        refSolicitud.get(),
+        dbAlanis.collection(COLECCION_REPO).doc(embarqueId).get(),
+      ]);
+      if (!snapEmb.exists) {
+        throw new HttpsError("not-found", "El embarque no existe en Alanis Operadores.");
+      }
+      const operadorUid = (snapEmb.data().operadorAsignado || {}).uid || null;
+      const sol = snapSol.exists ? snapSol.data() : null;
+      const resueltoEnMs = sol && sol.resueltoEn && typeof sol.resueltoEn.toMillis === "function" ? sol.resueltoEn.toMillis() : 0;
+      const vigenciaMs = VIGENCIA_ENLACE_CHECKPOINT_HORAS * 60 * 60 * 1000;
+      const mismoOperador = !!sol && !!operadorUid && sol.operadorUid === operadorUid;
+      const autorizacionVigente = !!sol && sol.estado === "autorizada" && mismoOperador
+        && resueltoEnMs > 0 && (resueltoEnMs + vigenciaMs) > Date.now();
+
+      if (!autorizacionVigente && !esAdminUsuario) {
+        if (!sol) {
+          throw new HttpsError("permission-denied", "Esta validación necesita la autorización de un administrador. Solicítala primero.");
+        } else if (!mismoOperador) {
+          throw new HttpsError("failed-precondition", "El operador asignado cambió desde que se hizo la solicitud. Solicita de nuevo.");
+        } else if (sol.estado === "solicitada") {
+          throw new HttpsError("failed-precondition", "La solicitud sigue esperando la autorización de un administrador.");
+        } else if (sol.estado === "rechazada") {
+          throw new HttpsError("permission-denied", "Un administrador rechazó la solicitud. Puedes enviar otra.");
+        }
+        throw new HttpsError("failed-precondition", "La autorización venció (dura 12 horas). Solicita de nuevo.");
+      }
+
+      let resultado;
+      try {
+        resultado = await ejecutarValidacionRemota({
+          db: dbAlanis,
+          FieldValue,
+          actor,
+          entrada: { ...entrada, embarqueId },
+        });
+      } catch (e) {
+        if (e instanceof ErrorValidacion) {
+          throw new HttpsError(e.codigoHttps, e.message, { motivo: e.motivo });
+        }
+        throw e;
+      }
+
+      logger.info(`[validarPreEntregaRemota] ${embarqueId} → ${resultado.estatusValidacion} por ${actor.uid} (${autorizacionVigente ? "solicitud autorizada" : "admin directo"})`);
+
+      // Rastro en la solicitud (la bitácora de alanis-operadores no se edita).
+      // Si falla, la validación ya quedó registrada: solo se avisa en el log.
+      if (sol) {
+        try {
+          await refSolicitud.update({
+            validacionRealizada: {
+              por: { uid: actor.uid, nombre: actor.nombre },
+              en: Timestamp.now(),
+              resultado: resultado.estatusValidacion,
+              bitacoraId: resultado.bitacoraId,
+              tipo: autorizacionVigente ? "solicitud" : "admin_directo",
+            },
+          });
+        } catch (eSol) {
+          logger.warn(`[validarPreEntregaRemota] no se pudo anotar en la solicitud ${embarqueId}__pre_entrega: ${eSol.message}`);
+        }
+      }
+      return resultado;
+    } catch (error) {
+      if (error instanceof HttpsError) throw error;
+      logger.error(`[validarPreEntregaRemota] falló para ${embarqueId}: ${error.message}`);
+      throw new HttpsError("internal", "No se pudo registrar la validación. Intenta de nuevo.");
+    }
+  }
+);
+
+// Consulta de la bitácora de validaciones remotas (vive en alanis-operadores,
+// por eso se lee aquí con el Admin SDK y no desde el navegador). Solo
+// Operaciones y admin. No devuelve el UUID/RFC esperados.
+exports.listarValidacionesRemotas = onCall(
+  { region: REGION },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+    }
+    await leerActorOperaciones_(request);
+    try {
+      const snap = await dbAlanis.collection(COL_BITACORA_VALIDACIONES_REMOTAS)
+        .orderBy("creadoEn", "desc").limit(100).get();
+      const registros = snap.docs.map((d) => {
+        const x = d.data();
+        return {
+          id: d.id,
+          creadoEnMs: x.creadoEn && typeof x.creadoEn.toMillis === "function" ? x.creadoEn.toMillis() : null,
+          embarqueId: x.embarqueId || null,
+          shipment: x.shipment || null,
+          ocCliente: x.ocCliente || null,
+          caja: x.caja || null,
+          resultado: x.resultado || null,
+          discrepanciaDetalle: x.discrepanciaDetalle || null,
+          realizadoPor: x.realizadoPor ? { nombre: x.realizadoPor.nombre || null, puesto: x.realizadoPor.puesto || null } : null,
+          enNombreDe: x.enNombreDe ? { nombre: x.enNombreDe.nombre || null, numero: x.enNombreDe.numero || null } : null,
+          lecturaManual: x.lecturaManual === true,
+          motivoOperador: x.motivoOperador || null,
+          notaMotivo: x.notaMotivo || null,
+          evidencia: x.evidencia ? { tipo: x.evidencia.tipo || null, nota: x.evidencia.nota || null } : null,
+        };
+      });
+      return { ok: true, registros };
+    } catch (error) {
+      logger.error(`[listarValidacionesRemotas] ${error.message}`);
+      throw new HttpsError("internal", "No se pudo cargar la bitácora.");
+    }
+  }
+);
+// 8 — Reporte Walmart: procesa correos de citas (ver walmartCitas.js)
+exports.procesarCorreoWalmart = require("./walmartCitas").procesarCorreoWalmart;

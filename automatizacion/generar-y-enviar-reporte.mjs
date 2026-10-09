@@ -92,6 +92,10 @@ import {
   construirPaginaRH, construirPaginaNomina, construirHtmlReporteCompleto,
   idsIncluidosEnReporte
 } from "../public/js/reportesHtml.js";
+// Bloque de "Autorizaciones adicionales" (bonos/gratificaciones capturados en
+// la pestaña Gestión → Extras de la app) para el cuerpo del correo — mismo
+// módulo que usa la "vista previa" de esa pantalla.
+import { construirBloqueCorreo } from "../public/js/autorizacionesExtraCorreo.js";
 
 const ZONA_HORARIA = "America/Matamoros"; // Nuevo Laredo, Tamps. — frontera con horario de verano tipo EU.
 const HORA_OBJETIVO = 18; // 6:00 pm hora de Nuevo Laredo.
@@ -192,6 +196,17 @@ async function main() {
   const listaFaltas = snapFaltas.docs.map(d => ({ id: d.id, ...d.data() }));
   const mapUsuarios = new Map(snapUsuarios.docs.map(d => [d.id, d.data()]));
   console.log(`Leído de Firestore: ${listaHoras.length} solicitudes de horas extra, ${listaVacaciones.length} de vacaciones, ${listaFaltas.length} faltas, ${mapUsuarios.size} usuarios.`);
+
+  // Autorizaciones extra que van en el cuerpo del correo: las de esta semana
+  // o de semanas anteriores que todavía no salieron en ningún correo
+  // (rezagadas), más las que ya salieron en ESTA misma semana (así un envío
+  // forzado/reenvío del mismo jueves reproduce el mismo correo). Las de
+  // semanas futuras no entran todavía.
+  const snapAutorizaciones = await db.collection("autorizacionesExtra").get();
+  const autorizacionesDelCorreo = snapAutorizaciones.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(a => (!a.enviadoEn && a.semanaViernes && a.semanaViernes <= viernes) || a.enviadoEnSemana === viernes);
+  console.log(`Autorizaciones extra para este correo: ${autorizacionesDelCorreo.length}.`);
   console.log(`Semana laboral ${numeroSemana}: del ${viernes} al ${jueves}.`);
 
   // --- 4. Armar el HTML del reporte (mismo módulo que usa el navegador) ---
@@ -243,6 +258,7 @@ async function main() {
   const cuerpo = `
     <p>Se adjunta el reporte semanal de horas extra, faltas y vacaciones aprobadas — semana ${numeroSemana}, del ${formatearFechaLargaCap(viernes)} al ${formatearFechaLargaCap(jueves)}.</p>
     <p>Este correo se generó y envió automáticamente el día de corte (jueves) desde Adrematasa Interno — no requiere ninguna acción, solo incluye lo que ya estaba <strong>aprobado</strong> a esta hora.</p>
+    ${construirBloqueCorreo({ autorizaciones: autorizacionesDelCorreo, viernesActual: viernes })}
   `;
 
   const respuesta = await fetch("https://api.brevo.com/v3/smtp/email", {
@@ -280,6 +296,28 @@ async function main() {
   // js/reportesHtml.js, sección "Pendientes de semanas anteriores", para el
   // porqué completo de esta bandera).
   await marcarComoEnviado({ db, listaHoras, listaVacaciones, listaFaltas, viernes, jueves });
+
+  // --- 7b. Marcar como enviadas las autorizaciones extra que iban en el correo ---
+  // En try/catch aparte a propósito: el correo YA salió, y si esto truena el
+  // paso 8 (marcar la semana como enviada) no se ejecutaría — el siguiente
+  // disparo reenviaría el reporte completo. Peor caso si falla aquí: una
+  // autorización saldría otra vez el jueves siguiente (se ve en el log).
+  try {
+    const sinMarcar = autorizacionesDelCorreo.filter(a => !a.enviadoEn);
+    if (sinMarcar.length > 0) {
+      const ahoraIsoAut = new Date().toISOString();
+      for (let i = 0; i < sinMarcar.length; i += 450) {
+        const lote = db.batch();
+        sinMarcar.slice(i, i + 450).forEach(a => {
+          lote.update(db.collection("autorizacionesExtra").doc(a.id), { enviadoEn: ahoraIsoAut, enviadoEnSemana: viernes });
+        });
+        await lote.commit();
+      }
+      console.log(`Autorizaciones extra marcadas como enviadas: ${sinMarcar.length}.`);
+    }
+  } catch (errAut) {
+    console.error("ATENCIÓN: el correo salió, pero no se pudieron marcar como enviadas las autorizaciones extra — podrían repetirse el próximo jueves:", errAut);
+  }
 
   // --- 8. Marcar la SEMANA completa como enviada ---
   // Aparte de las solicitudes individuales del paso anterior: esto es lo que

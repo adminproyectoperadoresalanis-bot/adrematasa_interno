@@ -11,6 +11,15 @@ const SUBTABS_GESTION = [
   { id: "faltas", etiqueta: "Faltas" }
 ];
 
+// Solo el admin ve un cuarto toggle en "Gestión": "Extras" = autorizaciones
+// extra (bonos/gratificaciones que se agregan al correo semanal de nómina —
+// ver js/autorizacionesExtra.js). Va dentro de Gestión y no como pestaña
+// aparte porque el menú inferior del admin ya tiene 8 botones.
+const SUBTABS_GESTION_ADMIN = [
+  ...SUBTABS_GESTION,
+  { id: "autorizacionesExtra", etiqueta: "Extras" }
+];
+
 // Un ícono representativo por pestaña del menú inferior (SVG en línea, sin
 // depender de ninguna fuente de íconos ni de emoji — así se ve igual en
 // cualquier celular). "equipo" y "catalogo" comparten el mismo ícono de
@@ -53,7 +62,7 @@ const TABS_POR_ROL = {
     { id: "escaneoOrigen", etiqueta: "Escaneo QR" },
     { id: "panel", etiqueta: "Panel" },
     { id: "calendarioVacaciones", etiqueta: "Calendario" },
-    { id: "gestion", etiqueta: "Gestión", subtabs: SUBTABS_GESTION },
+    { id: "gestion", etiqueta: "Gestión", subtabs: SUBTABS_GESTION_ADMIN },
     { id: "catalogo", etiqueta: "Catálogo de empleados" },
     { id: "organigrama", etiqueta: "Organigrama" },
     { id: "reportes", etiqueta: "Reportes" },

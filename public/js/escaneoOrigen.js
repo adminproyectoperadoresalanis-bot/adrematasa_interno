@@ -297,7 +297,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const seccionPendientesValidacion3 = `
     <section class="panel" style="margin-top:20px;">
       <h2>Embarques pendientes de tercera validación (Operador)</h2>
-      <p class="nota">Embarques que ya pasaron las dos validaciones de aquí y ya se sincronizaron con Alanis Operadores, esperando que el operador haga su Checkpoint 1 (Despacho) o su Checkpoint 2 (Pre Entrega). Esa validación se hace desde Alanis Operadores, no desde aquí.${puedeValidar2 ? " Si el operador no logra escanear (ni con la foto del QR), Operaciones puede solicitar un enlace de respaldo; solo se genera cuando un administrador lo autoriza." : ""}</p>
+      <p class="nota">Embarques que ya pasaron las dos validaciones de aquí y ya se sincronizaron con Alanis Operadores, esperando que el operador haga su Checkpoint 1 (Despacho) o su Checkpoint 2 (Pre Entrega). Esa validación se hace desde Alanis Operadores, no desde aquí.${puedeValidar2 ? " Si el operador no logra escanear (ni con la foto del QR), Operaciones solicita autorización a un administrador: en el Checkpoint 1 se genera un enlace de respaldo y en el Checkpoint 2 Operaciones hace la validación de forma remota con la foto de la factura." : ""}</p>
       ${puedeValidar2 ? `<div class="enl-resumen" id="enlace-resumen"></div>` : ""}
       <div id="pendientes-validacion3-error" class="error"></div>
       <div class="tabla-wrap">
@@ -306,6 +306,24 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
             <tr><th>Embarque</th><th>Cliente</th><th>Caja</th><th>2da validación por</th><th>Estado</th>${puedeValidar2 ? "<th>Acción</th>" : ""}</tr>
           </thead>
           <tbody id="tbody-pendientes-validacion3"><tr><td colspan="${puedeValidar2 ? 6 : 5}">Cargando...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  `;
+
+  // Bitácora de validaciones remotas del Checkpoint 2 (2026-10-08): vive en
+  // alanis-operadores, así que se consulta con una Cloud Function y solo al
+  // pulsar el botón (no hay suscripción en vivo).
+  const seccionBitacoraRemota = !puedeValidar2 ? "" : `
+    <section class="panel" style="margin-top:20px;">
+      <h2>Validaciones remotas (Checkpoint 2)</h2>
+      <p class="nota">Registro de las veces que Operaciones validó el Checkpoint 2 en nombre de un operador que no pudo escanear: quién lo hizo, con qué motivo y con qué resultado.</p>
+      <div class="enl-resumen"><button type="button" class="secundario" id="bvr-cargar">Ver registro</button></div>
+      <div id="bvr-error" class="error"></div>
+      <div class="tabla-wrap oculto" id="bvr-wrap">
+        <table class="tabla">
+          <thead><tr><th>Fecha</th><th>Embarque</th><th>Operador</th><th>Validó</th><th>Resultado</th><th>Detalle</th></tr></thead>
+          <tbody id="bvr-tbody"></tbody>
         </table>
       </div>
     </section>
@@ -804,6 +822,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     ${seccionPendientesOrigen}
     ${seccionPendientesValidacion2}
     ${seccionPendientesValidacion3}
+    ${seccionBitacoraRemota}
     ${avisoSinPasoAsignado}
 
     <section class="panel" style="margin-top:20px;">
@@ -959,6 +978,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       <symbol id="enl-i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
       <symbol id="enl-i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
       <symbol id="enl-i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+      <symbol id="enl-i-doccheck" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 14.5l2 2 4-4"/></symbol>
       <symbol id="enl-i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/></symbol>
     </svg>
 
@@ -968,7 +988,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       <div class="modal-tarjeta">
         <h2>Solicitar enlace de respaldo</h2>
         <p class="nota" id="enl-sol-resumen"></p>
-        <p class="nota">Un administrador recibirá tu solicitud y, si la autoriza, se habilitará el botón para generar el enlace.</p>
+        <p class="nota" id="enl-sol-texto">Un administrador recibirá tu solicitud y, si la autoriza, se habilitará el botón para generar el enlace.</p>
         <label class="enl-campo" for="enl-sol-motivo">¿Qué pasó?</label>
         <select id="enl-sol-motivo" class="enl-input">
           <option value="">Selecciona un motivo…</option>
@@ -994,13 +1014,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <p class="nota" id="enl-rev-resumen"></p>
         <div class="enl-caja"><b>Pidió</b><span id="enl-rev-pidio"></span></div>
         <div class="enl-caja"><b>Motivo</b><span id="enl-rev-motivo"></span></div>
-        <p class="nota">Con este enlace el operador completa el checkpoint <strong>sin escanear</strong>: se salta la comprobación de que tiene la factura en la mano. Vale 12 horas y se usa una sola vez.</p>
-        <div id="enl-rev-cp2-wrap" class="oculto">
-          <label class="reiniciar-flujo-confirmar">
-            <input type="checkbox" id="enl-rev-cp2">
-            <span>Verifiqué por otro medio (foto, llamada o en persona) que la documentación que lleva el operador corresponde a este embarque.</span>
-          </label>
-        </div>
+        <p class="nota" id="enl-rev-texto"></p>
         <label class="enl-campo" for="enl-rev-comentario">Comentario (opcional, lo ve quien solicitó)</label>
         <input type="text" id="enl-rev-comentario" class="enl-input" maxlength="300" placeholder="Ej.: autorizado, ya hablé con el operador">
         <div id="enl-rev-error" class="error"></div>
@@ -1009,6 +1023,62 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
           <button type="button" class="btn-rojo" id="enl-rev-rechazar">Rechazar</button>
           <button type="button" class="btn-verde" id="enl-rev-autorizar">Autorizar</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Validación remota del Checkpoint 2 (2026-10-08): Operaciones lee el QR
+         de la foto de la factura que le manda el operador (o captura folio y
+         RFC a mano). NO se muestra ni se precarga el UUID/RFC esperado: la
+         comparación la hace la Cloud Function validarPreEntregaRemota. -->
+    <div id="modal-validacion-remota" class="modal-overlay oculto">
+      <div class="modal-tarjeta" style="max-height:92vh;overflow-y:auto;">
+        <h2>Validación remota — Checkpoint 2 (Pre Entrega)</h2>
+        <p class="nota" id="vr-resumen"></p>
+        <div id="vr-paso1">
+          <p class="nota">Pídele al operador por WhatsApp la foto de la factura que lleva. Súbela aquí y se lee el QR desde el archivo. El sistema la compara con la factura esperada del embarque; por seguridad esa información no se muestra.</p>
+          <label class="enl-campo" for="vr-foto">Foto de la factura</label>
+          <input type="file" id="vr-foto" class="enl-input" accept="image/*">
+          <p class="nota" id="vr-lectura-estado" style="margin:6px 0 0;"></p>
+          <div id="vr-leido" class="oculto" style="margin-top:8px;">
+            <div class="enl-caja"><b>Folio fiscal (UUID) leído</b><span id="vr-leido-uuid"></span></div>
+            <div class="enl-caja"><b>RFC receptor leído</b><span id="vr-leido-rfc"></span></div>
+          </div>
+          <p style="margin:8px 0 0;"><button type="button" class="secundario" id="vr-manual-toggle">No se lee: capturar a mano</button></p>
+          <div id="vr-manual" class="oculto">
+            <label class="enl-campo" for="vr-manual-uuid">Folio fiscal (UUID) impreso en la factura</label>
+            <input type="text" id="vr-manual-uuid" class="enl-input" autocomplete="off" placeholder="00000000-0000-0000-0000-000000000000">
+            <label class="enl-campo" for="vr-manual-rfc">RFC del receptor</label>
+            <input type="text" id="vr-manual-rfc" class="enl-input" autocomplete="off" placeholder="XAXX010101000">
+          </div>
+          <label class="enl-campo" for="vr-motivo">¿Por qué no pudo escanear el operador?</label>
+          <select id="vr-motivo" class="enl-input">
+            <option value="">Selecciona un motivo…</option>
+            <option value="camara_no_funciona">La cámara del teléfono no funciona</option>
+            <option value="qr_ilegible">El QR está dañado o no se lee</option>
+            <option value="app_no_funciona">La aplicación no funciona</option>
+            <option value="otro">Otro</option>
+          </select>
+          <label class="enl-campo" for="vr-nota-motivo">Nota (obligatoria si el motivo es "Otro")</label>
+          <textarea id="vr-nota-motivo" class="enl-input" maxlength="300"></textarea>
+          <label class="enl-campo" for="vr-evidencia">Evidencia que recibiste del operador</label>
+          <select id="vr-evidencia" class="enl-input">
+            <option value="foto_whatsapp">Foto de la factura por WhatsApp</option>
+            <option value="otro">Otra</option>
+          </select>
+          <label class="enl-campo" for="vr-evidencia-nota">Nota de la evidencia (opcional)</label>
+          <input type="text" id="vr-evidencia-nota" class="enl-input" maxlength="300">
+          <p class="nota" style="margin-top:12px;">Se registra <strong>una sola vez</strong>, con tu nombre en la bitácora y a nombre del operador. Revisa que los datos correspondan a la foto antes de continuar.</p>
+          <div id="vr-error" class="error"></div>
+          <div class="modal-acciones">
+            <button type="button" class="secundario" id="vr-cancelar">Cancelar</button>
+            <button type="button" id="vr-enviar" disabled>Registrar validación</button>
+          </div>
+        </div>
+        <div id="vr-paso2" class="oculto">
+          <div id="vr-resultado" class="enl-caja"></div>
+          <div class="modal-acciones"><button type="button" id="vr-cerrar">Cerrar</button></div>
+        </div>
+        <div id="vr-qr-host" style="position:absolute;left:-9999px;top:0;width:320px;height:320px;overflow:hidden;" aria-hidden="true"></div>
       </div>
     </div>
 
@@ -1603,6 +1673,9 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   //   none | solicitada | autorizada | emitida | rechazada
   const VIGENCIA_AUTORIZACION_ENLACE_MS = 12 * 60 * 60 * 1000;
   const mapaSolicitudesEnlace = new Map();
+  // Validaciones remotas recién registradas desde esta pantalla (id → estatus):
+  // la fila sigue visible hasta que el resultado del operador se sincroniza.
+  const recienValidados = new Map();
   function msDe_(ts, siNulo) {
     if (ts && typeof ts.toMillis === "function") return ts.toMillis();
     return siNulo;
@@ -1646,24 +1719,35 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   function enlChip_(clase, icono, texto) {
     return `<span class="enl-chip ${clase}">${enlSvg_(icono)}${escapeHtml(texto)}</span>`;
   }
-  function accionesEnlace_(st, etapa) {
+  // El Checkpoint 1 se resuelve con un enlace de respaldo; el Checkpoint 2,
+  // con una validación remota (2026-10-08: Alanis Operadores no acepta
+  // enlaces de pre_entrega).
+  function accionesEnlace_(st, etapa, f) {
+    const esCp2 = etapa === "pre_entrega";
+    const hecha = f && recienValidados.get(f.id);
+    if (hecha) {
+      return enlChip_(hecha === "VALIDADO" ? "grn" : "red", hecha === "VALIDADO" ? "check" : "x", `Registrada: ${hecha}`);
+    }
+    const ejecutar = (tipAdmin, clases) => esCp2
+      ? enlBoton_("validar", etapa, "doccheck", tipAdmin ? "Validar de forma remota (admin)" : "Validar de forma remota", clases)
+      : enlBoton_("generar", etapa, "link", tipAdmin ? "Generar enlace (admin: sin solicitud)" : "Generar enlace de respaldo", clases);
+    const solicitar = (tip, clases) => enlBoton_("solicitar", etapa, "linklock", tip, clases);
+    const tipSolicitar = esCp2 ? "Solicitar validación remota" : "Solicitar enlace de respaldo";
     switch (st.estado) {
       case "none":
-        return esAdmin
-          ? enlBoton_("generar", etapa, "link", "Generar enlace (admin: sin solicitud)", "solido")
-          : enlBoton_("solicitar", etapa, "linklock", "Solicitar enlace de respaldo", "bloq");
+        return esAdmin ? ejecutar(true, "solido") : solicitar(tipSolicitar, "bloq");
       case "solicitada":
         return esAdmin
           ? enlBoton_("autorizar", etapa, "check", "Revisar y autorizar", "ok") + enlBoton_("rechazar", etapa, "x", "Revisar y rechazar", "no")
           : enlChip_("amb", "clock", "Solicitud enviada") + enlBoton_("cancelar", etapa, "x", "Cancelar mi solicitud", "no chico");
       case "autorizada":
-        return enlBoton_("generar", etapa, "link", "Generar enlace de respaldo", "solido");
+        return ejecutar(false, "solido");
       case "emitida":
         return enlChip_("grn", "link", "Emitido") + enlBoton_("generar", etapa, "refresh", "Volver a generar (el anterior se anula)", "chico");
       case "rechazada":
         return enlChip_("red", "x", "Rechazada") + (esAdmin
-          ? enlBoton_("generar", etapa, "link", "Generar enlace (admin)", "solido chico")
-          : enlBoton_("solicitar", etapa, "linklock", "Solicitar de nuevo", "bloq chico"));
+          ? ejecutar(true, "solido chico")
+          : solicitar("Solicitar de nuevo", "bloq chico"));
     }
     return "";
   }
@@ -1704,7 +1788,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       if (resumenDiv) {
         if (esAdmin) {
           resumenDiv.innerHTML = nSol
-            ? `<button type="button" class="enl-chip amb" id="enlace-resumen-pendientes">${enlSvg_("clock")}${nSol} ${nSol === 1 ? "solicitud" : "solicitudes"} de enlace por autorizar</button>`
+            ? `<button type="button" class="enl-chip amb" id="enlace-resumen-pendientes">${enlSvg_("clock")}${nSol} ${nSol === 1 ? "solicitud" : "solicitudes"} por autorizar</button>`
             : `<span class="enl-chip grn">${enlSvg_("check")}Sin solicitudes pendientes</span>`;
         } else {
           resumenDiv.innerHTML = nSol
@@ -1736,7 +1820,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—")}</td>
         <td>${escapeHtml((f.validacion2 && f.validacion2.escaneadoPor && f.validacion2.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.validacion2 && f.validacion2.timestamp)}</td>
         <td><span class="nota" style="margin:0;">${puedeValidar2 ? estadoTextoEnlace_(st, etapa) : `Esperando ${ETIQUETA_CHECKPOINT[etapa]}`}</span></td>
-        ${puedeValidar2 ? `<td>${op && op.uid ? `<div class="enl-acc">${accionesEnlace_(st, etapa)}</div>` : ""}</td>` : ""}
+        ${puedeValidar2 ? `<td>${op && op.uid ? `<div class="enl-acc">${accionesEnlace_(st, etapa, f)}</div>` : ""}</td>` : ""}
       </tr>`;
     }).join("");
   }
@@ -1790,6 +1874,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   function abrirModalEnlaceCp(id, f, checkpoint) {
     if (!puedeValidar2 || !f || !f.operadorAsignado || !f.operadorAsignado.uid) return;
     if (!ETIQUETA_CHECKPOINT[checkpoint]) return;
+    if (checkpoint !== "recepcion") return;   // el Checkpoint 2 ya no usa enlaces
     enlaceCpEmbarqueId = id;
     enlaceCpCheckpoint = checkpoint;
     enlaceCpResultado = null;
@@ -1897,6 +1982,9 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     if (!op || !op.uid) return;
     solEmbarqueId = id; solEtapa = etapa;
     solResumen.textContent = `${f.embarqueId || id} · ${ETIQUETA_CHECKPOINT[etapa]} · Operador: ${nombreOperador_(op.uid, op.nombre)}`;
+    contenedor.querySelector("#enl-sol-texto").textContent = etapa === "pre_entrega"
+      ? "Un administrador recibirá tu solicitud y, si la autoriza, podrás validar el Checkpoint 2 de forma remota con la foto de la factura."
+      : "Un administrador recibirá tu solicitud y, si la autoriza, se habilitará el botón para generar el enlace.";
     solMotivo.value = "";
     solDetalle.value = "";
     solError.textContent = "";
@@ -1952,8 +2040,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   const revResumen = contenedor.querySelector("#enl-rev-resumen");
   const revPidio = contenedor.querySelector("#enl-rev-pidio");
   const revMotivo = contenedor.querySelector("#enl-rev-motivo");
-  const revCp2Wrap = contenedor.querySelector("#enl-rev-cp2-wrap");
-  const revCp2 = contenedor.querySelector("#enl-rev-cp2");
+  const revTexto = contenedor.querySelector("#enl-rev-texto");
   const revComentario = contenedor.querySelector("#enl-rev-comentario");
   const revError = contenedor.querySelector("#enl-rev-error");
   const revAutorizar = contenedor.querySelector("#enl-rev-autorizar");
@@ -1975,19 +2062,17 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     revResumen.textContent = `${f.embarqueId || id} · ${ETIQUETA_CHECKPOINT[etapa]} · Operador: ${nombreOperador_(op.uid, op.nombre)}`;
     revPidio.textContent = `${(sol.solicitadoPor && sol.solicitadoPor.nombre) || "—"} · ${haceCuanto_(msDe_(sol.solicitadoEn, 0))}`;
     revMotivo.textContent = sol.motivo === "Otro" ? `Otro: ${sol.detalle || ""}` : `${sol.motivo || ""}${sol.detalle ? " — " + sol.detalle : ""}`;
-    const esCp2 = etapa === "pre_entrega";
-    revCp2Wrap.classList.toggle("oculto", !esCp2);
-    revCp2.checked = false;
+    revTexto.innerHTML = etapa === "pre_entrega"
+      ? "Al autorizar, Operaciones podrá registrar el Checkpoint 2 <strong>a nombre del operador</strong> leyendo la foto de la factura que él le mande. El sistema compara contra la factura esperada. La autorización vale 12 horas y la validación se registra una sola vez."
+      : "Con este enlace el operador completa el checkpoint <strong>sin escanear</strong>: se salta la comprobación de que tiene la factura en la mano. Vale 12 horas y se usa una sola vez.";
     revComentario.value = "";
     revError.textContent = "";
-    revAutorizar.disabled = esCp2;
+    revAutorizar.disabled = false;
     revRechazar.disabled = false;
     modalRev.classList.remove("oculto");
   }
   async function resolverSolicitud_(autorizar) {
     if (revResolviendo || !revEmbarqueId) return;
-    const esCp2 = revEtapa === "pre_entrega";
-    if (autorizar && esCp2 && !revCp2.checked) return;
     revResolviendo = true;
     revAutorizar.disabled = true;
     revRechazar.disabled = true;
@@ -1998,7 +2083,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         resueltoPor: { uid, nombre: datosUsuario.nombre || "" },
         resueltoEn: serverTimestamp(),
         comentarioAdmin: revComentario.value.trim(),
-        verificacionManual: !!(autorizar && esCp2)
+        verificacionManual: false
       });
       revResolviendo = false;
       cerrarModalRevision_();
@@ -2007,11 +2092,253 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       revResolviendo = false;
       revError.textContent = "No se pudo guardar: " + ((e && e.message) || "intenta de nuevo.");
       revRechazar.disabled = false;
-      revAutorizar.disabled = esCp2 && !revCp2.checked;
+      revAutorizar.disabled = false;
+    }
+  }
+
+  // ---- Validación remota del Checkpoint 2 (2026-10-08) -------------------
+  const modalVr = contenedor.querySelector("#modal-validacion-remota");
+  const vrResumen = contenedor.querySelector("#vr-resumen");
+  const vrPaso1 = contenedor.querySelector("#vr-paso1");
+  const vrPaso2 = contenedor.querySelector("#vr-paso2");
+  const vrFoto = contenedor.querySelector("#vr-foto");
+  const vrLecturaEstado = contenedor.querySelector("#vr-lectura-estado");
+  const vrLeido = contenedor.querySelector("#vr-leido");
+  const vrLeidoUuid = contenedor.querySelector("#vr-leido-uuid");
+  const vrLeidoRfc = contenedor.querySelector("#vr-leido-rfc");
+  const vrManualToggle = contenedor.querySelector("#vr-manual-toggle");
+  const vrManualDiv = contenedor.querySelector("#vr-manual");
+  const vrManualUuid = contenedor.querySelector("#vr-manual-uuid");
+  const vrManualRfc = contenedor.querySelector("#vr-manual-rfc");
+  const vrMotivo = contenedor.querySelector("#vr-motivo");
+  const vrNotaMotivo = contenedor.querySelector("#vr-nota-motivo");
+  const vrEvidencia = contenedor.querySelector("#vr-evidencia");
+  const vrEvidenciaNota = contenedor.querySelector("#vr-evidencia-nota");
+  const vrError = contenedor.querySelector("#vr-error");
+  const vrEnviar = contenedor.querySelector("#vr-enviar");
+  const vrResultado = contenedor.querySelector("#vr-resultado");
+  const UUID_RE_VR = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/;
+  const RFC_RE_VR = /^[A-Z&Ñ]{3,4}[0-9]{6}[A-Z0-9]{3}$/;
+  // Motivo de la solicitud (lista de la pantalla de solicitar) → código que
+  // espera la función. Solo precarga el selector; Operaciones puede cambiarlo.
+  const MOTIVO_SOLICITUD_A_OPERADOR = {
+    "Cámara del teléfono no funciona": "camara_no_funciona",
+    "QR dañado o ilegible": "qr_ilegible",
+    "Sin señal o datos en el teléfono": "app_no_funciona",
+    "Otro": "otro"
+  };
+  let vrEmbarqueId = null, vrDatosQr = null, vrManual = false, vrLeyendo = false, vrEnviando = false;
+
+  function datosVr_() {
+    if (vrManual) {
+      const uuid = vrManualUuid.value.trim().toUpperCase();
+      const rfc = vrManualRfc.value.trim().toUpperCase();
+      return UUID_RE_VR.test(uuid) && RFC_RE_VR.test(rfc) ? { uuid, rfc, lecturaManual: true } : null;
+    }
+    return vrDatosQr ? { uuid: vrDatosQr.uuid, rfc: vrDatosQr.rfc, lecturaManual: false } : null;
+  }
+  function revisarFormVr_() {
+    const motivo = vrMotivo.value;
+    const ok = !!datosVr_() && !vrLeyendo && !vrEnviando && !!motivo
+      && (motivo !== "otro" || !!vrNotaMotivo.value.trim()) && !!vrEvidencia.value;
+    vrEnviar.disabled = !ok;
+  }
+  function ponerModoManualVr_(manual) {
+    vrManual = manual;
+    vrManualDiv.classList.toggle("oculto", !manual);
+    vrLeido.classList.toggle("oculto", manual || !vrDatosQr);
+    vrManualToggle.textContent = manual ? "Leer de la foto" : "No se lee: capturar a mano";
+    revisarFormVr_();
+  }
+  function cerrarModalVr_() {
+    if (vrEnviando) return;
+    modalVr.classList.add("oculto");
+    vrEmbarqueId = null; vrDatosQr = null;
+    vrFoto.value = "";
+  }
+  function abrirModalValidacionRemota_(id, f, etapa) {
+    if (!puedeValidar2 || etapa !== "pre_entrega" || !f || !f.operadorAsignado || !f.operadorAsignado.uid) return;
+    const st = estadoSolicitudEnlace_(f, etapa);
+    vrEmbarqueId = id; vrDatosQr = null; vrManual = false; vrLeyendo = false; vrEnviando = false;
+    vrResumen.textContent = `${f.embarqueId || id} · Operador: ${nombreOperador_(f.operadorAsignado.uid, f.operadorAsignado.nombre)}`;
+    vrFoto.value = "";
+    vrLecturaEstado.textContent = "";
+    vrLeido.classList.add("oculto");
+    vrManualDiv.classList.add("oculto");
+    vrManualUuid.value = ""; vrManualRfc.value = "";
+    vrManualToggle.textContent = "No se lee: capturar a mano";
+    const sol = st.sol;
+    vrMotivo.value = (sol && MOTIVO_SOLICITUD_A_OPERADOR[sol.motivo]) || "";
+    vrNotaMotivo.value = (sol && sol.motivo === "Otro" && sol.detalle) ? sol.detalle : "";
+    vrEvidencia.value = "foto_whatsapp";
+    vrEvidenciaNota.value = "";
+    vrError.textContent = "";
+    vrEnviar.textContent = "Registrar validación";
+    vrPaso1.classList.remove("oculto");
+    vrPaso2.classList.add("oculto");
+    revisarFormVr_();
+    modalVr.classList.remove("oculto");
+  }
+
+  // Lee el QR del CFDI desde un archivo de imagen (no con cámara). Si la foto
+  // es muy grande (o muy nítida) el lector a veces no encuentra el QR, así que
+  // se reintenta con la imagen reducida a varios tamaños.
+  async function reducirImagenVr_(file, maxLado) {
+    const bmp = await createImageBitmap(file);
+    const escala = Math.min(1, maxLado / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * escala); c.height = Math.round(bmp.height * escala);
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise(r => c.toBlob(r, "image/png"));
+    return new File([blob], "reducida.png", { type: "image/png" });
+  }
+  async function leerQrDeArchivoVr_(file) {
+    if (typeof window.Html5Qrcode === "undefined") throw new Error("lector_no_disponible");
+    const lector = new window.Html5Qrcode("vr-qr-host", false);
+    const candidatos = [file];
+    for (const lado of [1600, 1200, 800, 500]) {
+      try { candidatos.push(await reducirImagenVr_(file, lado)); } catch (e) { /* sin reducir */ }
+    }
+    try {
+      for (const cand of candidatos) {
+        try {
+          const texto = await lector.scanFile(cand, false);
+          const datos = parsearQR(texto);
+          if (datos) return datos;
+        } catch (e) { /* no se encontró QR en este intento */ }
+      }
+    } finally {
+      try { lector.clear(); } catch (e) { /* nada */ }
+    }
+    return null;
+  }
+  async function alElegirFotoVr_() {
+    const archivo = vrFoto.files && vrFoto.files[0];
+    vrDatosQr = null;
+    vrLeido.classList.add("oculto");
+    if (!archivo) { vrLecturaEstado.textContent = ""; revisarFormVr_(); return; }
+    vrLeyendo = true;
+    vrLecturaEstado.textContent = "Leyendo el QR…";
+    revisarFormVr_();
+    try {
+      const datos = await leerQrDeArchivoVr_(archivo);
+      if (datos) {
+        vrDatosQr = datos;
+        vrLeidoUuid.textContent = datos.uuid;
+        vrLeidoRfc.textContent = datos.rfc;
+        vrLecturaEstado.textContent = "QR leído. Verifica que los datos correspondan a la factura de la foto.";
+        if (!vrManual) vrLeido.classList.remove("oculto");
+      } else {
+        vrLecturaEstado.textContent = "No se pudo leer un QR de CFDI en esa foto. Prueba con otra foto o captura los datos a mano.";
+      }
+    } catch (e) {
+      vrLecturaEstado.textContent = e && e.message === "lector_no_disponible"
+        ? "El lector de QR no cargó. Captura los datos a mano."
+        : "No se pudo leer la foto. Prueba con otra o captura los datos a mano.";
+    } finally {
+      vrLeyendo = false;
+      revisarFormVr_();
+    }
+  }
+  async function enviarValidacionVr_() {
+    if (vrEnviando || !vrEmbarqueId) return;
+    const datos = datosVr_();
+    if (!datos) return;
+    vrEnviando = true;
+    vrEnviar.disabled = true;
+    vrEnviar.textContent = "Registrando…";
+    vrError.textContent = "";
+    try {
+      const llamar = httpsCallable(getFunctions(getApp(), "us-central1"), "validarPreEntregaRemota");
+      const resp = await llamar({
+        embarqueId: vrEmbarqueId,
+        uuidLeido: datos.uuid,
+        rfcLeido: datos.rfc,
+        lecturaManual: datos.lecturaManual,
+        motivoOperador: vrMotivo.value,
+        notaMotivo: vrNotaMotivo.value.trim() || undefined,
+        evidenciaTipo: vrEvidencia.value,
+        evidenciaNota: vrEvidenciaNota.value.trim() || undefined
+      });
+      const d = resp && resp.data;
+      if (!d || !d.ok) throw new Error("La respuesta del servidor no fue la esperada.");
+      recienValidados.set(vrEmbarqueId, d.estatusValidacion);
+      vrResultado.innerHTML = d.estatusValidacion === "VALIDADO"
+        ? `<b>Resultado</b>El Checkpoint 2 quedó <strong>validado</strong>: los datos coinciden con la factura esperada. Quedó registrado a nombre del operador y a tu nombre en la bitácora.`
+        : `<b>Resultado</b>El Checkpoint 2 quedó registrado con <strong>DISCREPANCIA</strong>: ${escapeHtml(d.discrepanciaDetalle || "los datos no coinciden con la factura esperada")}. Este registro ya no se puede repetir; avisa a tu supervisor.`;
+      vrPaso1.classList.add("oculto");
+      vrPaso2.classList.remove("oculto");
+      vrEnviando = false;
+      renderPendientesValidacion3();
+    } catch (e) {
+      console.error("[validarPreEntregaRemota]", e);
+      vrEnviando = false;
+      vrError.textContent = (e && e.message) ? e.message : "No se pudo registrar la validación. Intenta de nuevo.";
+      vrEnviar.textContent = "Registrar validación";
+      revisarFormVr_();
+    }
+  }
+
+  // Bitácora de validaciones remotas (carga bajo demanda).
+  const ETIQUETA_MOTIVO_VR = {
+    camara_no_funciona: "Cámara no funciona", qr_ilegible: "QR ilegible", app_no_funciona: "App no funciona", otro: "Otro"
+  };
+  async function cargarBitacoraVr_() {
+    const boton = contenedor.querySelector("#bvr-cargar");
+    const errDiv = contenedor.querySelector("#bvr-error");
+    const wrap = contenedor.querySelector("#bvr-wrap");
+    const tbody = contenedor.querySelector("#bvr-tbody");
+    boton.disabled = true; boton.textContent = "Cargando…"; errDiv.textContent = "";
+    try {
+      const llamar = httpsCallable(getFunctions(getApp(), "us-central1"), "listarValidacionesRemotas");
+      const resp = await llamar({});
+      const regs = (resp && resp.data && resp.data.registros) || [];
+      wrap.classList.remove("oculto");
+      tbody.innerHTML = regs.length === 0
+        ? `<tr><td colspan="6">Todavía no hay validaciones remotas registradas.</td></tr>`
+        : regs.map(r => {
+            const ok = r.resultado === "VALIDADO";
+            const detalle = [
+              ETIQUETA_MOTIVO_VR[r.motivoOperador] || r.motivoOperador || "",
+              r.notaMotivo || "",
+              r.lecturaManual ? "captura manual" : "QR de la foto",
+              r.evidencia && r.evidencia.tipo === "foto_whatsapp" ? "foto por WhatsApp" : (r.evidencia && r.evidencia.tipo ? "otra evidencia" : ""),
+              r.evidencia && r.evidencia.nota ? r.evidencia.nota : "",
+              r.discrepanciaDetalle || ""
+            ].filter(Boolean).join(" · ");
+            const op = r.enNombreDe ? `${r.enNombreDe.nombre || "—"}${r.enNombreDe.numero ? " (" + r.enNombreDe.numero + ")" : ""}` : "—";
+            return `<tr>
+              <td>${formatoFecha(r.creadoEnMs)}</td>
+              <td>${escapeHtml(r.shipment || r.ocCliente || r.embarqueId || "—")}<span class="celda-embarque-meta">${escapeHtml(r.caja ? "Caja " + r.caja : "")}</span></td>
+              <td>${escapeHtml(op)}</td>
+              <td>${escapeHtml((r.realizadoPor && r.realizadoPor.nombre) || "—")}<span class="celda-embarque-meta">${escapeHtml((r.realizadoPor && r.realizadoPor.puesto) || "")}</span></td>
+              <td><span class="enl-chip ${ok ? "grn" : "red"}">${escapeHtml(r.resultado || "—")}</span></td>
+              <td style="font-size:12.5px;">${escapeHtml(detalle)}</td>
+            </tr>`;
+          }).join("");
+      boton.textContent = "Actualizar";
+    } catch (e) {
+      console.error("[listarValidacionesRemotas]", e);
+      errDiv.textContent = "No se pudo cargar el registro: " + ((e && e.message) || "intenta de nuevo.");
+      boton.textContent = "Reintentar";
+    } finally {
+      boton.disabled = false;
     }
   }
 
   if (puedeValidar2) {
+    vrFoto.addEventListener("change", alElegirFotoVr_);
+    vrManualToggle.addEventListener("click", () => ponerModoManualVr_(!vrManual));
+    [vrManualUuid, vrManualRfc].forEach(el => el.addEventListener("input", () => { el.value = el.value.toUpperCase(); revisarFormVr_(); }));
+    vrMotivo.addEventListener("change", revisarFormVr_);
+    vrNotaMotivo.addEventListener("input", revisarFormVr_);
+    vrEvidencia.addEventListener("change", revisarFormVr_);
+    vrEnviar.addEventListener("click", enviarValidacionVr_);
+    contenedor.querySelector("#vr-cancelar").addEventListener("click", cerrarModalVr_);
+    contenedor.querySelector("#vr-cerrar").addEventListener("click", cerrarModalVr_);
+    modalVr.addEventListener("click", (e) => { if (e.target === modalVr) cerrarModalVr_(); });
+    contenedor.querySelector("#bvr-cargar").addEventListener("click", cargarBitacoraVr_);
+
     if (tbodyValidacion3) {
       tbodyValidacion3.addEventListener("click", (e) => {
         const btn = e.target.closest("button[data-act]");
@@ -2026,6 +2353,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
         else if (act === "autorizar" || act === "rechazar") abrirModalRevision_(id, f, etapa);
         else if (act === "cancelar") cancelarSolicitud_(id, etapa, btn);
         else if (act === "generar") abrirModalEnlaceCp(id, f, etapa);
+        else if (act === "validar") abrirModalValidacionRemota_(id, f, etapa);
       });
     }
     // Chip del admin: lleva a la primera solicitud pendiente.
@@ -2047,7 +2375,6 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     contenedor.querySelector("#enl-sol-cancelar").addEventListener("click", cerrarModalSolicitud_);
     modalSol.addEventListener("click", (e) => { if (e.target === modalSol) cerrarModalSolicitud_(); });
 
-    revCp2.addEventListener("change", () => { if (!revResolviendo) revAutorizar.disabled = !revCp2.checked; });
     revAutorizar.addEventListener("click", () => resolverSolicitud_(true));
     revRechazar.addEventListener("click", () => resolverSolicitud_(false));
     contenedor.querySelector("#enl-rev-cerrar").addEventListener("click", cerrarModalRevision_);
