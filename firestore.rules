@@ -386,6 +386,7 @@ service cloud.firestore {
       // ya existía, se re-sincroniza todo de nuevo con el valor corregido.
       allow update: if esSupervisorOAdmin()
         && resource.data.origenEscaneo != null
+        && resource.data.get('uuidEsperado', null) != null
         && request.resource.data.embarqueId == resource.data.embarqueId
         && request.resource.data.origenEscaneo.escaneadoPor == resource.data.origenEscaneo.escaneadoPor
         && request.resource.data.uuidEsperado is string
@@ -410,6 +411,7 @@ service cloud.firestore {
       allow update: if esValidador2()
         && resource.data.origenEscaneo != null
         && resource.data.get('validacion2', null) == null
+        && resource.data.get('uuidEsperado', null) != null
         && request.resource.data.embarqueId == resource.data.embarqueId
         && request.resource.data.uuidEsperado == resource.data.uuidEsperado
         && request.resource.data.receptorRFCEsperado == resource.data.receptorRFCEsperado
@@ -607,6 +609,117 @@ service cloud.firestore {
     // documento local; nadie escribe aquí desde el navegador.
     match /historial_reinicios_flujo/{id} {
       allow read: if esAdmin();
+      allow write: if false;
+    }
+
+    // Bitácora de enlaces de respaldo del Checkpoint 1 (2026-10-06) — la llena
+    // generarEnlaceCheckpoint (cuenta de servicio); nunca guarda el código del
+    // enlace, solo quién lo generó, para quién y cuándo.
+    match /historial_enlaces_checkpoint/{id} {
+      allow read: if esAdmin();
+      allow write: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // Solicitudes de enlace de respaldo (2026-10-08, pedido de Ivan): el
+    // enlace ya no se genera "a discreción". Operaciones SOLICITA uno por
+    // embarque y checkpoint, un admin lo AUTORIZA (o rechaza) en el mismo
+    // renglón, y solo entonces Operaciones puede generarlo. Un admin
+    // también puede generarlo directo sin solicitud.
+    //
+    // Id del documento = "<embarqueId>__<checkpoint>" → una sola solicitud
+    // por embarque y checkpoint. La autorización dura 12 h desde resueltoEn
+    // (esa cuenta la hace la Cloud Function generarEnlaceCheckpoint, que es
+    // quien de verdad la hace cumplir; no hay ningún campo de vencimiento
+    // que el navegador pueda falsear). El campo ultimoEnlace y el alta
+    // directa de admin los escribe solo la función (Admin SDK).
+    // ------------------------------------------------------------------
+    match /solicitudes_enlace_checkpoint/{solicitudId} {
+      function solicitudNueva() {
+        let d = request.resource.data;
+        return d.keys().hasOnly(['embarqueId', 'checkpoint', 'estado', 'operadorUid', 'operadorNombre', 'motivo', 'detalle', 'solicitadoPor', 'solicitadoEn'])
+          && d.keys().hasAll(['embarqueId', 'checkpoint', 'estado', 'operadorUid', 'operadorNombre', 'motivo', 'detalle', 'solicitadoPor', 'solicitadoEn'])
+          && d.estado == 'solicitada'
+          && d.embarqueId is string && d.embarqueId.size() > 0
+          && d.checkpoint in ['recepcion', 'pre_entrega']
+          && solicitudId == d.embarqueId + '__' + d.checkpoint
+          && d.operadorUid is string && d.operadorUid.size() > 0
+          && d.operadorNombre is string
+          // El operador de la solicitud tiene que ser el que de verdad
+          // está asignado al embarque ahora mismo.
+          && exists(/databases/$(database)/documents/verificaciones_cfdi_local/$(d.embarqueId))
+          && get(/databases/$(database)/documents/verificaciones_cfdi_local/$(d.embarqueId)).data.get('operadorAsignado', {}).get('uid', '') == d.operadorUid
+          && d.motivo in ['Cámara del teléfono no funciona', 'QR dañado o ilegible', 'Sin señal o datos en el teléfono', 'Otro']
+          && d.detalle is string && d.detalle.size() <= 300
+          && (d.motivo != 'Otro' || d.detalle.size() > 0)
+          && d.solicitadoPor.uid == request.auth.uid
+          && d.solicitadoPor.nombre is string
+          && d.solicitadoEn == request.time;
+      }
+
+      allow read: if esValidador2();
+
+      allow create: if esValidador2() && solicitudNueva();
+
+      allow update: if
+        // (a) Volver a solicitar: solo cuando la anterior ya no sirve
+        //     (rechazada, venció la autorización de 12 h, o cambió el
+        //     operador asignado). Reemplaza el documento completo.
+        (
+          esValidador2() && solicitudNueva() && (
+            resource.data.estado == 'rechazada'
+            || resource.data.operadorUid != request.resource.data.operadorUid
+            || (
+              resource.data.estado == 'autorizada'
+              && resource.data.resueltoEn + duration.value(12, 'h') < request.time
+            )
+          )
+        )
+        // (b) Resolver (solo admin, solo una solicitud pendiente).
+        || (
+          usuarioActivoValido() && usuarioActual().rol == 'admin'
+          && resource.data.estado == 'solicitada'
+          && request.resource.data.estado in ['autorizada', 'rechazada']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado', 'resueltoPor', 'resueltoEn', 'comentarioAdmin', 'verificacionManual'])
+          && request.resource.data.resueltoPor.uid == request.auth.uid
+          && request.resource.data.resueltoPor.nombre is string
+          && request.resource.data.resueltoEn == request.time
+          && request.resource.data.get('comentarioAdmin', '') is string
+          && request.resource.data.get('comentarioAdmin', '').size() <= 300
+          && request.resource.data.get('verificacionManual', false) is bool
+          // (2026-10-08) Para el Checkpoint 2 ya no hay casilla de
+          // "verifiqué por otro medio": la validación remota compara la
+          // foto/captura contra la factura esperada en el servidor.
+        );
+
+      // Cancelar: el que solicitó, mientras siga pendiente; un admin, siempre.
+      allow delete: if esAdmin()
+        || (esValidador2() && resource.data.estado == 'solicitada' && resource.data.solicitadoPor.uid == request.auth.uid);
+    }
+    // ================= REPORTE WALMART (agregar dentro de match /databases/{database}/documents) =================
+    // Correos crudos: SOLO la cuenta del VBA puede crearlos; nadie los modifica desde el navegador.
+    match /walmart_correos/{correoId} {
+      allow create: if request.auth != null
+        && request.auth.token.email == 'vba-walmart@alanis.local'
+        && request.resource.data.estado == 'RECIBIDO'
+        && request.resource.data.filas is list
+        && request.resource.data.filas.size() <= 300;
+      allow read: if request.auth != null
+        && request.auth.token.email.matches('.*@alanis[.]com[.]mx$');
+      allow update, delete: if false;
+    }
+    // Entregas, viajes y avisos: los escribe solo la Cloud Function (Admin SDK no pasa por reglas).
+    // Lectura temporal para personal @alanis.com.mx; se afinará por rol al construir el módulo de la PWA.
+    match /walmart_entregas/{id} {
+      allow read: if request.auth != null && request.auth.token.email.matches('.*@alanis[.]com[.]mx$');
+      allow write: if false;
+    }
+    match /walmart_viajes/{id} {
+      allow read: if request.auth != null && request.auth.token.email.matches('.*@alanis[.]com[.]mx$');
+      allow write: if false;
+    }
+    match /walmart_avisos/{id} {
+      allow read: if request.auth != null && request.auth.token.email.matches('.*@alanis[.]com[.]mx$');
       allow write: if false;
     }
 
