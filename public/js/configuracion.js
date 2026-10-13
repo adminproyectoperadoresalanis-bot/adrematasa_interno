@@ -7,9 +7,25 @@ import { AREAS_DEFAULT } from "./estructuraOrganizacional.js";
 import { OPCIONES_UTILIDADES } from "./navegacion.js";
 
 export function iniciarConfiguracion(contenedor) {
+  // Configuración en 2 secciones (2026-10-13, pedido de Ivan): "1 · RH" y
+  // "2 · Utilidades", cada bloque como acordeón con un resumen de una línea.
+  // Los ids internos de cada bloque son los mismos de antes — la lógica de
+  // carga/guardado de abajo no cambió.
+  inyectarEstilosConfiguracion();
   contenedor.innerHTML = `
-    <section class="panel">
-      <h2>Días de vacaciones por antigüedad</h2>
+    <div class="subnav-gestion cfg-secciones">
+      <button type="button" class="subnav-boton activo" data-seccion="rh">1 · RH</button>
+      <button type="button" class="subnav-boton" data-seccion="utilidades">2 · Utilidades</button>
+    </div>
+
+    <div class="cfg-seccion" data-seccion="rh">
+      <details class="cfg-acordeon">
+        <summary>
+          <svg class="cfg-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="4"/></svg>
+          <span class="cfg-titulos"><span class="cfg-titulo">Días de vacaciones por antigüedad</span><span class="cfg-resumen" id="resumen-vacaciones"></span></span>
+          <span class="cfg-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div class="cfg-cuerpo">
       <p class="nota">
         Con base en la Ley Federal del Trabajo vigente (reforma de "vacaciones dignas").
         "Desde" es la cantidad de años cumplidos de antigüedad a partir de los cuales le
@@ -35,10 +51,15 @@ export function iniciarConfiguracion(contenedor) {
         <button type="button" id="btn-agregar-umbral" class="secundario">+ Agregar rango</button>
         <button type="button" id="btn-guardar-umbrales">Guardar cambios</button>
       </div>
-    </section>
-
-    <section class="panel" style="margin-top:20px;">
-      <h2>Días festivos oficiales</h2>
+        </div>
+      </details>
+      <details class="cfg-acordeon">
+        <summary>
+          <svg class="cfg-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/><circle cx="12" cy="15" r="2"/></svg>
+          <span class="cfg-titulos"><span class="cfg-titulo">Días festivos oficiales</span><span class="cfg-resumen" id="resumen-festivos"></span></span>
+          <span class="cfg-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div class="cfg-cuerpo">
       <p class="nota">
         Catálogo de días festivos conforme al artículo 74 de la Ley Federal del Trabajo. Un
         festivo que cae dentro de una vacación aprobada no se cobra del saldo (igual que el día
@@ -66,10 +87,15 @@ export function iniciarConfiguracion(contenedor) {
         <button type="button" id="btn-agregar-festivo" class="secundario">+ Agregar festivo</button>
         <button type="button" id="btn-guardar-festivos">Guardar cambios</button>
       </div>
-    </section>
-
-    <section class="panel" style="margin-top:20px;">
-      <h2>Áreas y puestos</h2>
+        </div>
+      </details>
+      <details class="cfg-acordeon">
+        <summary>
+          <svg class="cfg-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="5" rx="1"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M12 12H5v4M12 12h7v4"/></svg>
+          <span class="cfg-titulos"><span class="cfg-titulo">Áreas y puestos</span><span class="cfg-resumen" id="resumen-areas"></span></span>
+          <span class="cfg-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div class="cfg-cuerpo">
       <p class="nota">
         Catálogo de áreas y puestos de Alanis. Se usa en Catálogo de empleados y, más adelante,
         para armar el organigrama automático (la línea de mando la sigue dando "Supervisor
@@ -83,33 +109,15 @@ export function iniciarConfiguracion(contenedor) {
         <button type="button" id="btn-agregar-area" class="secundario">+ Agregar área</button>
         <button type="button" id="btn-guardar-areas">Guardar cambios</button>
       </div>
-    </section>
-
-    <section class="panel" style="margin-top:20px;">
-      <h2>Acceso a Utilidades por área</h2>
-      <p class="nota">
-        Marca qué opciones de Utilidades ve cada área. El área decide qué opciones aparecen; el rol
-        sigue decidiendo qué puede hacer cada quien dentro (por ejemplo, en RH un supervisor aprueba
-        a su equipo y un empleado solo solicita). El administrador siempre ve todo. Un empleado sin
-        área asignada no ve ninguna opción. Los cambios se aplican la próxima vez que cada usuario
-        entre o recargue la app. Si renombras un área arriba, vuelve a marcar aquí sus accesos.
-      </p>
-      <p id="accesos-aviso" class="nota oculto" style="color:#8a5a00;"></p>
-      <div id="accesos-error" class="error"></div>
-      <p id="accesos-exito" class="nota oculto" style="color:#1c7a41;"></p>
-      <div class="tabla-wrap">
-        <table class="tabla" id="tabla-accesos">
-          <thead><tr id="thead-accesos"></tr></thead>
-          <tbody id="tbody-accesos"></tbody>
-        </table>
-      </div>
-      <div class="acciones-form" style="margin-top:14px;">
-        <button type="button" id="btn-guardar-accesos">Guardar accesos</button>
-      </div>
-    </section>
-
-    <section class="panel" style="margin-top:20px;">
-      <h2>Reporte semanal de nómina (correo automático)</h2>
+        </div>
+      </details>
+      <details class="cfg-acordeon">
+        <summary>
+          <svg class="cfg-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>
+          <span class="cfg-titulos"><span class="cfg-titulo">Reporte semanal de nómina (correo automático)</span><span class="cfg-resumen" id="resumen-reporte"></span></span>
+          <span class="cfg-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div class="cfg-cuerpo">
       <p class="nota">
         Cada jueves a las 6:00 pm (hora de Nuevo Laredo) se manda automáticamente por correo el
         mismo PDF que genera el botón "Vista previa / Imprimir" en Reportes, con las horas extra,
@@ -129,8 +137,66 @@ export function iniciarConfiguracion(contenedor) {
       <div class="acciones-form" style="margin-top:14px;">
         <button type="button" id="btn-guardar-reporte-correo">Guardar cambios</button>
       </div>
-    </section>
+        </div>
+      </details>
+    </div>
+
+    <div class="cfg-seccion oculto" data-seccion="utilidades">
+      <details class="cfg-acordeon">
+        <summary>
+          <svg class="cfg-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          <span class="cfg-titulos"><span class="cfg-titulo">Acceso a Utilidades por área</span><span class="cfg-resumen" id="resumen-accesos"></span></span>
+          <span class="cfg-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div class="cfg-cuerpo">
+      <p class="nota">
+        Marca qué opciones de Utilidades ve cada área. El área decide qué opciones aparecen; el rol
+        sigue decidiendo qué puede hacer cada quien dentro (por ejemplo, en RH un supervisor aprueba
+        a su equipo y un empleado solo solicita). El administrador siempre ve todo. Un empleado sin
+        área asignada no ve ninguna opción. Los cambios se aplican la próxima vez que cada usuario
+        entre o recargue la app. Si renombras un área arriba, vuelve a marcar aquí sus accesos.
+      </p>
+      <p id="accesos-aviso" class="nota oculto" style="color:#8a5a00;"></p>
+      <div id="accesos-error" class="error"></div>
+      <p id="accesos-exito" class="nota oculto" style="color:#1c7a41;"></p>
+      <div class="tabla-wrap">
+        <table class="tabla" id="tabla-accesos">
+          <thead><tr id="thead-accesos"></tr></thead>
+          <tbody id="tbody-accesos"></tbody>
+        </table>
+      </div>
+      <div class="acciones-form" style="margin-top:14px;">
+        <button type="button" id="btn-guardar-accesos">Guardar accesos</button>
+      </div>
+        </div>
+      </details>
+      <div class="cfg-acordeon cfg-reservado">
+        <div class="cfg-fila">
+          <svg class="cfg-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V4a1 1 0 0 1 1-1h3"/><path d="M17 3h3a1 1 0 0 1 1 1v3"/><path d="M21 17v3a1 1 0 0 1-1 1h-3"/><path d="M7 21H4a1 1 0 0 1-1-1v-3"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg>
+          <span class="cfg-titulos"><span class="cfg-titulo">Validación de QR</span><span class="cfg-resumen">Espacio para sus ajustes futuros (hoy no tiene).</span></span>
+        </div>
+      </div>
+      <div class="cfg-acordeon cfg-reservado">
+        <div class="cfg-fila">
+          <svg class="cfg-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="6" width="14" height="10" rx="1"/><path d="M15 9h4l3 3v4h-7"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+          <span class="cfg-titulos"><span class="cfg-titulo">Operadores</span><span class="cfg-resumen">Aquí entrará el catálogo de fallas de las órdenes de trabajo (pendiente).</span></span>
+        </div>
+      </div>
+    </div>
   `;
+
+  contenedor.querySelectorAll(".cfg-secciones .subnav-boton").forEach(btn => {
+    btn.addEventListener("click", () => {
+      contenedor.querySelectorAll(".cfg-secciones .subnav-boton")
+        .forEach(b => b.classList.toggle("activo", b === btn));
+      contenedor.querySelectorAll(".cfg-seccion")
+        .forEach(s => s.classList.toggle("oculto", s.dataset.seccion !== btn.dataset.seccion));
+    });
+  });
+  const ponerResumen = (id, texto) => {
+    const el = contenedor.querySelector("#" + id);
+    if (el) el.textContent = texto;
+  };
 
   const tbody = contenedor.querySelector("#tbody-umbrales");
   const errorDiv = contenedor.querySelector("#config-error");
@@ -152,6 +218,7 @@ export function iniciarConfiguracion(contenedor) {
   });
 
   function render() {
+    ponerResumen("resumen-vacaciones", umbrales.length === 1 ? "1 rango" : `${umbrales.length} rangos`);
     if (umbrales.length === 0) {
       tbody.innerHTML = `<tr><td colspan="3">No hay rangos definidos. Agrega al menos uno.</td></tr>`;
       return;
@@ -233,6 +300,12 @@ export function iniciarConfiguracion(contenedor) {
   });
 
   function renderFestivos() {
+    const hoyISO = new Date().toISOString().slice(0, 10);
+    const proximo = festivos.map(f => f.fecha).filter(f => f && f >= hoyISO).sort()[0];
+    const proximoTxt = proximo
+      ? " · próximo: " + new Date(proximo + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short" })
+      : "";
+    ponerResumen("resumen-festivos", `${festivos.length} festivos${proximoTxt}`);
     if (festivos.length === 0) {
       tbodyFestivos.innerHTML = `<tr><td colspan="3">No hay festivos definidos. Agrega al menos uno.</td></tr>`;
       return;
@@ -337,6 +410,9 @@ export function iniciarConfiguracion(contenedor) {
 
   function renderAccesos() {
     if (!accesosCargados) return;
+    ponerResumen("resumen-accesos", porArea === null
+      ? "Sin guardar todavía: por ahora todas las áreas ven todo"
+      : "Qué opciones ve cada área · el admin siempre ve todo");
 
     theadAccesos.innerHTML = `<th>Área</th>` +
       OPCIONES_UTILIDADES.map(op => `<th style="text-align:center;">${escapeHtml(op.etiqueta)}</th>`).join("");
@@ -404,6 +480,7 @@ export function iniciarConfiguracion(contenedor) {
   });
 
   function renderAreas() {
+    ponerResumen("resumen-areas", `${areas.length} áreas · también definen las filas de Acceso a Utilidades`);
     if (areas.length === 0) {
       listaAreasDiv.innerHTML = `<p class="nota">No hay áreas definidas. Agrega al menos una.</p>`;
       return;
@@ -500,6 +577,9 @@ export function iniciarConfiguracion(contenedor) {
     const datos = snap.exists() ? snap.data() : null;
     inputReportePara.value = Array.isArray(datos?.destinatarios) ? datos.destinatarios.join(", ") : "";
     inputReporteCc.value = Array.isArray(datos?.cc) ? datos.cc.join(", ") : "";
+    const nPara = Array.isArray(datos?.destinatarios) ? datos.destinatarios.length : 0;
+    const nCc = Array.isArray(datos?.cc) ? datos.cc.length : 0;
+    ponerResumen("resumen-reporte", `Jueves 6:00 pm · ${nPara} destinatario${nPara === 1 ? "" : "s"}` + (nCc ? ` + ${nCc} CC` : ""));
   }, (err) => {
     errorReporteDiv.textContent = "No se pudo cargar la configuración: " + err.message;
   });
@@ -537,4 +617,31 @@ function escapeHtml(texto) {
   const div = document.createElement("div");
   div.textContent = texto || "";
   return div.innerHTML;
+}
+
+// Estilos de la pantalla de Configuración en secciones/acordeón. Se inyectan
+// una sola vez (mismo criterio que navegacion.js) para no tocar estilos.css.
+function inyectarEstilosConfiguracion() {
+  if (document.getElementById("estilos-configuracion")) return;
+  const estilo = document.createElement("style");
+  estilo.id = "estilos-configuracion";
+  estilo.textContent = `
+    .cfg-secciones { margin-bottom: 14px; }
+    .cfg-acordeon { background: #fff; border: 1px solid #e2ddd5; border-radius: 12px; margin-bottom: 10px; }
+    .cfg-acordeon[open] { border-color: #2c1e0f; }
+    .cfg-acordeon > summary, .cfg-fila { display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+      list-style: none; cursor: pointer; color: #2c1e0f; }
+    .cfg-acordeon > summary::-webkit-details-marker { display: none; }
+    .cfg-icono { width: 22px; height: 22px; flex-shrink: 0; }
+    .cfg-titulos { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .cfg-titulo { font-size: 15px; font-weight: 600; }
+    .cfg-resumen { font-size: 12px; color: #6b5f52; }
+    .cfg-chevron { margin-left: auto; font-size: 20px; color: #6b5f52; transition: transform .15s; }
+    .cfg-acordeon[open] .cfg-chevron { transform: rotate(90deg); }
+    .cfg-cuerpo { border-top: 1px solid #efebe5; padding: 14px 16px 16px; }
+    .cfg-reservado { border-style: dashed; background: transparent; }
+    .cfg-reservado .cfg-fila { cursor: default; }
+    .cfg-reservado .cfg-titulo { color: #6b5f52; }
+  `;
+  document.head.appendChild(estilo);
 }
