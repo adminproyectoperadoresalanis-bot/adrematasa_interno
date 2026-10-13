@@ -1,33 +1,77 @@
-// Menú inferior + sección "Utilidades" (2026-10-12, pedido de Ivan).
+// Menú inferior + sección "Utilidades".
 //
-// Antes, "Escaneo QR" era una pestaña suelta en los 3 roles y "Horas extra /
-// Vacaciones / Faltas" vivían en "Gestión" (admin/supervisor) o como 3
-// pestañas sueltas (empleado). Ahora todo eso entra por UNA sola pestaña,
-// "Utilidades", que muestra tarjetas de opciones:
-//   - RH: los mismos toggles de siempre (Horas extra / Vacaciones / Faltas,
-//     y "Extras" solo para admin).
-//   - Validación de QR: la pantalla de escaneoOrigen.js, sin cambios.
-//   - (Paso 3, pendiente) Operadores: aceptación de ingreso + órdenes de trabajo.
-// Los ids de pantallas (solicitudes, horasExtra, vacaciones, faltas,
-// escaneoOrigen...) son los mismos de antes, así que el objeto `pantallas`
-// que arma auth.js no cambia.
+// 2026-10-12 (paso 1, pedido de Ivan): "Escaneo QR" y "Gestión" (Horas extra /
+// Vacaciones / Faltas) dejaron de ser pestañas sueltas y entraron por UNA
+// sola pestaña, "Utilidades", que muestra tarjetas de opciones.
 //
-// Paso 2 (pendiente): filtrar qué opciones ve cada quien según su área,
-// configurable desde Configuración. Por ahora todos ven las mismas opciones
-// que ya veían antes (RH y Validación de QR).
+// 2026-10-12 (paso 1b, pedido de Ivan): todo lo de RH se unificó dentro de la
+// opción RH — también Calendario, Reportes, Mi equipo, Catálogo de empleados y
+// Organigrama, que antes eran pestañas del menú inferior. Para admin y
+// supervisor, RH abre una lista en dos grupos:
+//   - Solicitudes: al abrir una, arriba aparece la fila de toggles de siempre
+//     para brincar entre ellas sin regresar a la lista.
+//   - Consulta y administración: cada una abre sola.
+// El empleado solo tiene 3 pantallas de RH, así que RH le abre directo los
+// toggles (sin lista intermedia).
+//
+// Quién ve qué DENTRO de RH lo sigue decidiendo el rol (cada rol tiene su
+// propia lista aquí abajo). Los ids son los mismos de siempre, así que el
+// objeto `pantallas` que arma auth.js no cambia.
+//
+// Paso 2 (pendiente): filtrar qué opciones de Utilidades ve cada quien según
+// su área, configurable desde Configuración.
+// Paso 3 (pendiente): opción Operadores (aceptación de ingreso + órdenes de trabajo).
 
-// Toggles de RH para admin y supervisor (antes, "Gestión").
-const SUBTABS_RH = [
+const SVG = (contenido) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${contenido}</svg>`;
+
+const ICONO_PERSONAS = SVG(`<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>`);
+
+const ICONOS = {
+  // Menú inferior
+  panel: SVG(`<path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/>`),
+  utilidades: SVG(`<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>`),
+  configuracion: SVG(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>`),
+  // Tarjetas de Utilidades
+  rh: ICONO_PERSONAS,
+  validacionQR: SVG(`<path d="M3 7V4a1 1 0 0 1 1-1h3"/><path d="M17 3h3a1 1 0 0 1 1 1v3"/><path d="M21 17v3a1 1 0 0 1-1 1h-3"/><path d="M7 21H4a1 1 0 0 1-1-1v-3"/><rect x="7" y="7" width="10" height="10" rx="1"/>`),
+  // Renglones de la lista de RH
+  solicitudes: SVG(`<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/>`),
+  vacaciones: SVG(`<circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="4.2" y1="4.2" x2="5.6" y2="5.6"/><line x1="18.4" y1="18.4" x2="19.8" y2="19.8"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.2" y1="19.8" x2="5.6" y2="18.4"/><line x1="18.4" y1="5.6" x2="19.8" y2="4.2"/>`),
+  faltas: SVG(`<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="17" y1="8" x2="22" y2="13"/><line x1="22" y1="8" x2="17" y2="13"/>`),
+  autorizacionesExtra: SVG(`<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C10 3 12 8 12 8s2-5 4.5-5a2.5 2.5 0 0 1 0 5"/>`),
+  calendarioVacaciones: SVG(`<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/>`),
+  reportes: SVG(`<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>`),
+  equipo: ICONO_PERSONAS,
+  catalogo: ICONO_PERSONAS,
+  organigrama: SVG(`<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M12 12H5v4M12 12h7v4"/>`)
+};
+
+// ---- Contenido de RH por rol ----
+
+// Grupo "Solicitudes" (antes "Gestión"). `comoToggles`: al abrir uno, se
+// dibuja la fila de toggles con todo el grupo.
+const SOLICITUDES = [
   { id: "solicitudes", etiqueta: "Horas extra" },
   { id: "vacaciones", etiqueta: "Vacaciones" },
   { id: "faltas", etiqueta: "Faltas" }
 ];
-
-// Solo el admin ve un cuarto toggle: "Extras" = autorizaciones extra
-// (bonos/gratificaciones del correo semanal — ver js/autorizacionesExtra.js).
-const SUBTABS_RH_ADMIN = [
-  ...SUBTABS_RH,
+const SOLICITUDES_ADMIN = [
+  ...SOLICITUDES,
+  // Autorizaciones extra (bonos/gratificaciones del correo semanal) — solo admin.
   { id: "autorizacionesExtra", etiqueta: "Extras" }
+];
+
+const CONSULTA_SUPERVISOR = [
+  { id: "calendarioVacaciones", etiqueta: "Calendario" },
+  { id: "reportes", etiqueta: "Reportes" },
+  { id: "equipo", etiqueta: "Mi equipo" }
+];
+const CONSULTA_ADMIN = [
+  { id: "calendarioVacaciones", etiqueta: "Calendario" },
+  { id: "reportes", etiqueta: "Reportes" },
+  { id: "catalogo", etiqueta: "Catálogo de empleados" },
+  { id: "organigrama", etiqueta: "Organigrama" }
 ];
 
 // El empleado usa sus propias pantallas de captura (ids distintos en auth.js).
@@ -37,14 +81,25 @@ const SUBTABS_RH_EMPLEADO = [
   { id: "faltas", etiqueta: "Faltas" }
 ];
 
-// Una opción de Utilidades tiene `subtabs` (dibuja una fila de toggles) o
-// `pantalla` (dibuja directo esa pantalla del objeto `pantallas`).
-const opcionRH = (subtabs) => ({
+// Una opción de Utilidades puede tener:
+//   `grupos`   → lista de renglones agrupados (RH de admin/supervisor)
+//   `subtabs`  → fila de toggles directa (RH de empleado)
+//   `pantalla` → dibuja directo esa pantalla (Validación de QR)
+const rhConGrupos = (solicitudes, consulta) => ({
+  id: "rh",
+  etiqueta: "RH",
+  descripcion: "Solicitudes · Calendario · Reportes",
+  grupos: [
+    { titulo: "Solicitudes", items: solicitudes, comoToggles: true },
+    { titulo: "Consulta y administración", items: consulta }
+  ]
+});
+const RH_EMPLEADO = {
   id: "rh",
   etiqueta: "RH",
   descripcion: "Horas extra · Vacaciones · Faltas",
-  subtabs
-});
+  subtabs: SUBTABS_RH_EMPLEADO
+};
 const OPCION_QR = {
   id: "validacionQR",
   etiqueta: "Validación de QR",
@@ -52,57 +107,25 @@ const OPCION_QR = {
   pantalla: "escaneoOrigen"
 };
 
-const SVG = (contenido) =>
-  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${contenido}</svg>`;
-
-const ICONO_PERSONAS = SVG(`<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>`);
-const ICONO_QR = SVG(`<path d="M3 7V4a1 1 0 0 1 1-1h3"/><path d="M17 3h3a1 1 0 0 1 1 1v3"/><path d="M21 17v3a1 1 0 0 1-1 1h-3"/><path d="M7 21H4a1 1 0 0 1-1-1v-3"/><rect x="7" y="7" width="10" height="10" rx="1"/>`);
-
-// Un ícono por pestaña del menú inferior (SVG en línea, sin fuentes de
-// íconos ni emoji — así se ve igual en cualquier celular).
-const ICONOS_NAV = {
-  panel: SVG(`<path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/>`),
-  utilidades: SVG(`<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>`),
-  equipo: ICONO_PERSONAS,
-  catalogo: ICONO_PERSONAS,
-  calendarioVacaciones: SVG(`<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/>`),
-  reportes: SVG(`<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>`),
-  organigrama: SVG(`<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M12 12H5v4M12 12h7v4"/>`),
-  configuracion: SVG(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>`)
-};
-
-const ICONOS_UTILIDADES = {
-  rh: ICONO_PERSONAS,
-  validacionQR: ICONO_QR
-};
-
 const TABS_POR_ROL = {
   // El empleado solo tiene "Utilidades": con un solo botón el menú inferior
   // no aporta nada, así que se oculta y entra directo a las tarjetas.
   empleado: [
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [opcionRH(SUBTABS_RH_EMPLEADO), OPCION_QR] }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR] }
   ],
   supervisor: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [opcionRH(SUBTABS_RH), OPCION_QR] },
-    { id: "equipo", etiqueta: "Mi equipo" },
-    { id: "calendarioVacaciones", etiqueta: "Calendario" },
-    { id: "reportes", etiqueta: "Reportes" }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES, CONSULTA_SUPERVISOR), OPCION_QR] }
   ],
   admin: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [opcionRH(SUBTABS_RH_ADMIN), OPCION_QR] },
-    { id: "calendarioVacaciones", etiqueta: "Calendario" },
-    { id: "catalogo", etiqueta: "Catálogo de empleados" },
-    { id: "organigrama", etiqueta: "Organigrama" },
-    { id: "reportes", etiqueta: "Reportes" },
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR] },
     { id: "configuracion", etiqueta: "Configuración" }
   ]
 };
 
-// Estilos de las tarjetas de Utilidades. Se inyectan una sola vez desde aquí
-// (igual que la versión en el menú de cuenta en auth.js) para que este paso
-// no obligue a tocar estilos.css ni el ?v= de index.html.
+// Estilos de Utilidades. Se inyectan una sola vez desde aquí para no tener
+// que tocar estilos.css ni el ?v= de index.html.
 function inyectarEstilosUtilidades() {
   if (document.getElementById("estilos-utilidades")) return;
   const estilo = document.createElement("style");
@@ -121,12 +144,23 @@ function inyectarEstilosUtilidades() {
       font: inherit; font-size: 13px; color: #6b5f52; }
     .utilidades-volver:hover { color: #2c1e0f; text-decoration: underline; }
     .utilidades-ruta { font-size: 18px; font-weight: 600; color: #2c1e0f; margin: 0 0 12px; }
+    .rh-grupo-titulo { font-size: 12px; font-weight: 600; color: #6b5f52; text-transform: uppercase;
+      letter-spacing: .03em; margin: 16px 0 6px; }
+    .rh-grupo-titulo:first-child { margin-top: 0; }
+    .rh-lista { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      background: #fff; border: 1px solid #e2ddd5; border-radius: 12px; overflow: hidden; }
+    .rh-item { display: flex; align-items: center; gap: 10px; text-align: left; background: #fff;
+      border: none; border-bottom: 1px solid #efebe5; padding: 12px 14px; cursor: pointer;
+      color: #2c1e0f; font: inherit; font-size: 14px; }
+    .rh-item:hover { background: #f5f3f0; }
+    .rh-item svg { width: 20px; height: 20px; flex-shrink: 0; }
   `;
   document.head.appendChild(estilo);
 }
 
 // pantallas: objeto { idPantalla: (contenedor) => void } con la función que dibuja cada pantalla.
-// pantallaInicial: id de la pestaña que se muestra al entrar.
+// pantallaInicial: id de la pestaña que se muestra al entrar (si no es una
+// pestaña del rol, se usa la primera).
 export function iniciarNavegacion(rol, pantallas, pantallaInicial) {
   const nav = document.getElementById("nav-inferior");
   const contenidoApp = document.getElementById("contenido-app");
@@ -144,7 +178,7 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial) {
     ocultarNavegacion();
   } else {
     nav.innerHTML = tabs.map(t => `
-      <button type="button" class="nav-boton" data-tab="${t.id}">${ICONOS_NAV[t.id] || ""}<span>${t.etiqueta}</span></button>
+      <button type="button" class="nav-boton" data-tab="${t.id}">${ICONOS[t.id] || ""}<span>${t.etiqueta}</span></button>
     `).join("");
     nav.classList.remove("oculto");
     document.body.classList.add("tiene-nav");
@@ -157,6 +191,17 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial) {
     } else {
       contenedor.innerHTML = `<div class="panel"><p>Próximamente.</p></div>`;
     }
+  }
+
+  // Liga de regreso + título, y devuelve el contenedor donde va el contenido.
+  function encabezado(textoVolver, alVolver, titulo) {
+    contenidoApp.innerHTML = `
+      <button type="button" class="utilidades-volver">← ${textoVolver}</button>
+      <div class="utilidades-ruta">${titulo}</div>
+      <div class="utilidades-contenido"></div>
+    `;
+    contenidoApp.querySelector(".utilidades-volver").addEventListener("click", alVolver);
+    return contenidoApp.querySelector(".utilidades-contenido");
   }
 
   // Fila de toggles arriba y, abajo, la pantalla del toggle seleccionado — la
@@ -183,14 +228,14 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial) {
     mostrarSubtab(idSubtabInicial || subtabs[0].id);
   }
 
-  // Pantalla de tarjetas de Utilidades.
+  // Nivel 1: tarjetas de Utilidades.
   function mostrarUtilidades(tab) {
     contenidoApp.innerHTML = `
       <div class="utilidades-titulo">Utilidades</div>
       <div class="utilidades-grid">
         ${tab.opciones.map(op => `
           <button type="button" class="utilidad-tarjeta" data-opcion="${op.id}">
-            ${ICONOS_UTILIDADES[op.id] || ""}
+            ${ICONOS[op.id] || ""}
             <span class="utilidad-nombre">${op.etiqueta}</span>
             <span class="utilidad-desc">${op.descripcion}</span>
           </button>
@@ -205,21 +250,47 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial) {
     });
   }
 
-  // Una opción ya abierta: liga "← Utilidades" para regresar, el nombre de la
-  // opción, y abajo sus toggles o su pantalla.
+  // Nivel 2: una opción abierta (lista agrupada, toggles o pantalla directa).
   function abrirOpcion(tab, opcion) {
-    contenidoApp.innerHTML = `
-      <button type="button" class="utilidades-volver">← Utilidades</button>
-      <div class="utilidades-ruta">${opcion.etiqueta}</div>
-      <div class="utilidades-contenido"></div>
-    `;
-    contenidoApp.querySelector(".utilidades-volver")
-      .addEventListener("click", () => mostrarUtilidades(tab));
-    const contenedor = contenidoApp.querySelector(".utilidades-contenido");
-    if (opcion.subtabs) {
+    const contenedor = encabezado("Utilidades", () => mostrarUtilidades(tab), opcion.etiqueta);
+    if (opcion.grupos) {
+      dibujarListaGrupos(contenedor, tab, opcion);
+    } else if (opcion.subtabs) {
       mostrarGrupo(contenedor, opcion.subtabs);
     } else {
       dibujarPantalla(opcion.pantalla, contenedor);
+    }
+  }
+
+  function dibujarListaGrupos(contenedor, tab, opcion) {
+    contenedor.innerHTML = opcion.grupos.map((grupo, i) => `
+      <div class="rh-grupo-titulo">${grupo.titulo}</div>
+      <div class="rh-lista">
+        ${grupo.items.map(item => `
+          <button type="button" class="rh-item" data-grupo="${i}" data-item="${item.id}">
+            ${ICONOS[item.id] || ""}<span>${item.etiqueta}</span>
+          </button>
+        `).join("")}
+      </div>
+    `).join("");
+    contenedor.querySelectorAll(".rh-item").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const grupo = opcion.grupos[Number(btn.dataset.grupo)];
+        const item = grupo.items.find(it => it.id === btn.dataset.item);
+        if (item) abrirItem(tab, opcion, grupo, item);
+      });
+    });
+  }
+
+  // Nivel 3: un renglón de la lista. Si su grupo va "comoToggles", se dibuja
+  // la fila de toggles con todo el grupo (con ese renglón ya seleccionado).
+  function abrirItem(tab, opcion, grupo, item) {
+    const titulo = grupo.comoToggles ? grupo.titulo : item.etiqueta;
+    const contenedor = encabezado(opcion.etiqueta, () => abrirOpcion(tab, opcion), titulo);
+    if (grupo.comoToggles) {
+      mostrarGrupo(contenedor, grupo.items, item.id);
+    } else {
+      dibujarPantalla(item.id, contenedor);
     }
   }
 
