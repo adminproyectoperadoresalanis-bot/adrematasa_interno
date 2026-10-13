@@ -26,7 +26,7 @@ import { iniciarCambioContrasena } from "./cuenta.js";
 import { iniciarOrganigrama } from "./organigrama.js";
 import { iniciarEscaneoOrigen, APP_VERSION } from "./escaneoOrigen.js";
 import { iniciarAutorizacionesExtra } from "./autorizacionesExtra.js";
-import { iniciarSolicitudesOperadores, iniciarOrdenesTrabajo } from "./operadores.js";
+import { iniciarSolicitudesOperadores, iniciarOrdenesTrabajo, iniciarOperadoresRegistrados } from "./operadores.js";
 
 const DOMINIO_ALANIS = "@alanis.com.mx";
 
@@ -350,6 +350,7 @@ onAuthStateChanged(auth, async (user) => {
       escaneoOrigen: (c) => iniciarEscaneoOrigen(c, datosUsuario, user.uid),
       operadoresSolicitudes: (c) => iniciarSolicitudesOperadores(c),
       operadoresOrdenes: (c) => iniciarOrdenesTrabajo(c, datosUsuario.nombre),
+      operadoresRegistrados: (c) => iniciarOperadoresRegistrados(c),
       panel: (c) => iniciarPanelResumenAdmin(c),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarGestionSolicitudes(d, user.uid, datosUsuario.nombre),
@@ -375,6 +376,7 @@ onAuthStateChanged(auth, async (user) => {
       escaneoOrigen: (c) => iniciarEscaneoOrigen(c, datosUsuario, user.uid),
       operadoresSolicitudes: (c) => iniciarSolicitudesOperadores(c),
       operadoresOrdenes: (c) => iniciarOrdenesTrabajo(c, datosUsuario.nombre),
+      operadoresRegistrados: (c) => iniciarOperadoresRegistrados(c),
       horasExtra: (c) => iniciarVistaEmpleado(c, datosUsuario, user.uid),
       vacaciones: (c) => iniciarVistaVacacionesEmpleado(c, datosUsuario, user.uid),
       faltas: (c) => iniciarVistaEmpleadoFaltas(c, datosUsuario, user.uid)
@@ -387,6 +389,7 @@ onAuthStateChanged(auth, async (user) => {
       escaneoOrigen: (c) => iniciarEscaneoOrigen(c, datosUsuario, user.uid),
       operadoresSolicitudes: (c) => iniciarSolicitudesOperadores(c),
       operadoresOrdenes: (c) => iniciarOrdenesTrabajo(c, datosUsuario.nombre),
+      operadoresRegistrados: (c) => iniciarOperadoresRegistrados(c),
       panel: (c) => iniciarPanelResumenSupervisor(c, user.uid),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarVistaSupervisor(d, user.uid, datosUsuario.nombre),

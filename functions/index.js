@@ -762,3 +762,7 @@ exports.procesarCorreoWalmart = require("./walmartCitas").procesarCorreoWalmart;
 exports.listarSolicitudesOperadores = require("./operadoresAlanis").listarSolicitudesOperadores;
 exports.resolverSolicitudOperador = require("./operadoresAlanis").resolverSolicitudOperador;
 exports.listarOrdenesTrabajo = require("./operadoresAlanis").listarOrdenesTrabajo;
+exports.listarOperadoresRegistrados = require("./operadoresAlanis").listarOperadoresRegistrados;
+exports.guardarDatosOperador = require("./operadoresAlanis").guardarDatosOperador;
+exports.cambiarEstadoOperador = require("./operadoresAlanis").cambiarEstadoOperador;
+exports.historialUnidadOperador = require("./operadoresAlanis").historialUnidadOperador;

@@ -18,6 +18,10 @@ const funciones = getFunctions(undefined, "us-central1");
 const fnListarSolicitudes = httpsCallable(funciones, "listarSolicitudesOperadores");
 const fnResolverSolicitud = httpsCallable(funciones, "resolverSolicitudOperador");
 const fnListarOTs = httpsCallable(funciones, "listarOrdenesTrabajo");
+const fnListarRegistrados = httpsCallable(funciones, "listarOperadoresRegistrados");
+const fnGuardarDatos = httpsCallable(funciones, "guardarDatosOperador");
+const fnCambiarEstado = httpsCallable(funciones, "cambiarEstadoOperador");
+const fnHistorialUnidad = httpsCallable(funciones, "historialUnidadOperador");
 
 // Mismo logo que imprime admin2.js en Alanis Operadores.
 const LOGO_ORDEN_TALLER = "https://alanis-operadores.web.app/img/logo-reporte.png";
@@ -71,6 +75,26 @@ function inyectarEstilos() {
     .ot-sev.alta { background: #E24B4A; } .ot-sev.media { background: #BA7517; } .ot-sev.baja { background: #639922; }
     .ot-acciones { display: flex; gap: 6px; margin-top: 10px; }
     .ot-acciones button { flex: 1; }
+    .or-encabezado { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+    .or-encabezado input { flex: 1; min-width: 180px; }
+    .or-total { font-size: 12px; background: #E6F1FB; color: #0C447C; border-radius: 10px; padding: 3px 10px; white-space: nowrap; }
+    .or-card { background: #fff; border: 1px solid #e2ddd5; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+    .or-card.inactivo { opacity: .85; }
+    .or-fila { display: flex; align-items: center; gap: 10px; }
+    .or-badge { font-size: 11px; border-radius: 10px; padding: 2px 8px; white-space: nowrap; }
+    .or-badge.activo { background: #EAF3DE; color: #27500A; }
+    .or-badge.inactivo { background: #FCEBEB; color: #791F1F; }
+    .or-badge.oficial { background: #EAF3DE; color: #27500A; }
+    .or-badge.sinoficial { background: #FAEEDA; color: #633806; }
+    .or-card label { display: block; font-size: 12px; color: #6b5f52; margin: 8px 0 3px; }
+    .or-card input, .or-card select { width: 100%; box-sizing: border-box; }
+    .or-datos { display: flex; gap: 6px; }
+    .or-datos .u { width: 80px; flex-shrink: 0; }
+    .or-datos .l { width: 92px; flex-shrink: 0; }
+    .or-datos .t { flex: 1; min-width: 0; }
+    .or-acciones { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+    .or-acciones button { flex: 1; min-width: 100px; }
+    .or-hist { border-top: 1px solid #efebe5; margin-top: 10px; padding-top: 8px; font-size: 12px; color: #6b5f52; }
   `;
   document.head.appendChild(estilo);
 }
@@ -383,4 +407,165 @@ function imprimirOrdenTaller(ot, nombreUsuario) {
   }
   win.document.write(html);
   win.document.close();
+}
+
+// ============================================================================
+// Operadores registrados (2026-10-13) — paridad con "Operadores registrados"
+// de admin2.js: editar nombre oficial / unidad / teléfono, activar o
+// desactivar, e historial de unidades. Sin "Promover a admin". Todas las
+// validaciones de verdad (unidad duplicada, 10 dígitos, que sea operador)
+// las hace la Cloud Function; aquí solo se adelantan para avisar rápido.
+// ============================================================================
+export function iniciarOperadoresRegistrados(contenedor) {
+  inyectarEstilos();
+  contenedor.innerHTML = `
+    <section class="panel">
+      <h2>Operadores registrados</h2>
+      <p class="nota">Operadores con acceso a Alanis Operadores. El nombre oficial es el que se ve en ADREMATASA; desactivar a un operador lo quita del selector de Validación de QR.</p>
+      <div id="or-error" class="error"></div>
+      <p id="or-exito" class="nota oculto" style="color:#1c7a41;"></p>
+      <div class="or-encabezado">
+        <input type="text" id="or-buscar" placeholder="Buscar por nombre, correo o unidad...">
+        <span class="or-total" id="or-total">—</span>
+      </div>
+      <div id="or-lista"><p class="nota">Cargando…</p></div>
+    </section>
+  `;
+  const lista = contenedor.querySelector("#or-lista");
+  const buscar = contenedor.querySelector("#or-buscar");
+  const totalEl = contenedor.querySelector("#or-total");
+  const errorDiv = contenedor.querySelector("#or-error");
+  const exitoP = contenedor.querySelector("#or-exito");
+  let operadores = [];
+
+  function avisar(texto) {
+    exitoP.textContent = texto;
+    exitoP.classList.remove("oculto");
+    setTimeout(() => exitoP.classList.add("oculto"), 4000);
+  }
+
+  async function cargar() {
+    errorDiv.textContent = "";
+    try {
+      const res = await fnListarRegistrados();
+      operadores = res.data.operadores || [];
+      const activos = operadores.filter(o => o.activo).length;
+      totalEl.textContent = `${operadores.length} operadores · ${activos} activos`;
+      render();
+    } catch (err) {
+      lista.innerHTML = "";
+      errorDiv.textContent = mensajeError(err, "No se pudieron cargar los operadores.");
+    }
+  }
+
+  function render() {
+    const q = (buscar.value || "").trim().toLowerCase();
+    const filtrados = !q ? operadores : operadores.filter(o =>
+      o.nombre.toLowerCase().includes(q) || o.correo.toLowerCase().includes(q) ||
+      o.nombreOficial.toLowerCase().includes(q) || String(o.numero).toLowerCase().includes(q));
+    if (filtrados.length === 0) {
+      lista.innerHTML = `<p class="nota" style="text-align:center;padding:16px;">Sin operadores${q ? " que coincidan" : " registrados"}.</p>`;
+      return;
+    }
+    lista.innerHTML = filtrados.map(o => `
+      <div class="or-card ${o.activo ? "" : "inactivo"}" data-uid="${esc(o.uid)}">
+        <div class="or-fila">
+          <span class="op-avatar">${esc(iniciales(o.nombre))}</span>
+          <span style="flex:1;min-width:0;">
+            <span class="op-nombre" style="display:block;">${esc(o.nombre || "—")}</span>
+            <span class="op-sub">${esc(o.correo || "—")}</span>
+          </span>
+          <span class="or-badge ${o.activo ? "activo" : "inactivo"}">${o.activo ? "Activo" : "Inactivo"}</span>
+        </div>
+        <div style="margin-top:8px;">
+          <span class="or-badge ${o.nombreOficial ? "oficial" : "sinoficial"}">${o.nombreOficial ? "✓ Nombre oficial" : "Sin nombre oficial"}</span>
+        </div>
+        <label>Nombre oficial (el que se ve en ADREMATASA)</label>
+        <input type="text" class="or-oficial" value="${esc(o.nombreOficial)}" placeholder="${esc(o.nombre || "Nombre completo oficial")}">
+        <div class="or-datos">
+          <div class="u"><label>Unidad</label><input type="text" class="or-unidad" value="${esc(o.numero)}" maxlength="10" placeholder="1121"></div>
+          <div class="l"><label>Lada</label><select class="or-lada">
+            <option value="52"${o.lada === "1" ? "" : " selected"}>MX +52</option>
+            <option value="1"${o.lada === "1" ? " selected" : ""}>US +1</option></select></div>
+          <div class="t"><label>Celular</label><input type="tel" class="or-tel" value="${esc(o.telefono)}" maxlength="14" placeholder="10 dígitos"></div>
+        </div>
+        <div class="error or-card-error" style="margin-top:8px;"></div>
+        <div class="or-acciones">
+          <button type="button" class="or-guardar">Guardar datos</button>
+          <button type="button" class="secundario or-estado">${o.activo ? "Desactivar" : "Activar"}</button>
+          <button type="button" class="secundario or-historial">Historial</button>
+        </div>
+        <div class="or-hist oculto"></div>
+      </div>`).join("");
+
+    lista.querySelectorAll(".or-card").forEach(card => {
+      const uid = card.dataset.uid;
+      const op = operadores.find(o => o.uid === uid);
+      const errCard = card.querySelector(".or-card-error");
+      const botones = card.querySelectorAll("button");
+      const bloquear = (b) => botones.forEach(x => { x.disabled = b; });
+
+      card.querySelector(".or-guardar").addEventListener("click", async () => {
+        errCard.textContent = "";
+        const numero = card.querySelector(".or-unidad").value.trim();
+        const telefono = card.querySelector(".or-tel").value.replace(/\D/g, "");
+        if (!numero) { errCard.textContent = "Ingresa un número de unidad."; return; }
+        if (telefono !== "" && telefono.length !== 10) { errCard.textContent = "El teléfono debe tener 10 dígitos."; return; }
+        bloquear(true);
+        try {
+          await fnGuardarDatos({
+            uid, numero, telefono,
+            nombreOficial: card.querySelector(".or-oficial").value,
+            lada: card.querySelector(".or-lada").value
+          });
+          avisar(`Datos de ${op.nombre || "operador"} guardados.`);
+          await cargar();
+        } catch (err) {
+          errCard.textContent = mensajeError(err, "No se pudieron guardar los datos.");
+          bloquear(false);
+        }
+      });
+
+      card.querySelector(".or-estado").addEventListener("click", async () => {
+        errCard.textContent = "";
+        const activar = !op.activo;
+        const pregunta = activar
+          ? `¿Activar a ${op.nombre || "este operador"}? Volverá a poder entrar a Alanis Operadores y aparecerá en el selector de Validación de QR.`
+          : `¿Desactivar a ${op.nombre || "este operador"}? Ya no podrá entrar a Alanis Operadores y saldrá del selector de Validación de QR.`;
+        if (!confirm(pregunta)) return;
+        bloquear(true);
+        try {
+          await fnCambiarEstado({ uid, activo: activar });
+          avisar(`${op.nombre || "Operador"} ${activar ? "activado" : "desactivado"}.`);
+          await cargar();
+        } catch (err) {
+          errCard.textContent = mensajeError(err, "No se pudo cambiar el estado.");
+          bloquear(false);
+        }
+      });
+
+      card.querySelector(".or-historial").addEventListener("click", async () => {
+        const cont = card.querySelector(".or-hist");
+        if (!cont.classList.contains("oculto")) { cont.classList.add("oculto"); return; }
+        cont.classList.remove("oculto");
+        cont.textContent = "Cargando…";
+        try {
+          const res = await fnHistorialUnidad({ uid });
+          const cambios = res.data.cambios || [];
+          cont.innerHTML = cambios.length === 0
+            ? "Sin cambios de unidad registrados."
+            : cambios.map(c => {
+                const p = (c.fecha || "").split("-");
+                const f = p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : c.fecha;
+                return `<div>${esc(f)} ${esc(c.hora)} · ${esc(c.anterior)} → ${esc(c.nueva)}</div>`;
+              }).join("");
+        } catch (err) {
+          cont.textContent = mensajeError(err, "No se pudo cargar el historial.");
+        }
+      });
+    });
+  }
+
+  buscar.addEventListener("input", render);
+  cargar();
 }

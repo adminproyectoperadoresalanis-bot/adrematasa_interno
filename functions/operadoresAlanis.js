@@ -216,3 +216,183 @@ exports.listarOrdenesTrabajo = onCall({ region: REGION }, async (request) => {
     throw new HttpsError("internal", "No se pudieron cargar las órdenes de trabajo.");
   }
 });
+
+// ---- Operadores registrados (2026-10-13) -------------------------------------
+// Paridad con la pestaña "Operadores registrados" de admin2.js
+// (cargarOperadores, guardarDatosOperador, toggleActivoOperador,
+// verHistorialUnidad), menos "Promover a admin". Solo actúa sobre usuarios con
+// rol:'operador' — nunca toca admins/superadmins de Alanis Operadores.
+
+const TZ_OPERACION = "America/Matamoros";
+const RE_TELEFONO = /^[0-9]{10}$/;
+
+function fechaHoraLocal_() {
+  const partes = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ_OPERACION, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const v = (t) => (partes.find((p) => p.type === t) || {}).value || "";
+  const hora = v("hour") === "24" ? "00" : v("hour");
+  return { fecha: `${v("year")}-${v("month")}-${v("day")}`, hora: `${hora}:${v("minute")}` };
+}
+
+async function leerOperador_(uid) {
+  if (typeof uid !== "string" || !uid.trim() || uid.includes("/")) {
+    throw new HttpsError("invalid-argument", "Falta el operador.");
+  }
+  const ref = dbAlanis.collection("usuarios").doc(uid.trim());
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError("not-found", "El operador ya no existe.");
+  const d = snap.data();
+  if (d.rol !== "operador") {
+    throw new HttpsError("failed-precondition", "Esta cuenta no es de operador. Adminístrala desde Alanis Operadores.");
+  }
+  return { ref, d };
+}
+
+// Una unidad no puede quedar en dos operadores activos (mismo criterio que admin2.js).
+async function unidadOcupadaPorOtro_(numero, uid) {
+  const dup = await dbAlanis.collection("usuarios")
+    .where("numero", "==", numero).where("activo", "==", true).get();
+  const otro = dup.docs.find((x) => x.id !== uid);
+  return otro ? (otro.data().nombreOficial || otro.data().nombre || otro.id) : null;
+}
+
+exports.listarOperadoresRegistrados = onCall({ region: REGION }, async (request) => {
+  await leerActor_(request);
+  try {
+    const snap = await dbAlanis.collection("usuarios").where("rol", "==", "operador").get();
+    const operadores = snap.docs.map((d) => {
+      const o = d.data();
+      return {
+        uid: d.id,
+        nombre: o.nombre || "",
+        correo: o.correo || "",
+        nombreOficial: o.nombreOficial || "",
+        numero: o.numero || "",
+        lada: o.lada || "52",
+        telefono: o.telefono || "",
+        activo: o.activo === true,
+      };
+    }).sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+    return { ok: true, operadores };
+  } catch (error) {
+    logger.error(`[listarOperadoresRegistrados] ${error.message}`);
+    throw new HttpsError("internal", "No se pudieron cargar los operadores.");
+  }
+});
+
+// entrada: { uid, numero, nombreOficial, lada, telefono }
+exports.guardarDatosOperador = onCall({ region: REGION }, async (request) => {
+  const actor = await leerActor_(request);
+  const e = request.data || {};
+  try {
+    const { ref, d } = await leerOperador_(e.uid);
+    const uid = ref.id;
+    const numero = typeof e.numero === "string" ? e.numero.trim() : "";
+    const nombreOficial = typeof e.nombreOficial === "string" ? e.nombreOficial.trim() : "";
+    const lada = e.lada === "1" ? "1" : "52";
+    const telefono = typeof e.telefono === "string" ? e.telefono.replace(/\D/g, "") : "";
+    if (!numero) throw new HttpsError("invalid-argument", "Ingresa un número de unidad.");
+    if (numero.length > 10) throw new HttpsError("invalid-argument", "El número de unidad es demasiado largo.");
+    if (telefono !== "" && !RE_TELEFONO.test(telefono)) {
+      throw new HttpsError("invalid-argument", "El teléfono debe tener 10 dígitos.");
+    }
+
+    // La unidad anterior se toma de la base, no de lo que mande el navegador.
+    const unidadAnterior = d.numero || "";
+    if (numero !== unidadAnterior) {
+      const otro = await unidadOcupadaPorOtro_(numero, uid);
+      if (otro) {
+        throw new HttpsError("failed-precondition", `La unidad ${numero} ya está asignada a ${otro}. Corrígela antes de guardar.`);
+      }
+    }
+
+    // Mismo criterio que admin2.js: nombreOficial se guarda siempre (aunque
+    // quede vacío); el teléfono solo si se capturó.
+    const update = { numero, nombreOficial };
+    if (telefono !== "") { update.lada = lada; update.telefono = telefono; }
+    await ref.update(update);
+
+    if (numero !== unidadAnterior) {
+      const { fecha, hora } = fechaHoraLocal_();
+      await ref.collection("historial_unidades").add({
+        unidad_anterior: unidadAnterior || "(ninguna)",
+        unidad_nueva: numero,
+        fecha, hora,
+        timestamp: FieldValue.serverTimestamp(),
+        cambiadoPor: { uid: actor.uid, nombre: actor.nombre, proyecto: "appadrematasainterno" },
+      });
+    }
+
+    await dbLocal.collection(COL_BITACORA).add({
+      tipo: "datos_actualizados",
+      operadorUid: uid,
+      operadorNombre: d.nombre || "",
+      antes: { numero: unidadAnterior, nombreOficial: d.nombreOficial || "", lada: d.lada || null, telefono: d.telefono || null },
+      despues: { numero, nombreOficial, lada: telefono !== "" ? lada : (d.lada || null), telefono: telefono !== "" ? telefono : (d.telefono || null) },
+      realizadoPor: actor,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+
+    logger.info(`[guardarDatosOperador] ${uid} por ${actor.uid}`);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    logger.error(`[guardarDatosOperador] ${error.message}`);
+    throw new HttpsError("internal", "No se pudieron guardar los datos. Intenta de nuevo.");
+  }
+});
+
+// entrada: { uid, activo: boolean }
+exports.cambiarEstadoOperador = onCall({ region: REGION }, async (request) => {
+  const actor = await leerActor_(request);
+  const e = request.data || {};
+  if (typeof e.activo !== "boolean") throw new HttpsError("invalid-argument", "Estado no válido.");
+  try {
+    const { ref, d } = await leerOperador_(e.uid);
+    // Protección extra (no existe en admin2.js): al reactivar, que su unidad
+    // no se haya asignado mientras tanto a otro operador activo.
+    if (e.activo && d.numero) {
+      const otro = await unidadOcupadaPorOtro_(d.numero, ref.id);
+      if (otro) {
+        throw new HttpsError("failed-precondition", `No se puede activar: su unidad ${d.numero} ya está asignada a ${otro}. Cámbiale la unidad primero.`);
+      }
+    }
+    await ref.update({ activo: e.activo });
+    // sincronizarOperadoresAlanis (alanis-operadores) lo agrega o quita solo de
+    // operadores_alanis → aparece/desaparece del selector de QR.
+    await dbLocal.collection(COL_BITACORA).add({
+      tipo: e.activo ? "operador_activado" : "operador_desactivado",
+      operadorUid: ref.id,
+      operadorNombre: d.nombre || "",
+      realizadoPor: actor,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+    logger.info(`[cambiarEstadoOperador] ${ref.id} → activo:${e.activo} por ${actor.uid}`);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    logger.error(`[cambiarEstadoOperador] ${error.message}`);
+    throw new HttpsError("internal", "No se pudo cambiar el estado. Intenta de nuevo.");
+  }
+});
+
+// entrada: { uid } → últimos 10 cambios de unidad
+exports.historialUnidadOperador = onCall({ region: REGION }, async (request) => {
+  await leerActor_(request);
+  const e = request.data || {};
+  try {
+    const { ref } = await leerOperador_(e.uid);
+    const snap = await ref.collection("historial_unidades").orderBy("timestamp", "desc").limit(10).get();
+    const cambios = snap.docs.map((x) => {
+      const h = x.data();
+      return { fecha: h.fecha || "", hora: h.hora || "", anterior: h.unidad_anterior || "", nueva: h.unidad_nueva || "" };
+    });
+    return { ok: true, cambios };
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    logger.error(`[historialUnidadOperador] ${error.message}`);
+    throw new HttpsError("internal", "No se pudo cargar el historial.");
+  }
+});
