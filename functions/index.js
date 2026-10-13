@@ -757,10 +757,8 @@ exports.listarValidacionesRemotas = onCall(
 );
 // 8 — Reporte Walmart: procesa correos de citas (ver walmartCitas.js)
 exports.procesarCorreoWalmart = require("./walmartCitas").procesarCorreoWalmart;
-cat >> functions/index.js <<'EOF'
 // 10 — Utilidades → Operadores: aceptación de ingreso y órdenes de trabajo de
 //      Alanis Operadores, operadas desde ADREMATASA (ver operadoresAlanis.js).
 exports.listarSolicitudesOperadores = require("./operadoresAlanis").listarSolicitudesOperadores;
 exports.resolverSolicitudOperador = require("./operadoresAlanis").resolverSolicitudOperador;
 exports.listarOrdenesTrabajo = require("./operadoresAlanis").listarOrdenesTrabajo;
-EOF
