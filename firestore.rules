@@ -754,6 +754,15 @@ service cloud.firestore {
     // de servicio, que no pasa por estas reglas — por eso desde el navegador
     // nadie puede escribir enviadoEn.
     // ------------------------------------------------------------------
+    // Bitácora de Utilidades → Operadores (2026-10-13): quién aprobó o rechazó
+    // a un operador desde ADREMATASA. La llena solo la Cloud Function
+    // resolverSolicitudOperador (cuenta de servicio); nadie escribe aquí
+    // desde el navegador.
+    match /bitacora_acciones_operadores/{id} {
+      allow read: if esAdmin();
+      allow write: if false;
+    }
+
     match /autorizacionesExtra/{id} {
       allow read: if esAdmin();
       allow create: if esAdmin() && request.resource.data.enviadoEn == null;

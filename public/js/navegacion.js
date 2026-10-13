@@ -23,14 +23,18 @@
 // Utilidades por área" (documento `configuracion/accesosUtilidades`). auth.js
 // calcula la lista permitida y la pasa como 4º parámetro de
 // iniciarNavegacion; el admin siempre ve todo (no se le pasa lista).
-// Paso 3 (pendiente): opción Operadores (aceptación de ingreso + órdenes de trabajo).
+// Paso 3 (2026-10-13): opción Operadores — Aceptación de ingreso y Órdenes de
+// trabajo de Alanis Operadores (ver js/operadores.js y
+// functions/operadoresAlanis.js). Mismas pantallas para los 3 roles; quién la
+// ve lo decide solo el área (tabla de accesos).
 
 // Catálogo de opciones de Utilidades — lo usa configuracion.js para armar las
-// columnas de la tabla de accesos. Al agregar una opción nueva (Operadores),
-// basta con sumarla aquí para que aparezca su columna.
+// columnas de la tabla de accesos. Al agregar una opción nueva basta con
+// sumarla aquí para que aparezca su columna.
 export const OPCIONES_UTILIDADES = [
   { id: "rh", etiqueta: "RH" },
-  { id: "validacionQR", etiqueta: "Validación de QR" }
+  { id: "validacionQR", etiqueta: "Validación de QR" },
+  { id: "operadores", etiqueta: "Operadores" }
 ];
 
 const SVG = (contenido) =>
@@ -45,6 +49,7 @@ const ICONOS = {
   configuracion: SVG(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>`),
   // Tarjetas de Utilidades
   rh: ICONO_PERSONAS,
+  operadores: SVG(`<rect x="1" y="6" width="14" height="10" rx="1"/><path d="M15 9h4l3 3v4h-7"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/>`),
   validacionQR: SVG(`<path d="M3 7V4a1 1 0 0 1 1-1h3"/><path d="M17 3h3a1 1 0 0 1 1 1v3"/><path d="M21 17v3a1 1 0 0 1-1 1h-3"/><path d="M7 21H4a1 1 0 0 1-1-1v-3"/><rect x="7" y="7" width="10" height="10" rx="1"/>`),
   // Renglones de la lista de RH
   solicitudes: SVG(`<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/>`),
@@ -117,20 +122,29 @@ const OPCION_QR = {
   descripcion: "Embarques McCain",
   pantalla: "escaneoOrigen"
 };
+const OPCION_OPERADORES = {
+  id: "operadores",
+  etiqueta: "Operadores",
+  descripcion: "Aceptación de ingreso · Órdenes de trabajo",
+  subtabs: [
+    { id: "operadoresSolicitudes", etiqueta: "Aceptación de ingreso" },
+    { id: "operadoresOrdenes", etiqueta: "Órdenes de trabajo" }
+  ]
+};
 
 const TABS_POR_ROL = {
   // El empleado solo tiene "Utilidades": con un solo botón el menú inferior
   // no aporta nada, así que se oculta y entra directo a las tarjetas.
   empleado: [
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR] }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR, OPCION_OPERADORES] }
   ],
   supervisor: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES, CONSULTA_SUPERVISOR), OPCION_QR] }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES, CONSULTA_SUPERVISOR), OPCION_QR, OPCION_OPERADORES] }
   ],
   admin: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR] },
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR, OPCION_OPERADORES] },
     { id: "configuracion", etiqueta: "Configuración" }
   ]
 };
