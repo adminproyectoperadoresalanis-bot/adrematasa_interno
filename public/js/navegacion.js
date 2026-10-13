@@ -18,9 +18,20 @@
 // propia lista aquí abajo). Los ids son los mismos de siempre, así que el
 // objeto `pantallas` que arma auth.js no cambia.
 //
-// Paso 2 (pendiente): filtrar qué opciones de Utilidades ve cada quien según
-// su área, configurable desde Configuración.
+// Paso 2 (2026-10-12): qué opciones de Utilidades ve cada quien depende de su
+// área (`usuarios.area`), configurable desde Configuración → "Acceso a
+// Utilidades por área" (documento `configuracion/accesosUtilidades`). auth.js
+// calcula la lista permitida y la pasa como 4º parámetro de
+// iniciarNavegacion; el admin siempre ve todo (no se le pasa lista).
 // Paso 3 (pendiente): opción Operadores (aceptación de ingreso + órdenes de trabajo).
+
+// Catálogo de opciones de Utilidades — lo usa configuracion.js para armar las
+// columnas de la tabla de accesos. Al agregar una opción nueva (Operadores),
+// basta con sumarla aquí para que aparezca su columna.
+export const OPCIONES_UTILIDADES = [
+  { id: "rh", etiqueta: "RH" },
+  { id: "validacionQR", etiqueta: "Validación de QR" }
+];
 
 const SVG = (contenido) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${contenido}</svg>`;
@@ -161,10 +172,15 @@ function inyectarEstilosUtilidades() {
 // pantallas: objeto { idPantalla: (contenedor) => void } con la función que dibuja cada pantalla.
 // pantallaInicial: id de la pestaña que se muestra al entrar (si no es una
 // pestaña del rol, se usa la primera).
-export function iniciarNavegacion(rol, pantallas, pantallaInicial) {
+// opcionesPermitidas: arreglo de ids de OPCIONES_UTILIDADES que puede ver este
+// usuario, o null para ver todas (admin, o mientras no exista configuración).
+export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermitidas = null) {
   const nav = document.getElementById("nav-inferior");
   const contenidoApp = document.getElementById("contenido-app");
-  const tabs = TABS_POR_ROL[rol] || [];
+  const tabs = (TABS_POR_ROL[rol] || []).map(t => {
+    if (!t.opciones || !Array.isArray(opcionesPermitidas)) return t;
+    return { ...t, opciones: t.opciones.filter(op => opcionesPermitidas.includes(op.id)) };
+  });
 
   if (tabs.length === 0) {
     ocultarNavegacion();
@@ -230,6 +246,14 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial) {
 
   // Nivel 1: tarjetas de Utilidades.
   function mostrarUtilidades(tab) {
+    if (tab.opciones.length === 0) {
+      contenidoApp.innerHTML = `
+        <div class="utilidades-titulo">Utilidades</div>
+        <div class="panel"><p>Todavía no tienes opciones asignadas.</p>
+        <p class="nota">Contacta al administrador para que habilite las opciones de tu área.</p></div>
+      `;
+      return;
+    }
     contenidoApp.innerHTML = `
       <div class="utilidades-titulo">Utilidades</div>
       <div class="utilidades-grid">

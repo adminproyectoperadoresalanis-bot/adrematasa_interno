@@ -97,6 +97,27 @@ document.getElementById("btn-cambiar-contrasena")?.addEventListener("click", () 
   menuUsuario?.classList.add("oculto");
 });
 
+// Acceso a Utilidades por área (paso 2, 12 oct 2026): devuelve la lista de
+// opciones de Utilidades que puede ver este usuario según su área
+// (`usuarios.area`), leída de `configuracion/accesosUtilidades`.
+//   - null  → ver todas: todavía no se ha guardado ninguna configuración (así
+//             el cambio no deja a nadie sin nada el día que se publica).
+//   - []    → ninguna: sin área asignada, área sin casillas marcadas, o no se
+//             pudo leer la configuración.
+// El admin no pasa por aquí: siempre ve todo.
+async function opcionesUtilidadesPermitidas(datosUsuario) {
+  try {
+    const snap = await getDoc(doc(db, "configuracion", "accesosUtilidades"));
+    if (!snap.exists()) return null;
+    const porArea = snap.data().porArea || {};
+    const lista = porArea[datosUsuario.area];
+    return Array.isArray(lista) ? lista : [];
+  } catch (err) {
+    console.error("No se pudo leer accesosUtilidades:", err);
+    return [];
+  }
+}
+
 function mostrarVista(vista) {
   [vistaCargando, vistaLogin, vistaRegistro, vistaRecuperar, vistaApp].forEach(v => v.classList.add("oculto"));
   vista.classList.remove("oculto");
@@ -346,15 +367,17 @@ onAuthStateChanged(auth, async (user) => {
   } else if (datosUsuario.rol === "empleado") {
     notificacionesWrap?.classList.remove("oculto");
     iniciarCentroNotificaciones(user.uid);
+    const permitidasEmpleado = await opcionesUtilidadesPermitidas(datosUsuario);
     iniciarNavegacion("empleado", {
       escaneoOrigen: (c) => iniciarEscaneoOrigen(c, datosUsuario, user.uid),
       horasExtra: (c) => iniciarVistaEmpleado(c, datosUsuario, user.uid),
       vacaciones: (c) => iniciarVistaVacacionesEmpleado(c, datosUsuario, user.uid),
       faltas: (c) => iniciarVistaEmpleadoFaltas(c, datosUsuario, user.uid)
-    }, "horasExtra");
+    }, "utilidades", permitidasEmpleado);
   } else if (datosUsuario.rol === "supervisor") {
     notificacionesWrap?.classList.remove("oculto");
     iniciarCentroNotificaciones(user.uid);
+    const permitidasSupervisor = await opcionesUtilidadesPermitidas(datosUsuario);
     iniciarNavegacion("supervisor", {
       escaneoOrigen: (c) => iniciarEscaneoOrigen(c, datosUsuario, user.uid),
       panel: (c) => iniciarPanelResumenSupervisor(c, user.uid),
@@ -370,7 +393,7 @@ onAuthStateChanged(auth, async (user) => {
       equipo: (c) => iniciarMiEquipo(c, user.uid),
       calendarioVacaciones: (c) => iniciarCalendarioVacaciones(c, { uidSupervisor: user.uid }),
       reportes: (c) => iniciarReportesSupervisor(c, user.uid)
-    }, "panel");
+    }, "panel", permitidasSupervisor);
   } else {
     detenerCentroNotificaciones();
     notificacionesWrap?.classList.add("oculto");

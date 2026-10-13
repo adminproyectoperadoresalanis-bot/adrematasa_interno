@@ -330,14 +330,36 @@ service cloud.firestore {
       return isSignedIn() && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
         && usuarioActual().rol in ['admin', 'supervisor', 'empleado'] && usuarioActual().estatus == 'activo';
     }
+    // Acceso a Utilidades por área (2026-10-12, paso 2): el admin marca en
+    // Configuración qué opciones de Utilidades ve cada área — documento
+    // configuracion/accesosUtilidades { porArea: { "<área>": ["rh", "validacionQR", ...] } }.
+    // Mismo criterio que auth.js (opcionesUtilidadesPermitidas):
+    //   - admin: siempre sí;
+    //   - mientras el documento no exista: todos sí (no se rompe nada el día
+    //     que se publica, antes de que el admin guarde la tabla);
+    //   - ya guardado: solo si el área del usuario tiene esa opción marcada.
+    function tieneAccesoUtilidad(idOpcion) {
+      return usuarioActual().rol == 'admin'
+        || !exists(/databases/$(database)/documents/configuracion/accesosUtilidades)
+        || idOpcion in get(/databases/$(database)/documents/configuracion/accesosUtilidades).data
+             .get('porArea', {}).get(usuarioActual().get('area', ''), []);
+    }
+    function puedeVerQR() {
+      return usuarioActivoValido() && tieneAccesoUtilidad('validacionQR');
+    }
+
+    // esValidador1/esValidador2/esSupervisorOAdmin ahora también exigen que
+    // el área tenga habilitada "Validación de QR" (2026-10-12): si el admin
+    // le quita la opción a un área, deja de poder escribir aquí aunque su
+    // área/puesto coincidan. El admin no se ve afectado.
     function esValidador1() {
-      return usuarioActivoValido() && (
+      return puedeVerQR() && (
         usuarioActual().rol == 'admin' ||
         usuarioActual().get('area', '') == 'Atención al cliente'
       );
     }
     function esValidador2() {
-      return usuarioActivoValido() && (
+      return puedeVerQR() && (
         usuarioActual().rol == 'admin' ||
         (
           usuarioActual().get('area', '') == 'Operaciones MEX' &&
@@ -346,11 +368,11 @@ service cloud.firestore {
       );
     }
     function esSupervisorOAdmin() {
-      return usuarioActivoValido() && usuarioActual().rol in ['admin', 'supervisor'];
+      return puedeVerQR() && usuarioActual().rol in ['admin', 'supervisor'];
     }
 
     match /verificaciones_cfdi_local/{embarqueId} {
-      allow read: if usuarioActivoValido();
+      allow read: if puedeVerQR();
 
       // Validación 1 — dos casos (segundo caso agregado 2026-09-12):
       //   (a) Atención al Cliente escanea el CFDI real — uuidEsperado y
@@ -511,7 +533,7 @@ service cloud.firestore {
     // un RFC real.
     // ------------------------------------------------------------------
     match /qr_internos_generados/{embarqueId} {
-      allow read: if usuarioActivoValido();
+      allow read: if puedeVerQR();
       // 2026-09-12: antes solo Atención al Cliente (esValidador1) generaba
       // este QR; con la reestructuración del flujo sin factura, ahora es
       // Operaciones (esValidador2) quien lo crea, al asignar operador.
@@ -542,12 +564,12 @@ service cloud.firestore {
     }
 
     match /verificaciones_cfdi_resultado/{embarqueId} {
-      allow read: if usuarioActivoValido();
+      allow read: if puedeVerQR();
       allow write: if false;
     }
 
     match /embarques_pendientes_origen/{embarqueId} {
-      allow read: if usuarioActivoValido();
+      allow read: if puedeVerQR();
       allow write: if false;
     }
 
@@ -558,7 +580,7 @@ service cloud.firestore {
     // aquí desde el navegador: lo llena el Apps Script con su propia
     // cuenta de servicio, que no pasa por estas reglas.
     match /operadores_alanis/{uid} {
-      allow read: if usuarioActivoValido();
+      allow read: if puedeVerQR();
       allow write: if false;
     }
 

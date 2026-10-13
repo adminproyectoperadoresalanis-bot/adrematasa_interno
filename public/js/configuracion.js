@@ -4,6 +4,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { UMBRALES_DEFAULT, FESTIVOS_DEFAULT } from "./vacacionesCalculo.js";
 import { AREAS_DEFAULT } from "./estructuraOrganizacional.js";
+import { OPCIONES_UTILIDADES } from "./navegacion.js";
 
 export function iniciarConfiguracion(contenedor) {
   contenedor.innerHTML = `
@@ -81,6 +82,29 @@ export function iniciarConfiguracion(contenedor) {
       <div class="acciones-form" style="margin-top:14px;">
         <button type="button" id="btn-agregar-area" class="secundario">+ Agregar área</button>
         <button type="button" id="btn-guardar-areas">Guardar cambios</button>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-top:20px;">
+      <h2>Acceso a Utilidades por área</h2>
+      <p class="nota">
+        Marca qué opciones de Utilidades ve cada área. El área decide qué opciones aparecen; el rol
+        sigue decidiendo qué puede hacer cada quien dentro (por ejemplo, en RH un supervisor aprueba
+        a su equipo y un empleado solo solicita). El administrador siempre ve todo. Un empleado sin
+        área asignada no ve ninguna opción. Los cambios se aplican la próxima vez que cada usuario
+        entre o recargue la app. Si renombras un área arriba, vuelve a marcar aquí sus accesos.
+      </p>
+      <p id="accesos-aviso" class="nota oculto" style="color:#8a5a00;"></p>
+      <div id="accesos-error" class="error"></div>
+      <p id="accesos-exito" class="nota oculto" style="color:#1c7a41;"></p>
+      <div class="tabla-wrap">
+        <table class="tabla" id="tabla-accesos">
+          <thead><tr id="thead-accesos"></tr></thead>
+          <tbody id="tbody-accesos"></tbody>
+        </table>
+      </div>
+      <div class="acciones-form" style="margin-top:14px;">
+        <button type="button" id="btn-guardar-accesos">Guardar accesos</button>
       </div>
     </section>
 
@@ -279,11 +303,101 @@ export function iniciarConfiguracion(contenedor) {
   const refEstructura = doc(db, "configuracion", "estructura");
   let areas = [];
 
+  // --- Acceso a Utilidades por área (paso 2, 12 oct 2026) ---
+  // Documento configuracion/accesosUtilidades:
+  //   { porArea: { "<nombre de área>": ["rh", "validacionQR", ...] }, actualizadoEn }
+  // Lo lee auth.js al entrar cada usuario (ver opcionesUtilidadesPermitidas).
+  // Mientras el documento no exista, todos ven todas las opciones; por eso la
+  // tabla arranca con todo marcado, para reflejar cómo está hoy.
+
+  const theadAccesos = contenedor.querySelector("#thead-accesos");
+  const tbodyAccesos = contenedor.querySelector("#tbody-accesos");
+  const avisoAccesosP = contenedor.querySelector("#accesos-aviso");
+  const errorAccesosDiv = contenedor.querySelector("#accesos-error");
+  const exitoAccesosP = contenedor.querySelector("#accesos-exito");
+  const btnGuardarAccesos = contenedor.querySelector("#btn-guardar-accesos");
+  const refAccesos = doc(db, "configuracion", "accesosUtilidades");
+
+  let areasGuardadas = [];
+  let porArea = null;          // null = todavía no existe configuración guardada
+  let accesosCargados = false;
+
+  onSnapshot(refAccesos, (snap) => {
+    porArea = snap.exists() ? (snap.data().porArea || {}) : null;
+    accesosCargados = true;
+    renderAccesos();
+  }, (err) => {
+    errorAccesosDiv.textContent = "No se pudo cargar la configuración de accesos: " + err.message;
+  });
+
+  function tieneAcceso(area, idOpcion) {
+    if (porArea === null) return true;
+    return Array.isArray(porArea[area]) && porArea[area].includes(idOpcion);
+  }
+
+  function renderAccesos() {
+    if (!accesosCargados) return;
+
+    theadAccesos.innerHTML = `<th>Área</th>` +
+      OPCIONES_UTILIDADES.map(op => `<th style="text-align:center;">${escapeHtml(op.etiqueta)}</th>`).join("");
+
+    if (porArea === null) {
+      avisoAccesosP.textContent = "Todavía no se ha guardado esta configuración: por ahora todas las áreas ven todas las opciones. En cuanto la guardes, cada área verá solo lo que esté marcado.";
+      avisoAccesosP.classList.remove("oculto");
+    } else {
+      avisoAccesosP.classList.add("oculto");
+    }
+
+    if (areasGuardadas.length === 0) {
+      tbodyAccesos.innerHTML = `<tr><td colspan="${OPCIONES_UTILIDADES.length + 1}">No hay áreas guardadas. Captúralas en "Áreas y puestos".</td></tr>`;
+      return;
+    }
+
+    tbodyAccesos.innerHTML = areasGuardadas.map(area => `
+      <tr data-area="${escapeHtml(area)}">
+        <td>${escapeHtml(area)}</td>
+        ${OPCIONES_UTILIDADES.map(op => `
+          <td style="text-align:center;">
+            <input type="checkbox" class="check-acceso" data-opcion="${op.id}"
+              ${tieneAcceso(area, op.id) ? "checked" : ""}
+              aria-label="${escapeHtml(area)}: ${escapeHtml(op.etiqueta)}">
+          </td>
+        `).join("")}
+      </tr>
+    `).join("");
+  }
+
+  btnGuardarAccesos.addEventListener("click", async () => {
+    errorAccesosDiv.textContent = "";
+    exitoAccesosP.classList.add("oculto");
+
+    // Se lee el estado directo de las casillas, fila por fila.
+    const nuevo = {};
+    tbodyAccesos.querySelectorAll("tr[data-area]").forEach((fila, idx) => {
+      const area = areasGuardadas[idx];
+      nuevo[area] = [...fila.querySelectorAll(".check-acceso")]
+        .filter(c => c.checked)
+        .map(c => c.dataset.opcion);
+    });
+
+    try {
+      await setDoc(refAccesos, { porArea: nuevo, actualizadoEn: new Date().toISOString() });
+      exitoAccesosP.textContent = "Accesos guardados. Cada usuario los verá la próxima vez que entre o recargue la app.";
+      exitoAccesosP.classList.remove("oculto");
+    } catch (err) {
+      errorAccesosDiv.textContent = "No se pudieron guardar los accesos: " + err.message;
+    }
+  });
+
   onSnapshot(refEstructura, (snap) => {
     const datos = snap.exists() ? snap.data().areas : null;
     areas = Array.isArray(datos) && datos.length > 0
       ? datos.map(a => ({ nombre: a.nombre, puestos: [...(a.puestos || [])] }))
       : AREAS_DEFAULT.map(a => ({ nombre: a.nombre, puestos: [...a.puestos] }));
+    // La tabla de accesos usa las áreas YA GUARDADAS (no lo que se esté
+    // editando arriba sin guardar).
+    areasGuardadas = areas.map(a => a.nombre).filter(Boolean);
+    renderAccesos();
     renderAreas();
   }, (err) => {
     errorAreasDiv.textContent = "No se pudo cargar la configuración: " + err.message;
