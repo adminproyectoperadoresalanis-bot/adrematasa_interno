@@ -119,6 +119,7 @@ const RH_EMPLEADO = {
 const OPCION_QR = {
   id: "validacionQR",
   etiqueta: "Validación de QR",
+  etiquetaCorta: "QR",
   descripcion: "Embarques McCain",
   pantalla: "escaneoOrigen"
 };
@@ -180,6 +181,25 @@ function inyectarEstilosUtilidades() {
       color: #2c1e0f; font: inherit; font-size: 14px; }
     .rh-item:hover { background: #f5f3f0; }
     .rh-item svg { width: 20px; height: 20px; flex-shrink: 0; }
+    .utilidades-toggle { display: inline-flex; gap: 4px; padding: 4px; margin: 0 0 14px;
+      background: #fff; border: 1px solid #e2ddd5; border-radius: 12px; max-width: 100%; }
+    .utilidades-toggle-boton { display: flex; align-items: center; justify-content: center; gap: 8px;
+      background: none; border: none; border-radius: 9px; padding: 10px 16px; cursor: pointer;
+      font: inherit; font-size: 15px; color: #6b5f52; white-space: nowrap; }
+    .utilidades-toggle-boton:hover { background: #f5f3f0; color: #2c1e0f; }
+    .utilidades-toggle-boton.activo { background: #2c1e0f; color: #fff; font-weight: 600; }
+    .utilidades-toggle-boton svg { width: 20px; height: 20px; flex-shrink: 0; }
+    .utilidades-toggle-boton .corta { display: none; }
+    .utilidades-regresar { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 10px;
+      background: #fff; border: 1px solid #e2ddd5; border-radius: 10px; padding: 10px 16px;
+      cursor: pointer; font: inherit; font-size: 15px; font-weight: 600; color: #2c1e0f; }
+    .utilidades-regresar:hover { border-color: #2c1e0f; }
+    @media (max-width: 600px) {
+      .utilidades-toggle { display: flex; width: 100%; }
+      .utilidades-toggle-boton { flex: 1; padding: 10px 8px; }
+      .utilidades-toggle-boton .larga { display: none; }
+      .utilidades-toggle-boton .corta { display: inline; }
+    }
   `;
   document.head.appendChild(estilo);
 }
@@ -232,6 +252,43 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
       <div class="utilidades-contenido"></div>
     `;
     contenidoApp.querySelector(".utilidades-volver").addEventListener("click", alVolver);
+    return contenidoApp.querySelector(".utilidades-contenido");
+  }
+
+  // 2026-10-13 (pedido de Ivan): en vez de la liga chiquita "← Utilidades",
+  // arriba va un toggle con las opciones de Utilidades que el usuario tiene
+  // permitidas, para brincar entre RH / QR / Operadores con un solo clic.
+  // Si solo tiene una opción, no hay a dónde cambiar: se queda el encabezado
+  // de antes. `regreso` ({ texto, alVolver }) es para el nivel 3 (dentro de
+  // un renglón de RH): agrega un botón grande para volver a la lista.
+  function encabezadoOpcion(tab, opcionActiva, titulo, regreso = null) {
+    if (tab.opciones.length <= 1) {
+      return regreso
+        ? encabezado(regreso.texto, regreso.alVolver, titulo)
+        : encabezado("Utilidades", () => mostrarUtilidades(tab), titulo);
+    }
+    contenidoApp.innerHTML = `
+      <div class="utilidades-toggle" role="tablist">
+        ${tab.opciones.map(op => `
+          <button type="button" role="tab" class="utilidades-toggle-boton${op.id === opcionActiva.id ? " activo" : ""}"
+            data-opcion="${op.id}" aria-selected="${op.id === opcionActiva.id}">
+            ${ICONOS[op.id] || ""}<span class="larga">${op.etiqueta}</span><span class="corta">${op.etiquetaCorta || op.etiqueta}</span>
+          </button>
+        `).join("")}
+      </div>
+      ${regreso ? `<button type="button" class="utilidades-regresar">← ${regreso.texto}</button>` : ""}
+      ${titulo && regreso ? `<div class="utilidades-ruta">${titulo}</div>` : ""}
+      <div class="utilidades-contenido"></div>
+    `;
+    contenidoApp.querySelectorAll(".utilidades-toggle-boton").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const opcion = tab.opciones.find(op => op.id === btn.dataset.opcion);
+        if (opcion) abrirOpcion(tab, opcion);
+      });
+    });
+    if (regreso) {
+      contenidoApp.querySelector(".utilidades-regresar").addEventListener("click", regreso.alVolver);
+    }
     return contenidoApp.querySelector(".utilidades-contenido");
   }
 
@@ -291,7 +348,7 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
 
   // Nivel 2: una opción abierta (lista agrupada, toggles o pantalla directa).
   function abrirOpcion(tab, opcion) {
-    const contenedor = encabezado("Utilidades", () => mostrarUtilidades(tab), opcion.etiqueta);
+    const contenedor = encabezadoOpcion(tab, opcion, opcion.etiqueta);
     if (opcion.grupos) {
       dibujarListaGrupos(contenedor, tab, opcion);
     } else if (opcion.subtabs) {
@@ -325,7 +382,7 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
   // la fila de toggles con todo el grupo (con ese renglón ya seleccionado).
   function abrirItem(tab, opcion, grupo, item) {
     const titulo = grupo.comoToggles ? grupo.titulo : item.etiqueta;
-    const contenedor = encabezado(opcion.etiqueta, () => abrirOpcion(tab, opcion), titulo);
+    const contenedor = encabezadoOpcion(tab, opcion, titulo, { texto: opcion.etiqueta, alVolver: () => abrirOpcion(tab, opcion) });
     if (grupo.comoToggles) {
       mostrarGrupo(contenedor, grupo.items, item.id);
     } else {
