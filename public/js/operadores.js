@@ -150,6 +150,7 @@ export function iniciarSolicitudesOperadores(contenedor) {
           <span style="min-width:0;">
             <span class="op-nombre" style="display:block;">${esc(s.nombre || "Sin nombre")}</span>
             <span class="op-sub">${esc(s.correo || "—")}</span>
+            <span class="op-sub" style="display:block;${s.unidad ? "" : "color:#BA7517;"}">${s.unidad ? "Unidad " + esc(s.unidad) : "Sin unidad capturada"}</span>
           </span>
           <span class="op-fecha">${esc(fecha)} ›</span>
         </button>`;
@@ -179,16 +180,16 @@ export function iniciarSolicitudesOperadores(contenedor) {
           <button type="button" class="secundario op-cerrar" aria-label="Cerrar">✕</button>
         </div>
         <label for="op-m-numero">Número económico (opcional)</label>
-        <input type="text" id="op-m-numero" placeholder="Ej: OP-1021">
+        <input type="text" id="op-m-numero" placeholder="Ej: 1121" value="${esc(s.unidad || "")}">
         <label for="op-m-nombre">Nombre oficial (el que se verá en ADREMATASA)</label>
         <input type="text" id="op-m-nombre" placeholder="Nombre completo oficial">
         <label for="op-m-telefono">Teléfono (opcional)</label>
         <div style="display:flex;gap:6px;">
           <select id="op-m-lada" style="width:96px;flex-shrink:0;">
-            <option value="52">MX +52</option>
-            <option value="1">US +1</option>
+            <option value="52"${s.lada === "1" ? "" : " selected"}>MX +52</option>
+            <option value="1"${s.lada === "1" ? " selected" : ""}>US +1</option>
           </select>
-          <input type="tel" id="op-m-telefono" placeholder="10 dígitos" style="flex:1;min-width:0;">
+          <input type="tel" id="op-m-telefono" placeholder="10 dígitos" style="flex:1;min-width:0;" value="${esc(s.telefono || "")}">
         </div>
         <div class="error op-m-error" style="margin-top:10px;"></div>
         <div class="op-botones">

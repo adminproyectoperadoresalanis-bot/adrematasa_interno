@@ -85,6 +85,11 @@ exports.listarSolicitudesOperadores = onCall({ region: REGION }, async (request)
         uid: d.id,
         nombre: x.nombre || "",
         correo: x.correo || "",
+        // 2026-10-13: lo que el operador capturó al inscribirse (pendiente.html
+        // de Alanis Operadores) — se prellena en el modal de aprobación.
+        unidad: x.unidad || "",
+        lada: x.lada === "1" ? "1" : "52",
+        telefono: x.telefono || "",
         timestampMs: aMillis_(x.timestamp),
       };
     });
@@ -138,6 +143,15 @@ exports.resolverSolicitudOperador = onCall({ region: REGION }, async (request) =
       const telefono = typeof e.telefono === "string" ? e.telefono.replace(/\D/g, "") : "";
       if (telefono !== "" && telefono.length !== 10) {
         throw new HttpsError("invalid-argument", "El teléfono debe tener 10 dígitos.");
+      }
+
+      // Misma validación que admin2.js al aprobar (2026-10-13): una unidad no
+      // puede quedar en dos operadores activos.
+      if (numero !== "") {
+        const otro = await unidadOcupadaPorOtro_(numero, uid);
+        if (otro) {
+          throw new HttpsError("failed-precondition", `La unidad ${numero} ya está asignada a ${otro}. Corrige el número económico antes de aprobar.`);
+        }
       }
 
       // Mismos campos que aprobarSolicitud() de admin2.js (set completo).
