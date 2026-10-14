@@ -76,6 +76,7 @@ const IDS_ALERTA_RH = ["solicitudes", "vacaciones", "faltas"];
 
 function alertaEncendida(id) {
   if (id === "rh") return IDS_ALERTA_RH.some(i => alertasActivas[i]);
+  if (id === "operadores") return !!alertasActivas.operadoresSolicitudes;
   if (id === "utilidades") {
     return [...opcionesVisibles].some(op => alertaEncendida(op));
   }
@@ -238,6 +239,8 @@ function inyectarEstilosUtilidades() {
     .punto-alerta.activa { display: inline-block; }
     .rh-item.activo .punto-alerta, .utilidades-toggle-boton.activo .punto-alerta { background: #fff; }
     .nav-boton { position: relative; }
+    .subnav-boton .punto-alerta { margin-left: 6px; vertical-align: middle; }
+    .subnav-boton.activo .punto-alerta { background: #fff; }
     .nav-boton .punto-alerta { position: absolute; top: 6px; left: calc(50% + 8px); }
     .utilidad-nombre { display: inline-flex; align-items: center; gap: 8px; }
     @media (max-width: 600px) {
@@ -347,7 +350,7 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
   function mostrarGrupo(contenedor, subtabs, idSubtabInicial) {
     contenedor.innerHTML = `
       <div class="subnav-gestion">
-        ${subtabs.map(st => `<button type="button" class="subnav-boton" data-subtab="${st.id}">${st.etiqueta}</button>`).join("")}
+        ${subtabs.map(st => `<button type="button" class="subnav-boton" data-subtab="${st.id}">${st.etiqueta}${st.id === "operadoresSolicitudes" ? punto(st.id) : ""}</button>`).join("")}
       </div>
       <div class="subnav-contenido"></div>
     `;
@@ -364,6 +367,7 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
     });
 
     mostrarSubtab(idSubtabInicial || subtabs[0].id);
+    refrescarAlertas();
   }
 
   // Nivel 1: tarjetas de Utilidades.

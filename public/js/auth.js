@@ -26,7 +26,7 @@ import { iniciarCambioContrasena } from "./cuenta.js";
 import { iniciarOrganigrama } from "./organigrama.js";
 import { iniciarEscaneoOrigen, APP_VERSION } from "./escaneoOrigen.js";
 import { iniciarAutorizacionesExtra } from "./autorizacionesExtra.js";
-import { iniciarSolicitudesOperadores, iniciarOrdenesTrabajo, iniciarOperadoresRegistrados } from "./operadores.js";
+import { iniciarSolicitudesOperadores, iniciarOrdenesTrabajo, iniciarOperadoresRegistrados, iniciarAlertasOperadores, detenerAlertasOperadores } from "./operadores.js";
 import { iniciarAlertasRH, detenerAlertasRH } from "./alertasRH.js";
 import { iniciarAlertasQR, detenerAlertasQR } from "./alertasQR.js";
 
@@ -284,6 +284,7 @@ function traducirError(err) {
 onAuthStateChanged(auth, async (user) => {
   detenerAlertasRH();
   detenerAlertasQR();
+  detenerAlertasOperadores();
   if (!user) {
     detenerCentroNotificaciones();
     notificacionesWrap?.classList.add("oculto");
@@ -374,6 +375,7 @@ onAuthStateChanged(auth, async (user) => {
     }, "panel");
     iniciarAlertasRH("admin", user.uid);
     iniciarAlertasQR(datosUsuario);
+    iniciarAlertasOperadores();
   } else if (datosUsuario.rol === "empleado") {
     notificacionesWrap?.classList.remove("oculto");
     iniciarCentroNotificaciones(user.uid);
@@ -389,6 +391,9 @@ onAuthStateChanged(auth, async (user) => {
     }, "utilidades", permitidasEmpleado);
     if (!Array.isArray(permitidasEmpleado) || permitidasEmpleado.includes("validacionQR")) {
       iniciarAlertasQR(datosUsuario);
+    }
+    if (!Array.isArray(permitidasEmpleado) || permitidasEmpleado.includes("operadores")) {
+      iniciarAlertasOperadores();
     }
   } else if (datosUsuario.rol === "supervisor") {
     notificacionesWrap?.classList.remove("oculto");
@@ -418,6 +423,9 @@ onAuthStateChanged(auth, async (user) => {
     }
     if (!Array.isArray(permitidasSupervisor) || permitidasSupervisor.includes("validacionQR")) {
       iniciarAlertasQR(datosUsuario);
+    }
+    if (!Array.isArray(permitidasSupervisor) || permitidasSupervisor.includes("operadores")) {
+      iniciarAlertasOperadores();
     }
   } else {
     detenerCentroNotificaciones();

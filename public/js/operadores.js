@@ -13,6 +13,7 @@
 //     el catálogo de fallas de data.js).
 
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
+import { marcarAlerta } from "./navegacion.js";
 
 const funciones = getFunctions(undefined, "us-central1");
 const fnListarSolicitudes = httpsCallable(funciones, "listarSolicitudesOperadores");
@@ -125,6 +126,7 @@ export function iniciarSolicitudesOperadores(contenedor) {
     try {
       const res = await fnListarSolicitudes();
       solicitudes = res.data.solicitudes || [];
+      marcarAlerta("operadoresSolicitudes", solicitudes.length > 0);
       render();
     } catch (err) {
       lista.innerHTML = "";
@@ -246,6 +248,38 @@ export function iniciarSolicitudesOperadores(contenedor) {
 
   buscar.addEventListener("input", render);
   cargar();
+}
+
+// ============================================================================
+// Punto de alerta de "Aceptación de ingreso" (2026-10-14, pedido de Ivan).
+// Las solicitudes viven en Alanis Operadores, así que no se pueden vigilar en
+// vivo desde el navegador: se consulta la misma Cloud Function de la pantalla
+// al entrar a la app y luego cada 10 minutos (y se vuelve a revisar sola
+// cada vez que se abre Aceptación de ingreso o se resuelve una solicitud,
+// ver cargar() arriba). Si la llamada falla, el punto simplemente no cambia.
+// ============================================================================
+const MINUTOS_REVISION_OPERADORES = 10;
+let relojAlertasOperadores = null;
+
+async function revisarAlertaOperadores() {
+  try {
+    const res = await fnListarSolicitudes();
+    marcarAlerta("operadoresSolicitudes", (res.data.solicitudes || []).length > 0);
+  } catch (err) {
+    console.warn("Alertas Operadores:", err.message);
+  }
+}
+
+export function detenerAlertasOperadores() {
+  if (relojAlertasOperadores) clearInterval(relojAlertasOperadores);
+  relojAlertasOperadores = null;
+  marcarAlerta("operadoresSolicitudes", false);
+}
+
+export function iniciarAlertasOperadores() {
+  detenerAlertasOperadores();
+  revisarAlertaOperadores();
+  relojAlertasOperadores = setInterval(revisarAlertaOperadores, MINUTOS_REVISION_OPERADORES * 60 * 1000);
 }
 
 // ============================================================================
