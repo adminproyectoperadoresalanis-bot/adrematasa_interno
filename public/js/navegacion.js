@@ -63,6 +63,8 @@ const ICONOS = {
   organigrama: SVG(`<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M12 12H5v4M12 12h7v4"/>`)
 };
 
+const FLECHA_ACORDEON = `<span class="rh-flecha">${SVG(`<polyline points="6 9 12 15 18 9"/>`)}</span>`;
+
 // ---- Contenido de RH por rol ----
 
 // Grupo "Solicitudes" (antes "Gestión"). `comoToggles`: al abrir uno, se
@@ -181,6 +183,12 @@ function inyectarEstilosUtilidades() {
       color: #2c1e0f; font: inherit; font-size: 14px; }
     .rh-item:hover { background: #f5f3f0; }
     .rh-item svg { width: 20px; height: 20px; flex-shrink: 0; }
+    .rh-item .rh-flecha { margin-left: auto; display: flex; transition: transform .15s; color: #6b5f52; }
+    .rh-item .rh-flecha svg { width: 18px; height: 18px; }
+    .rh-item.activo { background: #2c1e0f; color: #fff; font-weight: 600; }
+    .rh-item.activo .rh-flecha { transform: rotate(180deg); color: #fff; }
+    .rh-panel { grid-column: 1 / -1; background: #f5f3f0; border-bottom: 1px solid #efebe5;
+      border-top: 3px solid #2c1e0f; padding: 12px; min-width: 0; }
     .utilidades-toggle { display: inline-flex; gap: 4px; padding: 4px; margin: 0 0 14px;
       background: #fff; border: 1px solid #e2ddd5; border-radius: 12px; max-width: 100%; }
     .utilidades-toggle-boton { display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -358,36 +366,52 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
     }
   }
 
+  // 2026-10-13 (pedido de Ivan): la lista de RH funciona como acordeón — al
+  // tocar un renglón, su pantalla se despliega ahí mismo y se quita el botón
+  // de regresar. Solo hay uno abierto a la vez; tocar el mismo lo cierra.
+  // En celular (1 columna) se abre justo debajo del renglón; en computadora
+  // (varias columnas) se abre debajo de la fila donde está ese renglón.
   function dibujarListaGrupos(contenedor, tab, opcion) {
     contenedor.innerHTML = opcion.grupos.map((grupo, i) => `
       <div class="rh-grupo-titulo">${grupo.titulo}</div>
       <div class="rh-lista">
         ${grupo.items.map(item => `
-          <button type="button" class="rh-item" data-grupo="${i}" data-item="${item.id}">
-            ${ICONOS[item.id] || ""}<span>${item.etiqueta}</span>
+          <button type="button" class="rh-item" data-grupo="${i}" data-item="${item.id}" aria-expanded="false">
+            ${ICONOS[item.id] || ""}<span>${item.etiqueta}</span>${FLECHA_ACORDEON}
           </button>
         `).join("")}
       </div>
     `).join("");
+
+    function cerrarAbierto() {
+      contenedor.querySelector(".rh-panel")?.remove();
+      contenedor.querySelectorAll(".rh-item.activo").forEach(b => {
+        b.classList.remove("activo");
+        b.setAttribute("aria-expanded", "false");
+      });
+    }
+
     contenedor.querySelectorAll(".rh-item").forEach(btn => {
       btn.addEventListener("click", () => {
-        const grupo = opcion.grupos[Number(btn.dataset.grupo)];
-        const item = grupo.items.find(it => it.id === btn.dataset.item);
-        if (item) abrirItem(tab, opcion, grupo, item);
+        const yaAbierto = btn.classList.contains("activo");
+        cerrarAbierto();
+        if (yaAbierto) return;
+
+        const lista = btn.parentElement;
+        const botones = [...lista.querySelectorAll(".rh-item")];
+        const columnas = getComputedStyle(lista).gridTemplateColumns.split(" ").filter(Boolean).length || 1;
+        const indice = botones.indexOf(btn);
+        const ultimoDeLaFila = botones[Math.min(botones.length - 1, Math.floor(indice / columnas) * columnas + columnas - 1)];
+
+        const panel = document.createElement("div");
+        panel.className = "rh-panel";
+        ultimoDeLaFila.after(panel);
+        btn.classList.add("activo");
+        btn.setAttribute("aria-expanded", "true");
+        dibujarPantalla(btn.dataset.item, panel);
+        btn.scrollIntoView({ block: "nearest", behavior: "smooth" });
       });
     });
-  }
-
-  // Nivel 3: un renglón de la lista. Si su grupo va "comoToggles", se dibuja
-  // la fila de toggles con todo el grupo (con ese renglón ya seleccionado).
-  function abrirItem(tab, opcion, grupo, item) {
-    const titulo = grupo.comoToggles ? grupo.titulo : item.etiqueta;
-    const contenedor = encabezadoOpcion(tab, opcion, titulo, { texto: opcion.etiqueta, alVolver: () => abrirOpcion(tab, opcion) });
-    if (grupo.comoToggles) {
-      mostrarGrupo(contenedor, grupo.items, item.id);
-    } else {
-      dibujarPantalla(item.id, contenedor);
-    }
   }
 
   function mostrar(idTab) {
