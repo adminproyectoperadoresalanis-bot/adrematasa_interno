@@ -28,6 +28,7 @@ import { iniciarEscaneoOrigen, APP_VERSION } from "./escaneoOrigen.js";
 import { iniciarAutorizacionesExtra } from "./autorizacionesExtra.js";
 import { iniciarSolicitudesOperadores, iniciarOrdenesTrabajo, iniciarOperadoresRegistrados } from "./operadores.js";
 import { iniciarAlertasRH, detenerAlertasRH } from "./alertasRH.js";
+import { iniciarAlertasQR, detenerAlertasQR } from "./alertasQR.js";
 
 const DOMINIO_ALANIS = "@alanis.com.mx";
 
@@ -282,6 +283,7 @@ function traducirError(err) {
 
 onAuthStateChanged(auth, async (user) => {
   detenerAlertasRH();
+  detenerAlertasQR();
   if (!user) {
     detenerCentroNotificaciones();
     notificacionesWrap?.classList.add("oculto");
@@ -371,6 +373,7 @@ onAuthStateChanged(auth, async (user) => {
       configuracion: (c) => iniciarConfiguracion(c)
     }, "panel");
     iniciarAlertasRH("admin", user.uid);
+    iniciarAlertasQR(datosUsuario);
   } else if (datosUsuario.rol === "empleado") {
     notificacionesWrap?.classList.remove("oculto");
     iniciarCentroNotificaciones(user.uid);
@@ -384,6 +387,9 @@ onAuthStateChanged(auth, async (user) => {
       vacaciones: (c) => iniciarVistaVacacionesEmpleado(c, datosUsuario, user.uid),
       faltas: (c) => iniciarVistaEmpleadoFaltas(c, datosUsuario, user.uid)
     }, "utilidades", permitidasEmpleado);
+    if (!Array.isArray(permitidasEmpleado) || permitidasEmpleado.includes("validacionQR")) {
+      iniciarAlertasQR(datosUsuario);
+    }
   } else if (datosUsuario.rol === "supervisor") {
     notificacionesWrap?.classList.remove("oculto");
     iniciarCentroNotificaciones(user.uid);
@@ -409,6 +415,9 @@ onAuthStateChanged(auth, async (user) => {
     }, "panel", permitidasSupervisor);
     if (!Array.isArray(permitidasSupervisor) || permitidasSupervisor.includes("rh")) {
       iniciarAlertasRH("supervisor", user.uid);
+    }
+    if (!Array.isArray(permitidasSupervisor) || permitidasSupervisor.includes("validacionQR")) {
+      iniciarAlertasQR(datosUsuario);
     }
   } else {
     detenerCentroNotificaciones();

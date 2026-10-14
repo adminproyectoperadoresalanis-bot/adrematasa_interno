@@ -69,13 +69,16 @@ const ICONOS = {
 // con data-alerta="<id>" muestra el punto si ese id está activo. "rh" y
 // "utilidades" se encienden si cualquier opción de RH tiene alerta.
 const alertasActivas = {};
-// Si el usuario no tiene RH en sus opciones, el punto de "Utilidades" no se enciende por RH.
-let rhDisponible = true;
+// Opciones de Utilidades que este usuario sí ve: el punto de "Utilidades"
+// solo se enciende por opciones a las que tiene acceso.
+let opcionesVisibles = new Set();
 const IDS_ALERTA_RH = ["solicitudes", "vacaciones", "faltas"];
 
 function alertaEncendida(id) {
-  if (id === "utilidades" && !rhDisponible) return false;
-  if (id === "rh" || id === "utilidades") return IDS_ALERTA_RH.some(i => alertasActivas[i]);
+  if (id === "rh") return IDS_ALERTA_RH.some(i => alertasActivas[i]);
+  if (id === "utilidades") {
+    return [...opcionesVisibles].some(op => alertaEncendida(op));
+  }
   return !!alertasActivas[id];
 }
 
@@ -260,7 +263,7 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
     return { ...t, opciones: t.opciones.filter(op => opcionesPermitidas.includes(op.id)) };
   });
 
-  rhDisponible = tabs.some(t => t.opciones && t.opciones.some(op => op.id === "rh"));
+  opcionesVisibles = new Set(tabs.flatMap(t => (t.opciones || []).map(op => op.id)));
 
   if (tabs.length === 0) {
     ocultarNavegacion();
@@ -318,7 +321,7 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
         ${tab.opciones.map(op => `
           <button type="button" role="tab" class="utilidades-toggle-boton${op.id === opcionActiva.id ? " activo" : ""}"
             data-opcion="${op.id}" aria-selected="${op.id === opcionActiva.id}">
-            ${ICONOS[op.id] || ""}<span class="larga">${op.etiqueta}</span><span class="corta">${op.etiquetaCorta || op.etiqueta}</span>${op.id === "rh" ? punto("rh") : ""}
+            ${ICONOS[op.id] || ""}<span class="larga">${op.etiqueta}</span><span class="corta">${op.etiquetaCorta || op.etiqueta}</span>${punto(op.id)}
           </button>
         `).join("")}
       </div>
@@ -379,7 +382,7 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
         ${tab.opciones.map(op => `
           <button type="button" class="utilidad-tarjeta" data-opcion="${op.id}">
             ${ICONOS[op.id] || ""}
-            <span class="utilidad-nombre">${op.etiqueta}${op.id === "rh" ? punto("rh") : ""}</span>
+            <span class="utilidad-nombre">${op.etiqueta}${punto(op.id)}</span>
             <span class="utilidad-desc">${op.descripcion}</span>
           </button>
         `).join("")}
