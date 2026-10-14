@@ -68,6 +68,19 @@ const CLASES_SYNC = {
 const RFC_MARCADOR_SIN_FACTURA = "SIN-FACTURA";
 const QR_INTERNO_BASE = "https://control-interno.alanis-operadores.mx/sin-factura";
 
+// Cápsula "SIN FACTURA" (2026-10-14, pedido de Ivan): se muestra en TODAS las
+// secciones donde aparece un embarque sin factura (2da validación, espera del
+// operador, seguimiento, historial y detalle), no solo en pendientes, para
+// identificarlo de un vistazo. Un embarque es sin factura si se le generó QR
+// interno (esQrInterno) o si su RFC esperado es el marcador SIN-FACTURA.
+function esEmbarqueSinFactura_(f) {
+  return !!f && (f.esQrInterno === true || f.receptorRFCEsperado === RFC_MARCADOR_SIN_FACTURA);
+}
+function badgeSinFactura_(f, conSeparacion = true) {
+  if (!esEmbarqueSinFactura_(f)) return "";
+  return `<span class="badge-sin-factura"${conSeparacion ? ' style="margin-left:6px;"' : ""} title="Movimiento interno de McCain, sin factura">SIN FACTURA</span>`;
+}
+
 // ----------------------------------------------------------------------
 // Control de versión (agregado 2026-09-12): permite a Ivan saber, sin
 // preguntarle a nadie, qué versión de la app tiene abierta cada usuario
@@ -1603,7 +1616,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
     tbodyValidacion2.innerHTML = pendientes.map(f => `
       <tr data-id="${f.id}">
         <td>${escapeHtml(f.embarqueId || f.id)}</td>
-        <td>${escapeHtml(f.clienteNombre || "McCain")}${f.esQrInterno ? '<br><span class="badge-sin-factura" title="Movimiento interno de McCain, sin factura">SIN FACTURA</span>' : ""}</td>
+        <td>${escapeHtml(f.clienteNombre || "McCain")}${esEmbarqueSinFactura_(f) ? "<br>" + badgeSinFactura_(f, false) : ""}</td>
         <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—")}</td>
         <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.escaneadoPor && f.origenEscaneo.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.origenEscaneo && f.origenEscaneo.timestamp)}</td>
         <td class="acciones">
@@ -1816,7 +1829,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       return `
       <tr data-id="${escapeHtml(f.id)}" data-etapa="${etapa}">
         <td>${escapeHtml(f.embarqueId || f.id)}${opNombre ? `<span class="celda-embarque-meta">Operador: ${escapeHtml(opNombre)}</span>` : ""}</td>
-        <td>${escapeHtml(f.clienteNombre || "McCain")}</td>
+        <td>${escapeHtml(f.clienteNombre || "McCain")}${esEmbarqueSinFactura_(f) ? "<br>" + badgeSinFactura_(f, false) : ""}</td>
         <td>${escapeHtml((f.origenEscaneo && f.origenEscaneo.caja) || "—")}</td>
         <td>${escapeHtml((f.validacion2 && f.validacion2.escaneadoPor && f.validacion2.escaneadoPor.nombre) || "—")} · ${formatoFecha(f.validacion2 && f.validacion2.timestamp)}</td>
         <td><span class="nota" style="margin:0;">${puedeValidar2 ? estadoTextoEnlace_(st, etapa) : `Esperando ${ETIQUETA_CHECKPOINT[etapa]}`}</span></td>
@@ -2472,7 +2485,8 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       f.clienteNombre || "McCain",
       oa.nombre, oa.numero,
       r && nombreOperador_(r.recepcionOperadorUid, r.recepcionOperadorNombre),
-      f.uuidEsperado, f.receptorRFCEsperado
+      f.uuidEsperado, f.receptorRFCEsperado,
+      esEmbarqueSinFactura_(f) ? "sin factura" : ""
     ].filter(v => v != null && v !== "").join(" "));
   }
   function coincideBusqueda_(tokens, f, r) {
@@ -2649,7 +2663,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       return `
         <tr data-id="${f.id}">
           <td>
-            <span class="historial-texto ${syncInfo.clase}" title="${escapeHtml(syncInfo.titulo)}">${escapeHtml(f.embarqueId || f.id)}</span>
+            <span class="historial-texto ${syncInfo.clase}" title="${escapeHtml(syncInfo.titulo)}">${escapeHtml(f.embarqueId || f.id)}</span>${badgeSinFactura_(f)}
             <span class="celda-embarque-meta">Caja ${cajaTexto}${cajaBadge}</span>
           </td>
           <td>${celdaProgreso(f, r)}</td>
@@ -3013,7 +3027,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
       <tr data-id="${f.id}">
         <td>
           <button type="button" class="historial-emb-btn" title="Ver detalle completo">
-            <span class="historial-texto ${syncInfo.clase}" title="${escapeHtml(syncInfo.titulo)}">${escapeHtml(f.embarqueId || f.id)}</span>
+            <span class="historial-texto ${syncInfo.clase}" title="${escapeHtml(syncInfo.titulo)}">${escapeHtml(f.embarqueId || f.id)}</span>${badgeSinFactura_(f)}
             <span class="celda-embarque-meta">Caja ${cajaTexto}${cajaBadge}</span>
           </button>
         </td>
@@ -3556,7 +3570,7 @@ export function iniciarEscaneoOrigen(contenedor, datosUsuario, uid) {
   // ------------------------------------------------------------------
   function abrirModalDetalleHistorial(id, f) {
     const r = listaResultados.find(x => x.id === id);
-    embarqueDetalleHistorialSpan.textContent = f.embarqueId || id;
+    embarqueDetalleHistorialSpan.innerHTML = escapeHtml(f.embarqueId || id) + badgeSinFactura_(f);
     cuerpoDetalleHistorial.innerHTML = contenidoDetalleHistorial(f, r);
     modalDetalleHistorial.classList.remove("oculto");
   }
