@@ -63,7 +63,36 @@ const ICONOS = {
   organigrama: SVG(`<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M12 12H5v4M12 12h7v4"/>`)
 };
 
-const FLECHA_ACORDEON = `<span class="rh-flecha">${SVG(`<polyline points="6 9 12 15 18 9"/>`)}</span>`;
+// ---- Puntos de alerta (2026-10-14) ----
+// alertasRH.js llama marcarAlerta(idItem, true/false) cuando cambian los
+// pendientes. Aquí solo se guarda el estado y se pinta: cualquier elemento
+// con data-alerta="<id>" muestra el punto si ese id está activo. "rh" y
+// "utilidades" se encienden si cualquier opción de RH tiene alerta.
+const alertasActivas = {};
+// Si el usuario no tiene RH en sus opciones, el punto de "Utilidades" no se enciende por RH.
+let rhDisponible = true;
+const IDS_ALERTA_RH = ["solicitudes", "vacaciones", "faltas"];
+
+function alertaEncendida(id) {
+  if (id === "utilidades" && !rhDisponible) return false;
+  if (id === "rh" || id === "utilidades") return IDS_ALERTA_RH.some(i => alertasActivas[i]);
+  return !!alertasActivas[id];
+}
+
+function refrescarAlertas() {
+  document.querySelectorAll("[data-alerta]").forEach(el => {
+    el.classList.toggle("activa", alertaEncendida(el.dataset.alerta));
+  });
+}
+
+export function marcarAlerta(id, activa) {
+  alertasActivas[id] = !!activa;
+  refrescarAlertas();
+}
+
+const punto = (id) => `<span class="punto-alerta" data-alerta="${id}" aria-label="Hay pendientes"></span>`;
+
+const FLECHA_ACORDEON =`<span class="rh-flecha">${SVG(`<polyline points="6 9 12 15 18 9"/>`)}</span>`;
 
 // ---- Contenido de RH por rol ----
 
@@ -202,6 +231,12 @@ function inyectarEstilosUtilidades() {
       background: #fff; border: 1px solid #e2ddd5; border-radius: 10px; padding: 10px 16px;
       cursor: pointer; font: inherit; font-size: 15px; font-weight: 600; color: #2c1e0f; }
     .utilidades-regresar:hover { border-color: #2c1e0f; }
+    .punto-alerta { display: none; width: 9px; height: 9px; border-radius: 50%; background: #c0392b; flex-shrink: 0; }
+    .punto-alerta.activa { display: inline-block; }
+    .rh-item.activo .punto-alerta, .utilidades-toggle-boton.activo .punto-alerta { background: #fff; }
+    .nav-boton { position: relative; }
+    .nav-boton .punto-alerta { position: absolute; top: 6px; left: calc(50% + 8px); }
+    .utilidad-nombre { display: inline-flex; align-items: center; gap: 8px; }
     @media (max-width: 600px) {
       .utilidades-toggle { display: flex; width: 100%; }
       .utilidades-toggle-boton { flex: 1; padding: 10px 8px; }
@@ -225,6 +260,8 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
     return { ...t, opciones: t.opciones.filter(op => opcionesPermitidas.includes(op.id)) };
   });
 
+  rhDisponible = tabs.some(t => t.opciones && t.opciones.some(op => op.id === "rh"));
+
   if (tabs.length === 0) {
     ocultarNavegacion();
     return;
@@ -237,10 +274,11 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
     ocultarNavegacion();
   } else {
     nav.innerHTML = tabs.map(t => `
-      <button type="button" class="nav-boton" data-tab="${t.id}">${ICONOS[t.id] || ""}<span>${t.etiqueta}</span></button>
+      <button type="button" class="nav-boton" data-tab="${t.id}">${ICONOS[t.id] || ""}<span>${t.etiqueta}</span>${t.id === "utilidades" ? punto("utilidades") : ""}</button>
     `).join("");
     nav.classList.remove("oculto");
     document.body.classList.add("tiene-nav");
+    refrescarAlertas();
   }
 
   function dibujarPantalla(idPantalla, contenedor) {
@@ -280,7 +318,7 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
         ${tab.opciones.map(op => `
           <button type="button" role="tab" class="utilidades-toggle-boton${op.id === opcionActiva.id ? " activo" : ""}"
             data-opcion="${op.id}" aria-selected="${op.id === opcionActiva.id}">
-            ${ICONOS[op.id] || ""}<span class="larga">${op.etiqueta}</span><span class="corta">${op.etiquetaCorta || op.etiqueta}</span>
+            ${ICONOS[op.id] || ""}<span class="larga">${op.etiqueta}</span><span class="corta">${op.etiquetaCorta || op.etiqueta}</span>${op.id === "rh" ? punto("rh") : ""}
           </button>
         `).join("")}
       </div>
@@ -297,6 +335,7 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
     if (regreso) {
       contenidoApp.querySelector(".utilidades-regresar").addEventListener("click", regreso.alVolver);
     }
+    refrescarAlertas();
     return contenidoApp.querySelector(".utilidades-contenido");
   }
 
@@ -340,7 +379,7 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
         ${tab.opciones.map(op => `
           <button type="button" class="utilidad-tarjeta" data-opcion="${op.id}">
             ${ICONOS[op.id] || ""}
-            <span class="utilidad-nombre">${op.etiqueta}</span>
+            <span class="utilidad-nombre">${op.etiqueta}${op.id === "rh" ? punto("rh") : ""}</span>
             <span class="utilidad-desc">${op.descripcion}</span>
           </button>
         `).join("")}
@@ -352,6 +391,7 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
         if (opcion) abrirOpcion(tab, opcion);
       });
     });
+    refrescarAlertas();
   }
 
   // Nivel 2: una opción abierta (lista agrupada, toggles o pantalla directa).
@@ -377,11 +417,12 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
       <div class="rh-lista">
         ${grupo.items.map(item => `
           <button type="button" class="rh-item" data-grupo="${i}" data-item="${item.id}" aria-expanded="false">
-            ${ICONOS[item.id] || ""}<span>${item.etiqueta}</span>${FLECHA_ACORDEON}
+            ${ICONOS[item.id] || ""}<span>${item.etiqueta}</span>${punto(item.id)}${FLECHA_ACORDEON}
           </button>
         `).join("")}
       </div>
     `).join("");
+    refrescarAlertas();
 
     function cerrarAbierto() {
       contenedor.querySelector(".rh-panel")?.remove();

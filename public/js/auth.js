@@ -27,6 +27,7 @@ import { iniciarOrganigrama } from "./organigrama.js";
 import { iniciarEscaneoOrigen, APP_VERSION } from "./escaneoOrigen.js";
 import { iniciarAutorizacionesExtra } from "./autorizacionesExtra.js";
 import { iniciarSolicitudesOperadores, iniciarOrdenesTrabajo, iniciarOperadoresRegistrados } from "./operadores.js";
+import { iniciarAlertasRH, detenerAlertasRH } from "./alertasRH.js";
 
 const DOMINIO_ALANIS = "@alanis.com.mx";
 
@@ -280,6 +281,7 @@ function traducirError(err) {
 }
 
 onAuthStateChanged(auth, async (user) => {
+  detenerAlertasRH();
   if (!user) {
     detenerCentroNotificaciones();
     notificacionesWrap?.classList.add("oculto");
@@ -368,6 +370,7 @@ onAuthStateChanged(auth, async (user) => {
       reportes: (c) => iniciarReportesAdmin(c),
       configuracion: (c) => iniciarConfiguracion(c)
     }, "panel");
+    iniciarAlertasRH("admin", user.uid);
   } else if (datosUsuario.rol === "empleado") {
     notificacionesWrap?.classList.remove("oculto");
     iniciarCentroNotificaciones(user.uid);
@@ -404,6 +407,9 @@ onAuthStateChanged(auth, async (user) => {
       calendarioVacaciones: (c) => iniciarCalendarioVacaciones(c, { uidSupervisor: user.uid }),
       reportes: (c) => iniciarReportesSupervisor(c, user.uid)
     }, "panel", permitidasSupervisor);
+    if (!Array.isArray(permitidasSupervisor) || permitidasSupervisor.includes("rh")) {
+      iniciarAlertasRH("supervisor", user.uid);
+    }
   } else {
     detenerCentroNotificaciones();
     notificacionesWrap?.classList.add("oculto");
