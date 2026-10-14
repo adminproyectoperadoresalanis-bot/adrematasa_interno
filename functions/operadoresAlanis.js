@@ -12,8 +12,8 @@
 //   - listarSolicitudesOperadores  ≈ cargarSolicitudes()
 //   - resolverSolicitudOperador    ≈ aprobarSolicitud(uid,'operador') / rechazarSolicitud(uid)
 //   - listarOrdenesTrabajo         ≈ cargarOTs() / filtrarOTsPorFecha()
-// Fuera a propósito: aprobar como admin (solo superadmin, allá), crear/editar
-// OT (requiere el catálogo de fallas de data.js — pendiente).
+// Fuera a propósito: aprobar como admin (solo superadmin, allá).
+// Crear/editar OT: agregado 2026-10-14 (guardarOrdenTrabajo, más abajo).
 //
 // Quién puede usarlas: usuario activo de ADREMATASA y (admin, o su área tiene
 // "Operadores" marcada en configuracion/accesosUtilidades). Es el mismo
@@ -220,7 +220,13 @@ exports.listarOrdenesTrabajo = onCall({ region: REGION }, async (request) => {
           fecha: o.fecha || "",
           hora: o.hora || "",
           estado: o.estado || null,
-          fallas: (o.fallas || []).map((f) => ({ name: f.name || "", sev: f.sev || "" })),
+          // id/cat/custom se agregan (2026-10-14) para poder EDITAR la OT sin
+          // perder de qué renglón del catálogo viene cada falla.
+          fallas: (o.fallas || []).map((f) => ({
+            id: f.id ?? null, cat: f.cat || "", name: f.name || "", sev: f.sev || "", custom: !!f.custom,
+          })),
+          creadaDesde: o.creadaDesde || null,
+          creadoPorNombre: (o.creadoPorAdrematasa && o.creadoPorAdrematasa.nombre) || null,
         };
       })
       .filter((o) => o.fecha >= desde && o.fecha <= hasta);
@@ -228,6 +234,111 @@ exports.listarOrdenesTrabajo = onCall({ region: REGION }, async (request) => {
   } catch (error) {
     logger.error(`[listarOrdenesTrabajo] ${error.message}`);
     throw new HttpsError("internal", "No se pudieron cargar las órdenes de trabajo.");
+  }
+});
+
+// ---- Crear / editar orden de trabajo (2026-10-14) ----------------------------
+// Paridad con editarOT()/guardarOT() de admin2.js (mismos campos), con dos
+// diferencias pedidas por Ivan:
+//   1) Folio CONSECUTIVO de 5 dígitos + año a 2 dígitos ("00001-26"), en vez
+//      del número al azar de allá. El contador vive en alanis-operadores
+//      (contadores/ordenes_trabajo_<año>) para que, si después la app del
+//      operador y admin2.js se cambian a usarlo, todos compartan la misma
+//      numeración. Se reinicia cada año. Se toma dentro de una transacción:
+//      dos personas creando al mismo tiempo nunca obtienen el mismo folio.
+//   2) Queda registrado quién la creó/editó desde ADREMATASA (esa persona no
+//      tiene cuenta en Alanis Operadores), además de la bitácora.
+//
+// entrada: { id?: string, operador: string, unidad: string,
+//            fallas: [{ id, cat, name, sev, custom? }] }
+const SEVERIDADES = ["alta", "media", "baja"];
+
+function limpiarFallas_(lista) {
+  if (!Array.isArray(lista) || lista.length === 0) {
+    throw new HttpsError("invalid-argument", "Debe haber al menos una falla.");
+  }
+  if (lista.length > 60) {
+    throw new HttpsError("invalid-argument", "Demasiadas fallas en una sola orden.");
+  }
+  return lista.map((f) => {
+    const name = f && typeof f.name === "string" ? f.name.trim().slice(0, 150) : "";
+    if (!name) throw new HttpsError("invalid-argument", "Hay una falla sin nombre.");
+    const limpia = {
+      id: typeof f.id === "number" && isFinite(f.id) ? f.id : null,
+      cat: typeof f.cat === "string" ? f.cat.trim().slice(0, 80) : "Sin clasificar",
+      name,
+      sev: SEVERIDADES.includes(f.sev) ? f.sev : "media",
+    };
+    if (f.custom) limpia.custom = true;
+    return limpia;
+  });
+}
+
+exports.guardarOrdenTrabajo = onCall({ region: REGION }, async (request) => {
+  const actor = await leerActor_(request);
+  const e = request.data || {};
+  const id = typeof e.id === "string" ? e.id.trim() : "";
+  if (id.includes("/")) throw new HttpsError("invalid-argument", "Orden no válida.");
+  const operador = typeof e.operador === "string" ? e.operador.trim().slice(0, 120) : "";
+  const unidad = typeof e.unidad === "string" ? e.unidad.trim().slice(0, 20) : "";
+  if (!operador) throw new HttpsError("invalid-argument", "El operador no puede estar vacío.");
+  const fallas = limpiarFallas_(e.fallas);
+  const quien = { uid: actor.uid, nombre: actor.nombre, correo: actor.correo };
+
+  try {
+    let folio;
+    let refOT;
+    if (id) {
+      refOT = dbAlanis.collection("ordenes_trabajo").doc(id);
+      const snap = await refOT.get();
+      if (!snap.exists) throw new HttpsError("not-found", "La orden ya no existe.");
+      folio = snap.data().folio || "";
+      // Mismos campos que actualiza guardarOT() de admin2.js al editar.
+      await refOT.update({
+        operador, unidad, numero: unidad, fallas,
+        editadaDesdeAdrematasa: { ...quien, timestamp: FieldValue.serverTimestamp() },
+      });
+    } else {
+      const { fecha, hora } = fechaHoraLocal_();
+      const anio = Number(fecha.slice(0, 4));
+      const refContador = dbAlanis.collection("contadores").doc(`ordenes_trabajo_${anio}`);
+      refOT = dbAlanis.collection("ordenes_trabajo").doc();
+      folio = await dbAlanis.runTransaction(async (tx) => {
+        const snapC = await tx.get(refContador);
+        const siguiente = (snapC.exists ? Number(snapC.data().ultimo) || 0 : 0) + 1;
+        if (siguiente > 99999) throw new HttpsError("resource-exhausted", "Se llegó al límite de folios del año.");
+        const nuevoFolio = `${String(siguiente).padStart(5, "0")}-${String(anio).slice(-2)}`;
+        tx.set(refContador, { ultimo: siguiente, anio, actualizado: FieldValue.serverTimestamp() }, { merge: true });
+        // Mismos campos que crea guardarOT() de admin2.js.
+        tx.set(refOT, {
+          folio: nuevoFolio, anio, uid: actor.uid,
+          operador, numero: unidad, unidad, fallas,
+          fecha, hora,
+          timestamp: FieldValue.serverTimestamp(),
+          creadaDesde: "ADREMATASA",
+          creadoPorAdrematasa: quien,
+        });
+        return nuevoFolio;
+      });
+    }
+
+    await dbLocal.collection(COL_BITACORA).add({
+      tipo: id ? "ot_editada" : "ot_creada",
+      otId: refOT.id,
+      folio,
+      operadorNombre: operador,
+      unidad,
+      totalFallas: fallas.length,
+      realizadoPor: actor,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+
+    logger.info(`[guardarOrdenTrabajo] ${id ? "editada" : "creada"} ${folio} por ${actor.uid}`);
+    return { ok: true, id: refOT.id, folio };
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    logger.error(`[guardarOrdenTrabajo] ${error.message}`);
+    throw new HttpsError("internal", "No se pudo guardar la orden de trabajo. Intenta de nuevo.");
   }
 });
 

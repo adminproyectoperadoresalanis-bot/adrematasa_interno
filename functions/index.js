@@ -766,3 +766,4 @@ exports.listarOperadoresRegistrados = require("./operadoresAlanis").listarOperad
 exports.guardarDatosOperador = require("./operadoresAlanis").guardarDatosOperador;
 exports.cambiarEstadoOperador = require("./operadoresAlanis").cambiarEstadoOperador;
 exports.historialUnidadOperador = require("./operadoresAlanis").historialUnidadOperador;
+exports.guardarOrdenTrabajo = require("./operadoresAlanis").guardarOrdenTrabajo;

@@ -23,6 +23,7 @@ const fnListarRegistrados = httpsCallable(funciones, "listarOperadoresRegistrado
 const fnGuardarDatos = httpsCallable(funciones, "guardarDatosOperador");
 const fnCambiarEstado = httpsCallable(funciones, "cambiarEstadoOperador");
 const fnHistorialUnidad = httpsCallable(funciones, "historialUnidadOperador");
+const fnGuardarOT = httpsCallable(funciones, "guardarOrdenTrabajo");
 
 // Mismo logo que imprime admin2.js en Alanis Operadores.
 const LOGO_ORDEN_TALLER = "https://alanis-operadores.web.app/img/logo-reporte.png";
@@ -76,6 +77,16 @@ function inyectarEstilos() {
     .ot-sev.alta { background: #E24B4A; } .ot-sev.media { background: #BA7517; } .ot-sev.baja { background: #639922; }
     .ot-acciones { display: flex; gap: 6px; margin-top: 10px; }
     .ot-acciones button { flex: 1; }
+    .ot-encabezado { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .ot-origen { font-size: 11px; color: #8a7f73; margin-top: 4px; }
+    .ot-m-fila { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid #f0ece6; font-size: 13px; }
+    .ot-m-fila .ot-sev { margin-left: auto; }
+    .ot-m-quitar { background: none; border: none; color: #E24B4A; font-size: 16px; cursor: pointer; padding: 0 4px; }
+    .ot-m-cat { max-height: 200px; overflow-y: auto; margin-top: 6px; border: 1px solid #efebe5; border-radius: 8px; padding: 0 8px; }
+    .ot-m-cat .ot-m-fila { cursor: pointer; }
+    .ot-m-cat .ot-m-fila:hover { background: #f5f3f0; }
+    .ot-m-catnom { font-size: 10px; color: #8a7f73; }
+    .ot-m-vacio { font-size: 12px; color: #8a7f73; padding: 6px 0; }
     .or-encabezado { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
     .or-encabezado input { flex: 1; min-width: 180px; }
     .or-total { font-size: 12px; background: #E6F1FB; color: #0C447C; border-radius: 10px; padding: 3px 10px; white-space: nowrap; }
@@ -298,8 +309,12 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
 
   contenedor.innerHTML = `
     <section class="panel">
-      <h2>Órdenes de trabajo</h2>
-      <p class="nota">Reportes de taller capturados por los operadores en Alanis Operadores.</p>
+      <div class="ot-encabezado">
+        <h2>Órdenes de trabajo</h2>
+        <button type="button" id="ot-nueva">+ Nueva orden</button>
+      </div>
+      <p class="nota">Reportes de taller capturados por los operadores en Alanis Operadores, y las órdenes creadas aquí por Operaciones.</p>
+      <p id="ot-exito" class="nota oculto" style="color:#1c7a41;"></p>
       <div class="op-filtro">
         <div><label for="ot-desde">Desde</label><input type="date" id="ot-desde" value="${fechaLocal(ayer)}"></div>
         <div><label for="ot-hasta">Hasta</label><input type="date" id="ot-hasta" value="${fechaLocal(hoy)}"></div>
@@ -352,7 +367,11 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
           <div class="ot-folio">${esc(o.folio)}</div>
           <div class="op-sub" style="margin:4px 0 8px;">${esc(o.operador || "—")} — Unidad: ${esc(o.unidad || "—")} — ${esc(fechaFmt)}</div>
           <div>${fallas}${mas}</div>
-          <div class="ot-acciones"><button type="button" class="ot-imprimir" data-id="${esc(o.id)}">Imprimir</button></div>
+          ${o.creadaDesde === "ADREMATASA" ? `<div class="ot-origen">Creada desde ADREMATASA${o.creadoPorNombre ? " por " + esc(o.creadoPorNombre) : ""}</div>` : ""}
+          <div class="ot-acciones">
+            <button type="button" class="secundario ot-editar" data-id="${esc(o.id)}">Editar</button>
+            <button type="button" class="ot-imprimir" data-id="${esc(o.id)}">Imprimir</button>
+          </div>
         </div>`;
     }).join("");
     lista.querySelectorAll(".ot-imprimir").forEach(btn => {
@@ -361,10 +380,183 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
         if (ot) imprimirOrdenTaller(ot, nombreUsuario);
       });
     });
+    lista.querySelectorAll(".ot-editar").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const ot = ordenes.find(x => x.id === btn.dataset.id);
+        if (ot) abrirModalOT(ot, alGuardar);
+      });
+    });
   }
 
+  const exitoP = contenedor.querySelector("#ot-exito");
+  function alGuardar(folio, eraNueva) {
+    exitoP.textContent = eraNueva ? `Orden ${folio} creada.` : `Orden ${folio} actualizada.`;
+    exitoP.classList.remove("oculto");
+    // Que la orden recién creada (de hoy) aparezca aunque el filtro esté en otras fechas.
+    if (eraNueva && inHasta.value < fechaLocal(new Date())) inHasta.value = fechaLocal(new Date());
+    cargar();
+  }
+
+  contenedor.querySelector("#ot-nueva").addEventListener("click", () => abrirModalOT(null, alGuardar));
   contenedor.querySelector("#ot-buscar").addEventListener("click", cargar);
   cargar();
+}
+
+// ---- Crear / editar OT (2026-10-14) — paridad con editarOT() de admin2.js ----
+// El catálogo de fallas NO se copia: se carga directo de Alanis Operadores
+// (js/data.js, el mismo archivo que usan admin.html y operador.html), así hay
+// una sola copia. data.js declara `const FALLAS = [...]` como script normal;
+// esa constante queda visible para este módulo una vez cargado.
+const URL_CATALOGO_FALLAS = "https://alanis-operadores.web.app/js/data.js";
+let promesaCatalogo = null;
+
+function cargarCatalogoFallas() {
+  if (!promesaCatalogo) {
+    promesaCatalogo = new Promise((resolve, reject) => {
+      const leer = () => (typeof FALLAS !== "undefined" && Array.isArray(FALLAS)) ? FALLAS : null; // eslint-disable-line no-undef
+      if (leer()) { resolve(leer()); return; }
+      const script = document.createElement("script");
+      // Se refresca una vez al día (si agregan fallas allá, aquí aparecen a más tardar al día siguiente).
+      script.src = URL_CATALOGO_FALLAS + "?d=" + fechaLocal(new Date());
+      script.onload = () => {
+        const lista = leer();
+        if (lista) resolve(lista); else reject(new Error("El catálogo de fallas no tiene el formato esperado."));
+      };
+      script.onerror = () => reject(new Error("No se pudo cargar el catálogo de fallas de Alanis Operadores."));
+      document.head.appendChild(script);
+    }).catch(err => { promesaCatalogo = null; throw err; });
+  }
+  return promesaCatalogo;
+}
+
+function normalizar(texto) {
+  return (texto || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function abrirModalOT(ot, alGuardar) {
+  const editando = !!ot;
+  let seleccionadas = editando ? ot.fallas.map(f => ({ ...f })) : [];
+  let catalogo = [];
+
+  const fondo = document.createElement("div");
+  fondo.className = "op-modal-fondo";
+  fondo.innerHTML = `
+    <div class="op-modal" role="dialog" aria-modal="true">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+        <div style="font-size:17px;font-weight:700;">${editando ? "Editar orden " + esc(ot.folio) : "Nueva orden de trabajo"}</div>
+        <button type="button" class="secundario op-cerrar" aria-label="Cerrar">✕</button>
+      </div>
+      <label for="ot-m-operador">Operador</label>
+      <input type="text" id="ot-m-operador" maxlength="120" placeholder="Nombre del operador" value="${editando ? esc(ot.operador) : ""}">
+      <label for="ot-m-unidad">Unidad</label>
+      <input type="text" id="ot-m-unidad" maxlength="20" placeholder="Ej: 1121" value="${editando ? esc(ot.unidad) : ""}">
+      <label>Fallas seleccionadas</label>
+      <div id="ot-m-sel"></div>
+      <label for="ot-m-buscar">Agregar falla del catálogo</label>
+      <input type="text" id="ot-m-buscar" placeholder="Buscar falla...">
+      <div class="ot-m-cat" id="ot-m-cat"><div class="ot-m-vacio">Cargando catálogo…</div></div>
+      <label for="ot-m-libre">Falla no listada (separa varias con coma)</label>
+      <input type="text" id="ot-m-libre" placeholder="Ej: Sensor de temperatura">
+      <button type="button" class="secundario" id="ot-m-agregar-libre" style="width:100%;margin-top:6px;">+ Agregar falla</button>
+      <div class="error ot-m-error" style="margin-top:10px;"></div>
+      <div class="op-botones"><button type="button" id="ot-m-guardar">${editando ? "Guardar cambios" : "Crear orden"}</button></div>
+    </div>
+  `;
+  document.body.appendChild(fondo);
+  const cerrar = () => fondo.remove();
+  fondo.querySelector(".op-cerrar").addEventListener("click", cerrar);
+  fondo.addEventListener("click", (e) => { if (e.target === fondo) cerrar(); });
+
+  const selDiv = fondo.querySelector("#ot-m-sel");
+  const catDiv = fondo.querySelector("#ot-m-cat");
+  const buscar = fondo.querySelector("#ot-m-buscar");
+  const errorDiv = fondo.querySelector(".ot-m-error");
+  const btnGuardar = fondo.querySelector("#ot-m-guardar");
+
+  const sevHtml = (sev) => `<span class="ot-sev ${esc(sev)}">${esc(SEV_LABEL[sev] || sev)}</span>`;
+
+  function renderSeleccionadas() {
+    if (seleccionadas.length === 0) {
+      selDiv.innerHTML = `<div class="ot-m-vacio">Sin fallas. Agrega desde el catálogo.</div>`;
+      return;
+    }
+    selDiv.innerHTML = seleccionadas.map((f, i) => `
+      <div class="ot-m-fila"><span>${esc(f.name)}</span>${sevHtml(f.sev)}
+        <button type="button" class="ot-m-quitar" data-i="${i}" aria-label="Quitar">✕</button></div>`).join("");
+    selDiv.querySelectorAll(".ot-m-quitar").forEach(b => b.addEventListener("click", () => {
+      seleccionadas.splice(Number(b.dataset.i), 1);
+      renderSeleccionadas();
+      renderCatalogo();
+    }));
+  }
+
+  function renderCatalogo() {
+    if (catalogo.length === 0) return;
+    const q = normalizar(buscar.value);
+    const ya = new Set(seleccionadas.map(f => f.id));
+    const filtradas = catalogo.filter(f => !ya.has(f.id) && (normalizar(f.name).includes(q) || normalizar(f.cat).includes(q)));
+    if (filtradas.length === 0) {
+      catDiv.innerHTML = `<div class="ot-m-vacio">Sin coincidencias.</div>`;
+      return;
+    }
+    catDiv.innerHTML = filtradas.map(f => `
+      <div class="ot-m-fila" data-id="${esc(String(f.id))}"><span style="color:#2c1e0f;font-size:16px;">+</span>
+        <span><span class="ot-m-catnom" style="display:block;">${esc(f.cat)}</span>${esc(f.name)}</span>${sevHtml(f.sev)}</div>`).join("");
+    catDiv.querySelectorAll(".ot-m-fila").forEach(fila => fila.addEventListener("click", () => {
+      const f = catalogo.find(x => String(x.id) === fila.dataset.id);
+      if (f && !seleccionadas.some(x => x.id === f.id)) {
+        seleccionadas.push({ id: f.id, cat: f.cat, name: f.name, sev: f.sev });
+      }
+      renderSeleccionadas();
+      renderCatalogo();
+    }));
+  }
+
+  // Igual que agregarFallaLibre() de admin2.js: "Sin clasificar", severidad
+  // media, id negativo para no chocar con el catálogo, sin duplicados.
+  fondo.querySelector("#ot-m-agregar-libre").addEventListener("click", () => {
+    const input = fondo.querySelector("#ot-m-libre");
+    const nombres = input.value.split(",").map(t => t.trim()).filter(Boolean);
+    if (nombres.length === 0) { errorDiv.textContent = "Escribe al menos una falla."; return; }
+    errorDiv.textContent = "";
+    let agregadas = 0;
+    nombres.forEach(nombre => {
+      const limpio = nombre.charAt(0).toUpperCase() + nombre.slice(1);
+      if (seleccionadas.some(f => normalizar(f.name) === normalizar(limpio))) return;
+      seleccionadas.push({ id: -(Date.now() + agregadas), cat: "Sin clasificar", name: limpio, sev: "media", custom: true });
+      agregadas++;
+    });
+    input.value = "";
+    if (agregadas === 0) errorDiv.textContent = "Esa falla ya estaba en la lista.";
+    renderSeleccionadas();
+    renderCatalogo();
+  });
+
+  buscar.addEventListener("input", renderCatalogo);
+
+  btnGuardar.addEventListener("click", async () => {
+    errorDiv.textContent = "";
+    const operador = fondo.querySelector("#ot-m-operador").value.trim();
+    const unidad = fondo.querySelector("#ot-m-unidad").value.trim();
+    if (!operador) { errorDiv.textContent = "El operador no puede estar vacío."; return; }
+    if (seleccionadas.length === 0) { errorDiv.textContent = "Debe haber al menos una falla."; return; }
+    btnGuardar.disabled = true;
+    try {
+      const res = await fnGuardarOT({ id: editando ? ot.id : undefined, operador, unidad, fallas: seleccionadas });
+      cerrar();
+      alGuardar(res.data.folio, !editando);
+    } catch (err) {
+      errorDiv.textContent = mensajeError(err, "No se pudo guardar la orden de trabajo.");
+      btnGuardar.disabled = false;
+    }
+  });
+
+  renderSeleccionadas();
+  cargarCatalogoFallas()
+    .then(lista => { catalogo = lista; renderCatalogo(); })
+    .catch(err => {
+      catDiv.innerHTML = `<div class="ot-m-vacio" style="color:#A32D2D;">${esc(err.message)} Puedes capturar la falla en "Falla no listada".</div>`;
+    });
 }
 
 // Misma "Orden de Taller" que generarOrdenTaller() de admin2.js. La firma de
