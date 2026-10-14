@@ -87,6 +87,17 @@ function inyectarEstilos() {
     .ot-m-cat .ot-m-fila:hover { background: #f5f3f0; }
     .ot-m-catnom { font-size: 10px; color: #8a7f73; }
     .ot-m-vacio { font-size: 12px; color: #8a7f73; padding: 6px 0; }
+    .ot-combo { position: relative; }
+    .ot-combo-lista { position: absolute; left: 0; right: 0; top: 100%; z-index: 5; background: #fff;
+      border: 1px solid #e2ddd5; border-radius: 8px; margin-top: 2px; max-height: 220px; overflow-y: auto;
+      box-shadow: 0 6px 16px rgba(0,0,0,.12); }
+    .ot-combo-op { display: flex; gap: 10px; align-items: center; width: 100%; background: none; border: none;
+      border-bottom: 1px solid #f0ece6; padding: 8px 10px; text-align: left; font: inherit; font-size: 13px;
+      color: #2c1e0f; cursor: pointer; }
+    .ot-combo-op:hover, .ot-combo-op.marcado { background: #f5f3f0; }
+    .ot-combo-unidad { font-weight: 700; min-width: 48px; }
+    .ot-m-opinfo { font-size: 11px; margin-top: 4px; color: #8a7f73; }
+    .ot-m-opinfo.ligado { color: #1c7a41; }
     .or-encabezado { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
     .or-encabezado input { flex: 1; min-width: 180px; }
     .or-total { font-size: 12px; background: #E6F1FB; color: #0C447C; border-radius: 10px; padding: 3px 10px; white-space: nowrap; }
@@ -402,6 +413,21 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
   cargar();
 }
 
+// ---- Lista de operadores para el selector de la OT (2026-10-14) ----
+// Misma función que "Operadores registrados"; se guarda en memoria 5 minutos
+// para no llamarla cada vez que se abre el modal.
+let promesaOperadores = null;
+let operadoresCargadosEn = 0;
+function cargarOperadoresActivos() {
+  if (!promesaOperadores || Date.now() - operadoresCargadosEn > 5 * 60 * 1000) {
+    operadoresCargadosEn = Date.now();
+    promesaOperadores = fnListarRegistrados()
+      .then(res => (res.data.operadores || []).filter(o => o.activo))
+      .catch(err => { promesaOperadores = null; throw err; });
+  }
+  return promesaOperadores;
+}
+
 // ---- Crear / editar OT (2026-10-14) — paridad con editarOT() de admin2.js ----
 // El catálogo de fallas NO se copia: se carga directo de Alanis Operadores
 // (js/data.js, el mismo archivo que usan admin.html y operador.html), así hay
@@ -447,7 +473,12 @@ function abrirModalOT(ot, alGuardar) {
         <button type="button" class="secundario op-cerrar" aria-label="Cerrar">✕</button>
       </div>
       <label for="ot-m-operador">Operador</label>
-      <input type="text" id="ot-m-operador" maxlength="120" placeholder="Nombre del operador" value="${editando ? esc(ot.operador) : ""}">
+      <div class="ot-combo">
+        <input type="text" id="ot-m-operador" maxlength="120" autocomplete="off"
+          placeholder="Busca por nombre o número de unidad..." value="${editando ? esc(ot.operador) : ""}">
+        <div class="ot-combo-lista oculto" id="ot-m-oplista"></div>
+      </div>
+      <div class="ot-m-opinfo" id="ot-m-opinfo"></div>
       <label for="ot-m-unidad">Unidad</label>
       <input type="text" id="ot-m-unidad" maxlength="20" placeholder="Ej: 1121" value="${editando ? esc(ot.unidad) : ""}">
       <label>Fallas seleccionadas</label>
@@ -472,6 +503,72 @@ function abrirModalOT(ot, alGuardar) {
   const buscar = fondo.querySelector("#ot-m-buscar");
   const errorDiv = fondo.querySelector(".ot-m-error");
   const btnGuardar = fondo.querySelector("#ot-m-guardar");
+
+  // ---- Selector de operador: busca por nombre (oficial o de registro) o por
+  // número de unidad; al elegir llena operador + unidad y liga la OT a su
+  // cuenta. Si se escribe un nombre sin elegir de la lista, se guarda solo
+  // el texto (como en admin2.js).
+  const inOperador = fondo.querySelector("#ot-m-operador");
+  const inUnidad = fondo.querySelector("#ot-m-unidad");
+  const opLista = fondo.querySelector("#ot-m-oplista");
+  const opInfo = fondo.querySelector("#ot-m-opinfo");
+  let operadores = [];
+  let operadorUid = "";
+  const nombreDe = (o) => o.nombreOficial || o.nombre || o.correo || "Sin nombre";
+
+  function pintarInfoOperador() {
+    const o = operadores.find(x => x.uid === operadorUid);
+    if (o) {
+      opInfo.textContent = `✓ Operador registrado${o.numero ? " · unidad asignada " + o.numero : ""}`;
+      opInfo.className = "ot-m-opinfo ligado";
+    } else if (inOperador.value.trim()) {
+      opInfo.textContent = "No elegiste de la lista: se guardará solo el nombre escrito.";
+      opInfo.className = "ot-m-opinfo";
+    } else {
+      opInfo.textContent = "";
+    }
+  }
+
+  function mostrarOpciones() {
+    const q = normalizar(inOperador.value.trim());
+    const coinciden = operadores.filter(o => !q
+      || normalizar(nombreDe(o)).includes(q) || normalizar(o.nombre).includes(q)
+      || normalizar(o.numero).includes(q)).slice(0, 10);
+    if (operadores.length === 0 || coinciden.length === 0) { opLista.classList.add("oculto"); return; }
+    opLista.innerHTML = coinciden.map(o => `
+      <button type="button" class="ot-combo-op" data-uid="${esc(o.uid)}">
+        <span class="ot-combo-unidad">${esc(o.numero || "—")}</span><span>${esc(nombreDe(o))}</span>
+      </button>`).join("");
+    opLista.querySelectorAll(".ot-combo-op").forEach(b => {
+      // mousedown (no click) para que corra antes de que el input pierda el foco.
+      b.addEventListener("mousedown", (ev) => {
+        ev.preventDefault();
+        const o = operadores.find(x => x.uid === b.dataset.uid);
+        if (!o) return;
+        operadorUid = o.uid;
+        inOperador.value = nombreDe(o);
+        if (o.numero) inUnidad.value = o.numero;
+        opLista.classList.add("oculto");
+        pintarInfoOperador();
+      });
+    });
+    opLista.classList.remove("oculto");
+  }
+
+  inOperador.addEventListener("input", () => { operadorUid = ""; mostrarOpciones(); pintarInfoOperador(); });
+  inOperador.addEventListener("focus", mostrarOpciones);
+  inOperador.addEventListener("blur", () => setTimeout(() => opLista.classList.add("oculto"), 150));
+
+  cargarOperadoresActivos()
+    .then(lista => {
+      operadores = lista;
+      if (editando && ot.uid && operadores.some(o => o.uid === ot.uid)) operadorUid = ot.uid;
+      pintarInfoOperador();
+    })
+    .catch(() => {
+      opInfo.textContent = "No se pudo cargar la lista de operadores; puedes escribir el nombre a mano.";
+      opInfo.className = "ot-m-opinfo";
+    });
 
   const sevHtml = (sev) => `<span class="ot-sev ${esc(sev)}">${esc(SEV_LABEL[sev] || sev)}</span>`;
 
@@ -536,13 +633,13 @@ function abrirModalOT(ot, alGuardar) {
 
   btnGuardar.addEventListener("click", async () => {
     errorDiv.textContent = "";
-    const operador = fondo.querySelector("#ot-m-operador").value.trim();
-    const unidad = fondo.querySelector("#ot-m-unidad").value.trim();
+    const operador = inOperador.value.trim();
+    const unidad = inUnidad.value.trim();
     if (!operador) { errorDiv.textContent = "El operador no puede estar vacío."; return; }
     if (seleccionadas.length === 0) { errorDiv.textContent = "Debe haber al menos una falla."; return; }
     btnGuardar.disabled = true;
     try {
-      const res = await fnGuardarOT({ id: editando ? ot.id : undefined, operador, unidad, fallas: seleccionadas });
+      const res = await fnGuardarOT({ id: editando ? ot.id : undefined, operadorUid: operadorUid || undefined, operador, unidad, fallas: seleccionadas });
       cerrar();
       alGuardar(res.data.folio, !editando);
     } catch (err) {

@@ -215,6 +215,7 @@ exports.listarOrdenesTrabajo = onCall({ region: REGION }, async (request) => {
         return {
           id: d.id,
           folio: o.folio || "",
+          uid: o.uid || "",
           operador: o.operador || "",
           unidad: o.unidad || "",
           fecha: o.fecha || "",
@@ -249,8 +250,13 @@ exports.listarOrdenesTrabajo = onCall({ region: REGION }, async (request) => {
 //   2) Queda registrado quién la creó/editó desde ADREMATASA (esa persona no
 //      tiene cuenta en Alanis Operadores), además de la bitácora.
 //
-// entrada: { id?: string, operador: string, unidad: string,
+// entrada: { id?: string, operadorUid?: string, operador: string, unidad: string,
 //            fallas: [{ id, cat, name, sev, custom? }] }
+//
+// operadorUid (2026-10-14, pedido de Ivan): si el operador se eligió de la
+// lista de operadores registrados, la OT queda ligada a SU cuenta (campo uid),
+// igual que cuando él mismo la crea desde su app (operador4.js). Si se
+// escribió a mano, uid queda con quien la creó, como en admin2.js.
 const SEVERIDADES = ["alta", "media", "baja"];
 
 function limpiarFallas_(lista) {
@@ -284,6 +290,8 @@ exports.guardarOrdenTrabajo = onCall({ region: REGION }, async (request) => {
   if (!operador) throw new HttpsError("invalid-argument", "El operador no puede estar vacío.");
   const fallas = limpiarFallas_(e.fallas);
   const quien = { uid: actor.uid, nombre: actor.nombre, correo: actor.correo };
+  const operadorUid = typeof e.operadorUid === "string" && e.operadorUid.trim() ? e.operadorUid.trim() : "";
+  if (operadorUid) await leerOperador_(operadorUid); // que exista y sea operador
 
   try {
     let folio;
@@ -296,6 +304,7 @@ exports.guardarOrdenTrabajo = onCall({ region: REGION }, async (request) => {
       // Mismos campos que actualiza guardarOT() de admin2.js al editar.
       await refOT.update({
         operador, unidad, numero: unidad, fallas,
+        ...(operadorUid ? { uid: operadorUid } : {}),
         editadaDesdeAdrematasa: { ...quien, timestamp: FieldValue.serverTimestamp() },
       });
     } else {
@@ -311,7 +320,7 @@ exports.guardarOrdenTrabajo = onCall({ region: REGION }, async (request) => {
         tx.set(refContador, { ultimo: siguiente, anio, actualizado: FieldValue.serverTimestamp() }, { merge: true });
         // Mismos campos que crea guardarOT() de admin2.js.
         tx.set(refOT, {
-          folio: nuevoFolio, anio, uid: actor.uid,
+          folio: nuevoFolio, anio, uid: operadorUid || actor.uid,
           operador, numero: unidad, unidad, fallas,
           fecha, hora,
           timestamp: FieldValue.serverTimestamp(),
