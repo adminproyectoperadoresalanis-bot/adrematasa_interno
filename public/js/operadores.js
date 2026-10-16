@@ -345,9 +345,15 @@ export function detenerAlertasOperadores() {
   cancelarAlertaOperadores = null;
   marcarAlerta("operadoresSolicitudes", false);
   detenerEspejos(); // se llama al cerrar sesión: cierra todas las escuchas de espejos
+  detenerEscuchaOT();
 }
 
 export function iniciarAlertasOperadores() {
+  // Deja lista la escucha de las órdenes de ayer–hoy para que Órdenes de
+  // trabajo abra al instante (son pocas: ~10–20 lecturas por sesión).
+  const hoy = new Date();
+  const ayer = new Date(); ayer.setDate(ayer.getDate() - 1);
+  escucharOT(fechaLocal(ayer), fechaLocal(hoy), () => {})();
   if (cancelarAlertaOperadores) cancelarAlertaOperadores();
   cancelarAlertaOperadores = suscribirEspejo("solicitudes",
     (docs) => marcarAlerta("operadoresSolicitudes", docs.length > 0));
@@ -363,6 +369,41 @@ function fechaLocal(d) {
 const SEV_LABEL = { alta: "Alta", media: "Media", baja: "Baja" };
 // La copia inicial del espejo trajo 120 días de órdenes (2026-10-16).
 const ESPEJO_OT_DESDE = "2026-06-18";
+
+// ---- Escucha de órdenes que sobrevive al cambiar de pantalla (2026-10-16) ----
+// Antes se abría una consulta nueva cada vez que se entraba a Órdenes de
+// trabajo (de ahí la espera). Ahora la escucha del último rango de fechas se
+// queda viva toda la sesión: al regresar, la lista sale de inmediato y sigue
+// en vivo. Solo se cambia si se busca otro rango; se cierra al cerrar sesión.
+let otVivo = null; // { desde, hasta, ordenes, error, oyentes:Set, cancelar }
+
+function escucharOT(desde, hasta, alCambiar, alError) {
+  if (!otVivo || otVivo.desde !== desde || otVivo.hasta !== hasta) {
+    detenerEscuchaOT();
+    const v = otVivo = { desde, hasta, ordenes: null, error: null, oyentes: new Set(), cancelar: null };
+    const q = query(collection(db, "espejo_op_ordenes"), where("fecha", ">=", desde), where("fecha", "<=", hasta));
+    v.cancelar = onSnapshot(q, (snap) => {
+      v.ordenes = snap.docs.map(d => ({ ...d.data(), id: d.id }))
+        .sort((a, b) => (b.fecha + (b.hora || "")).localeCompare(a.fecha + (a.hora || "")) || (b.timestampMs || 0) - (a.timestampMs || 0));
+      v.error = null;
+      v.oyentes.forEach(o => o.alCambiar(v.ordenes));
+    }, (err) => {
+      console.warn("Espejo órdenes:", err.message);
+      if (otVivo === v) otVivo = null; // la próxima vez se reintenta
+      v.oyentes.forEach(o => o.alError && o.alError(err));
+    });
+  }
+  const v = otVivo;
+  const oyente = { alCambiar, alError };
+  v.oyentes.add(oyente);
+  if (v.ordenes) alCambiar(v.ordenes);
+  return () => v.oyentes.delete(oyente);
+}
+
+function detenerEscuchaOT() {
+  if (otVivo && otVivo.cancelar) { try { otVivo.cancelar(); } catch (_) { /* ya cerrada */ } }
+  otVivo = null;
+}
 
 export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
   inyectarEstilos();
@@ -393,6 +434,8 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
   const inHasta = contenedor.querySelector("#ot-hasta");
   let ordenes = [];
   let cancelarOT = null;
+  // Si ya se consultó otro rango en esta sesión, se abre con ese mismo rango.
+  if (otVivo) { inDesde.value = otVivo.desde; inHasta.value = otVivo.hasta; }
 
   // En vivo desde el espejo (2026-10-16): solo se leen las órdenes del rango
   // de fechas; una orden nueva o editada en ese rango aparece sola.
@@ -407,15 +450,13 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
       return;
     }
     if (cancelarOT) cancelarOT();
-    lista.innerHTML = `<p class="nota">Cargando…</p>`;
+    const listo = otVivo && otVivo.ordenes && otVivo.desde === inDesde.value && otVivo.hasta === inHasta.value;
+    if (!listo) lista.innerHTML = `<p class="nota">Cargando…</p>`;
     const limite = contenedor.querySelector("#ot-limite");
     limite.classList.toggle("oculto", inDesde.value >= ESPEJO_OT_DESDE);
     limite.textContent = `Las órdenes anteriores al ${ESPEJO_OT_DESDE.split("-").reverse().join("/")} solo aparecen si se editaron después de esa fecha.`;
-    const q = query(collection(db, "espejo_op_ordenes"),
-      where("fecha", ">=", inDesde.value), where("fecha", "<=", inHasta.value));
-    cancelarOT = onSnapshot(q, (snap) => {
-      ordenes = snap.docs.map(d => ({ ...d.data(), id: d.id }))
-        .sort((a, b) => (b.fecha + (b.hora || "")).localeCompare(a.fecha + (a.hora || "")) || (b.timestampMs || 0) - (a.timestampMs || 0));
+    cancelarOT = escucharOT(inDesde.value, inHasta.value, (docs) => {
+      ordenes = docs;
       render();
     }, (err) => {
       lista.innerHTML = "";
