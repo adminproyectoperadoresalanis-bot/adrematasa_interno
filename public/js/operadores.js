@@ -1,9 +1,9 @@
 // Utilidades → Operadores (2026-10-13, pedido de Ivan).
 //
 // Pantallas de ADREMATASA Interno que operan sobre Alanis Operadores. El
-// navegador nunca toca la base de Alanis Operadores: todo pasa por las Cloud
-// Functions de functions/operadoresAlanis.js (listarSolicitudesOperadores,
-// resolverSolicitudOperador, listarOrdenesTrabajo).
+// navegador nunca toca la base de Alanis Operadores: las ACCIONES pasan por las
+// Cloud Functions de functions/operadoresAlanis.js, y las LISTAS se leen en vivo
+// de los espejos espejo_op_* de este proyecto (2026-10-16, espejosOperadores.js).
 //
 // Paridad con el panel admin de Alanis Operadores (js/admin2.js):
 //   - Aceptación de ingreso: lista + buscador + modal con número económico,
@@ -14,12 +14,12 @@
 
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
 import { marcarAlerta } from "./navegacion.js";
+import { db } from "./firebase-config.js";
+import { collection, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { suscribirEspejo, leerEspejo, alSalirDePantalla, detenerEspejos } from "./espejosOperadores.js";
 
 const funciones = getFunctions(undefined, "us-central1");
-const fnListarSolicitudes = httpsCallable(funciones, "listarSolicitudesOperadores");
 const fnResolverSolicitud = httpsCallable(funciones, "resolverSolicitudOperador");
-const fnListarOTs = httpsCallable(funciones, "listarOrdenesTrabajo");
-const fnListarRegistrados = httpsCallable(funciones, "listarOperadoresRegistrados");
 const fnGuardarDatos = httpsCallable(funciones, "guardarDatosOperador");
 const fnCambiarEstado = httpsCallable(funciones, "cambiarEstadoOperador");
 const fnHistorialUnidad = httpsCallable(funciones, "historialUnidadOperador");
@@ -194,18 +194,18 @@ export function iniciarSolicitudesOperadores(contenedor) {
   const exitoP = contenedor.querySelector("#op-sol-exito");
   let solicitudes = [];
 
-  async function cargar() {
+  // En vivo desde el espejo (2026-10-16): una solicitud nueva aparece sola.
+  const cancelar = suscribirEspejo("solicitudes", (docs) => {
     errorDiv.textContent = "";
-    try {
-      const res = await fnListarSolicitudes();
-      solicitudes = res.data.solicitudes || [];
-      marcarAlerta("operadoresSolicitudes", solicitudes.length > 0);
-      render();
-    } catch (err) {
-      lista.innerHTML = "";
-      errorDiv.textContent = mensajeError(err, "No se pudieron cargar las solicitudes.");
-    }
-  }
+    solicitudes = docs.map(d => ({ ...d, uid: d._id }))
+      .sort((a, b) => (b.timestampMs || 0) - (a.timestampMs || 0));
+    marcarAlerta("operadoresSolicitudes", solicitudes.length > 0);
+    render();
+  }, (err) => {
+    lista.innerHTML = "";
+    errorDiv.textContent = mensajeError(err, "No se pudieron cargar las solicitudes.");
+  });
+  alSalirDePantalla(contenedor, cancelar);
 
   function render() {
     const q = (buscar.value || "").trim().toLowerCase();
@@ -314,7 +314,9 @@ export function iniciarSolicitudesOperadores(contenedor) {
           ? `${res.data.nombre || "Operador"} aprobado como operador.`
           : "Solicitud rechazada.";
         exitoP.classList.remove("oculto");
-        cargar();
+        // Se quita de inmediato; el espejo lo confirma en 1–2 segundos.
+        solicitudes = solicitudes.filter(x => x.uid !== s.uid);
+        render();
       } catch (err) {
         errorModal.textContent = mensajeError(err, "No se pudo resolver la solicitud.");
         btnAprobar.disabled = false;
@@ -329,39 +331,26 @@ export function iniciarSolicitudesOperadores(contenedor) {
   }
 
   buscar.addEventListener("input", render);
-  cargar();
 }
 
 // ============================================================================
-// Punto de alerta de "Aceptación de ingreso" (2026-10-14, pedido de Ivan).
-// Las solicitudes viven en Alanis Operadores, así que no se pueden vigilar en
-// vivo desde el navegador: se consulta la misma Cloud Function de la pantalla
-// al entrar a la app y luego cada 10 minutos (y se vuelve a revisar sola
-// cada vez que se abre Aceptación de ingreso o se resuelve una solicitud,
-// ver cargar() arriba). Si la llamada falla, el punto simplemente no cambia.
+// Punto de alerta de "Aceptación de ingreso" (2026-10-14; en vivo desde el
+// espejo 2026-10-16 — antes consultaba una Cloud Function cada 10 minutos).
+// Usa la misma escucha que la pantalla, así que no cuesta lecturas extra.
 // ============================================================================
-const MINUTOS_REVISION_OPERADORES = 10;
-let relojAlertasOperadores = null;
-
-async function revisarAlertaOperadores() {
-  try {
-    const res = await fnListarSolicitudes();
-    marcarAlerta("operadoresSolicitudes", (res.data.solicitudes || []).length > 0);
-  } catch (err) {
-    console.warn("Alertas Operadores:", err.message);
-  }
-}
+let cancelarAlertaOperadores = null;
 
 export function detenerAlertasOperadores() {
-  if (relojAlertasOperadores) clearInterval(relojAlertasOperadores);
-  relojAlertasOperadores = null;
+  if (cancelarAlertaOperadores) cancelarAlertaOperadores();
+  cancelarAlertaOperadores = null;
   marcarAlerta("operadoresSolicitudes", false);
+  detenerEspejos(); // se llama al cerrar sesión: cierra todas las escuchas de espejos
 }
 
 export function iniciarAlertasOperadores() {
-  detenerAlertasOperadores();
-  revisarAlertaOperadores();
-  relojAlertasOperadores = setInterval(revisarAlertaOperadores, MINUTOS_REVISION_OPERADORES * 60 * 1000);
+  if (cancelarAlertaOperadores) cancelarAlertaOperadores();
+  cancelarAlertaOperadores = suscribirEspejo("solicitudes",
+    (docs) => marcarAlerta("operadoresSolicitudes", docs.length > 0));
 }
 
 // ============================================================================
@@ -372,6 +361,8 @@ function fechaLocal(d) {
 }
 
 const SEV_LABEL = { alta: "Alta", media: "Media", baja: "Baja" };
+// La copia inicial del espejo trajo 120 días de órdenes (2026-10-16).
+const ESPEJO_OT_DESDE = "2026-06-18";
 
 export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
   inyectarEstilos();
@@ -393,6 +384,7 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
       </div>
       <div id="ot-error" class="error"></div>
       <div id="ot-lista"><p class="nota">Cargando…</p></div>
+      <p id="ot-limite" class="nota oculto" style="margin-top:8px;"></p>
     </section>
   `;
   const lista = contenedor.querySelector("#ot-lista");
@@ -400,23 +392,37 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
   const inDesde = contenedor.querySelector("#ot-desde");
   const inHasta = contenedor.querySelector("#ot-hasta");
   let ordenes = [];
+  let cancelarOT = null;
 
-  async function cargar() {
+  // En vivo desde el espejo (2026-10-16): solo se leen las órdenes del rango
+  // de fechas; una orden nueva o editada en ese rango aparece sola.
+  function cargar() {
     errorDiv.textContent = "";
     if (!inDesde.value || !inHasta.value) {
       errorDiv.textContent = "Selecciona ambas fechas.";
       return;
     }
+    if (inDesde.value > inHasta.value) {
+      errorDiv.textContent = "La fecha Desde no puede ser mayor que Hasta.";
+      return;
+    }
+    if (cancelarOT) cancelarOT();
     lista.innerHTML = `<p class="nota">Cargando…</p>`;
-    try {
-      const res = await fnListarOTs({ desde: inDesde.value, hasta: inHasta.value });
-      ordenes = res.data.ordenes || [];
+    const limite = contenedor.querySelector("#ot-limite");
+    limite.classList.toggle("oculto", inDesde.value >= ESPEJO_OT_DESDE);
+    limite.textContent = `Las órdenes anteriores al ${ESPEJO_OT_DESDE.split("-").reverse().join("/")} solo aparecen si se editaron después de esa fecha.`;
+    const q = query(collection(db, "espejo_op_ordenes"),
+      where("fecha", ">=", inDesde.value), where("fecha", "<=", inHasta.value));
+    cancelarOT = onSnapshot(q, (snap) => {
+      ordenes = snap.docs.map(d => ({ ...d.data(), id: d.id }))
+        .sort((a, b) => (b.fecha + (b.hora || "")).localeCompare(a.fecha + (a.hora || "")) || (b.timestampMs || 0) - (a.timestampMs || 0));
       render();
-    } catch (err) {
+    }, (err) => {
       lista.innerHTML = "";
       errorDiv.textContent = mensajeError(err, "No se pudieron cargar las órdenes de trabajo.");
-    }
+    });
   }
+  alSalirDePantalla(contenedor, () => { if (cancelarOT) cancelarOT(); });
 
   function render() {
     if (ordenes.length === 0) {
@@ -464,8 +470,7 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
     exitoP.textContent = eraNueva ? `Orden ${folio} creada.` : `Orden ${folio} actualizada.`;
     exitoP.classList.remove("oculto");
     // Que la orden recién creada (de hoy) aparezca aunque el filtro esté en otras fechas.
-    if (eraNueva && inHasta.value < fechaLocal(new Date())) inHasta.value = fechaLocal(new Date());
-    cargar();
+    if (eraNueva && inHasta.value < fechaLocal(new Date())) { inHasta.value = fechaLocal(new Date()); cargar(); }
   }
 
   contenedor.querySelector("#ot-nueva").addEventListener("click", () => abrirModalOT(null, alGuardar));
@@ -474,18 +479,12 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
 }
 
 // ---- Lista de operadores para el selector de la OT (2026-10-14) ----
-// Misma función que "Operadores registrados"; se guarda en memoria 5 minutos
-// para no llamarla cada vez que se abre el modal.
-let promesaOperadores = null;
-let operadoresCargadosEn = 0;
+// Del espejo en vivo (2026-10-16): misma escucha que "Operadores registrados".
 function cargarOperadoresActivos() {
-  if (!promesaOperadores || Date.now() - operadoresCargadosEn > 5 * 60 * 1000) {
-    operadoresCargadosEn = Date.now();
-    promesaOperadores = fnListarRegistrados()
-      .then(res => (res.data.operadores || []).filter(o => o.activo))
-      .catch(err => { promesaOperadores = null; throw err; });
-  }
-  return promesaOperadores;
+  return leerEspejo("operadores").then(docs => docs
+    .map(o => ({ ...o, uid: o._id }))
+    .filter(o => o.activo)
+    .sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), "es")));
 }
 
 // ---- Crear / editar OT (2026-10-14) — paridad con editarOT() de admin2.js ----
@@ -825,6 +824,7 @@ export function iniciarOperadoresRegistrados(contenedor) {
   let filtroRuta = "todos";
   let busqueda = "";
   let modoRuta = false;
+  let enDetalle = false;
   const seleccion = new Set();
 
   function avisar(texto) {
@@ -833,17 +833,34 @@ export function iniciarOperadoresRegistrados(contenedor) {
     setTimeout(() => exitoP.classList.add("oculto"), 4000);
   }
 
-  async function cargar() {
+  // En vivo desde el espejo (2026-10-16). Si llega un cambio mientras se ve
+  // el detalle de un operador, la lista se actualiza por dentro y se dibuja
+  // al regresar (no se interrumpe lo que se está editando).
+  function ordenar(lista) {
+    return lista.slice().sort((a, b) =>
+      (b.activo - a.activo) || String(a.numero).localeCompare(String(b.numero), "es", { numeric: true }));
+  }
+  const cancelar = suscribirEspejo("operadores", (docs) => {
     errorDiv.textContent = "";
-    try {
-      const res = await fnListarRegistrados();
-      operadores = (res.data.operadores || []).slice().sort((a, b) =>
-        (b.activo - a.activo) || String(a.numero).localeCompare(String(b.numero), "es", { numeric: true }));
-      return true;
-    } catch (err) {
-      errorDiv.textContent = mensajeError(err, "No se pudieron cargar los operadores.");
-      return false;
+    operadores = ordenar(docs.map(o => ({
+      uid: o._id, nombre: o.nombre || "", correo: o.correo || "", nombreOficial: o.nombreOficial || "",
+      numero: o.numero || "", tipoRuta: TIPOS_RUTA.includes(o.tipoRuta) ? o.tipoRuta : null,
+      lada: o.lada || "52", telefono: o.telefono || "", activo: o.activo === true,
+    })));
+    if (!enDetalle) {
+      const enfocado = document.activeElement && document.activeElement.id === "or-buscar";
+      const pos = enfocado ? document.activeElement.selectionStart : 0;
+      renderLista();
+      if (enfocado) { const n = vista.querySelector("#or-buscar"); n.focus(); n.setSelectionRange(pos, pos); }
     }
+  }, (err) => {
+    vista.innerHTML = "";
+    errorDiv.textContent = mensajeError(err, "No se pudieron cargar los operadores.");
+  });
+  alSalirDePantalla(contenedor, cancelar);
+  // Mientras el espejo confirma (1–2 s), se refleja el cambio de inmediato.
+  function aplicarLocal(uid, cambios) {
+    operadores = ordenar(operadores.map(x => (x.uid === uid ? { ...x, ...cambios } : x)));
   }
 
   const nombreDe = (o) => o.nombreOficial || o.nombre || o.correo || "Sin nombre";
@@ -859,6 +876,7 @@ export function iniciarOperadoresRegistrados(contenedor) {
 
   // ---- Lista ----
   function renderLista() {
+    enDetalle = false;
     btnModo.textContent = modoRuta ? "Terminar" : "Asignar rutas";
     btnModo.classList.remove("oculto");
     const cuenta = (r) => operadores.filter(o => r === "todos" || rutaDe(o) === r).length;
@@ -909,8 +927,8 @@ export function iniciarOperadoresRegistrados(contenedor) {
         try {
           const res = await fnAsignarRuta({ uids: [...seleccion], tipoRuta: b.dataset.ruta });
           avisar(`Ruta ${ETIQUETA_RUTA[b.dataset.ruta]} asignada a ${res.data.total} operador${res.data.total === 1 ? "" : "es"}.`);
+          seleccion.forEach(uid => aplicarLocal(uid, { tipoRuta: b.dataset.ruta }));
           seleccion.clear();
-          await cargar();
           renderLista();
         } catch (err) {
           errorDiv.textContent = mensajeError(err, "No se pudo asignar la ruta.");
@@ -935,6 +953,7 @@ export function iniciarOperadoresRegistrados(contenedor) {
 
   // ---- Detalle ----
   function renderDetalle(o) {
+    enDetalle = true;
     btnModo.classList.add("oculto");
     let rutaElegida = o.tipoRuta || "";
     vista.innerHTML = `
@@ -987,13 +1006,14 @@ export function iniciarOperadoresRegistrados(contenedor) {
       if (!rutaElegida) { errCard.textContent = "Elige el tipo de ruta."; return; }
       bloquear(true);
       try {
-        await fnGuardarDatos({
+        const datos = {
           uid: o.uid, numero, telefono, tipoRuta: rutaElegida,
-          nombreOficial: card.querySelector(".or-oficial").value,
+          nombreOficial: card.querySelector(".or-oficial").value.trim(),
           lada: card.querySelector(".or-lada").value
-        });
+        };
+        await fnGuardarDatos(datos);
         avisar(`Datos de ${nombreDe(o)} guardados.`);
-        await cargar();
+        aplicarLocal(o.uid, datos);
         volver();
       } catch (err) {
         errCard.textContent = mensajeError(err, "No se pudieron guardar los datos.");
@@ -1012,7 +1032,7 @@ export function iniciarOperadoresRegistrados(contenedor) {
       try {
         await fnCambiarEstado({ uid: o.uid, activo: activar });
         avisar(`${nombreDe(o)} ${activar ? "activado" : "desactivado"}.`);
-        await cargar();
+        aplicarLocal(o.uid, { activo: activar });
         volver();
       } catch (err) {
         errCard.textContent = mensajeError(err, "No se pudo cambiar el estado.");
@@ -1042,5 +1062,4 @@ export function iniciarOperadoresRegistrados(contenedor) {
   }
 
   vista.innerHTML = `<p class="nota">Cargando…</p>`;
-  cargar().then(ok => { if (ok) renderLista(); else vista.innerHTML = ""; });
 }

@@ -1,6 +1,6 @@
 import { db } from "./firebase-config.js";
 import { doc, onSnapshot, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
-import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
+import { suscribirEspejo, alSalirDePantalla } from "./espejosOperadores.js";
 
 // ============================================================================
 // Operadores → Turnos (2026-10-16, fase 2 de rutas — parte 1: la fila).
@@ -12,30 +12,19 @@ import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/
 //
 // Estatus: lo que el operador ya marca desde su app (Disponible, Taller,
 // Enfermo, Permiso, Vacaciones, Incapacitado) y sus asignaciones de viaje,
-// leídos con la función estadoTurnosOperadores (otro proyecto: se consulta al
-// abrir la pestaña y con "Actualizar estatus", sin refresco automático). Reglas acordadas con Ivan:
+// leídos EN VIVO de los espejos (espejosOperadores.js, 2026-10-16): cuando el
+// operador cambia su estatus en su app, aquí se ve en 1–2 segundos, sin
+// consultar a Alanis Operadores. Reglas acordadas con Ivan:
 //   - Un estatus solo cuenta si se marcó DESPUÉS de su entrada a patio.
 //   - Ruta corta: "Disponible" vence a las N horas (4 por default).
 // Partes siguientes: Asignar viaje (WhatsApp), Perdieron turno / En taller,
 // Configuración.
 // ============================================================================
 
-const funciones = getFunctions(undefined, "us-central1");
-const fnEstadoTurnos = httpsCallable(funciones, "estadoTurnosOperadores");
-
 const DOC_PATIO = doc(db, "turnos_patio", "actual");
 const HORAS_VIGENCIA_CORTA = 4; // pasará a Configuración en la parte 4
-// Sin refresco automático de estatus (2026-10-16): cada consulta lee ~2 semanas
-// de eventos/asignaciones/OT en Alanis Operadores (miles de lecturas). Se
-// consulta al abrir la pestaña y con "Actualizar estatus". Cuando existan los
-// espejos en vivo, Turnos se actualizará solo y sin este costo. El reloj de
-// abajo solo vuelve a dibujar (para que "vence a las…" avance), sin consultar.
+// El reloj solo vuelve a dibujar (para que "vence a las…" avance); no lee nada.
 const REDIBUJO_MS = 60 * 1000;
-
-// Última consulta guardada mientras la página siga abierta: si el usuario se va
-// a otra pestaña y regresa a Turnos, se muestra lo que ya había sin volver a
-// consultar. Solo "Actualizar estatus" (o recargar la página) trae datos nuevos.
-let cacheEstado = null; // { operadores, generadoMs }
 
 const ETIQUETA_RUTA = { larga: "LARGA", corta: "CORTA", local: "LOCAL" };
 const ESTATUS = {
@@ -208,7 +197,6 @@ export function iniciarTurnos(contenedor, datosUsuario, uid) {
       <div class="tu-top">
         <h2 style="margin:0;">Turnos en patio</h2>
         <div style="display:flex;gap:6px;">
-          <button type="button" class="secundario" id="tu-refrescar">Actualizar estatus</button>
           <button type="button" id="tu-pegar">Actualizar reporte de patio</button>
         </div>
       </div>
@@ -224,8 +212,7 @@ export function iniciarTurnos(contenedor, datosUsuario, uid) {
   `;
   const $ = (s) => contenedor.querySelector(s);
   let patio = null;      // { filas, importadoEn, importadoPor }
-  let operadores = cacheEstado ? cacheEstado.operadores : [];   // de estadoTurnosOperadores
-  let generadoMs = cacheEstado ? cacheEstado.generadoMs : 0;
+  let operadores = [];   // armado de los 3 espejos
   let filtro = "todas";
 
   const cancelarPatio = onSnapshot(DOC_PATIO, (snap) => {
@@ -233,23 +220,41 @@ export function iniciarTurnos(contenedor, datosUsuario, uid) {
     render();
   }, (err) => { $("#tu-error").textContent = "No se pudo leer el reporte de patio: " + err.message; });
 
-  async function cargarEstado() {
-    try {
-      const res = await fnEstadoTurnos();
-      operadores = res.data.operadores || [];
-      generadoMs = res.data.generadoMs || Date.now();
-      cacheEstado = { operadores, generadoMs };
-      $("#tu-error").textContent = "";
-      render();
-    } catch (err) {
-      $("#tu-error").textContent = (err && err.message) || "No se pudo cargar el estado de los operadores.";
-    }
+  // ---- Espejos en vivo: operadores + último estatus de patio + último viaje ----
+  const espejo = { operadores: null, estatus: null, asignaciones: null };
+  function armarOperadores() {
+    if (!espejo.operadores) return;
+    const estatusPorUid = new Map((espejo.estatus || []).map(e => [e._id, e]));
+    const viajePorUid = new Map();
+    (espejo.asignaciones || []).forEach(a => {
+      const previo = viajePorUid.get(a.uidOperador);
+      if (!previo || (a.timestampMs || 0) > (previo.timestampMs || 0)) viajePorUid.set(a.uidOperador, a);
+    });
+    operadores = espejo.operadores.map(o => {
+      const e = estatusPorUid.get(o._id);
+      const a = viajePorUid.get(o._id);
+      return {
+        uid: o._id, nombre: o.nombre || "", nombreOficial: o.nombreOficial || "", numero: o.numero || "",
+        tipoRuta: o.tipoRuta || null, lada: o.lada || "52", telefono: o.telefono || "", activo: o.activo === true,
+        estatus: e ? { id: e.id, ms: e.ms, fecha: e.fecha, hora: e.hora, fechaRegreso: e.fechaRegreso,
+          autorizo: e.autorizo, dias: e.dias, fallas: e.fallas || [] } : null,
+        asignacion: a ? { id: a._id, estado: a.estado || "pendiente", ms: a.timestampMs, cliente: a.cliente,
+          destino: a.destino, remolque: a.remolque, cita: a.cita, motivoRechazo: a.motivoRechazo,
+          creadaDesde: a.creadaDesde || null } : null,
+      };
+    });
+    render();
   }
-  if (!cacheEstado) cargarEstado(); // si ya se consultó en esta sesión, no se repite
-  const reloj = setInterval(() => {
-    if (!contenedor.isConnected) { clearInterval(reloj); cancelarPatio(); return; }
-    render(); // solo redibuja; no consulta a Alanis Operadores
-  }, REDIBUJO_MS);
+  const errorEspejo = (err) => { $("#tu-error").textContent = "No se pudo leer el estado de los operadores: " + err.message; };
+  const cancelaciones = ["operadores", "estatus", "asignaciones"].map(nombre =>
+    suscribirEspejo(nombre, (docs) => { espejo[nombre] = docs; $("#tu-error").textContent = ""; armarOperadores(); }, errorEspejo));
+
+  const reloj = setInterval(render, REDIBUJO_MS); // solo redibuja; no lee nada
+  alSalirDePantalla(contenedor, () => {
+    clearInterval(reloj);
+    cancelarPatio();
+    cancelaciones.forEach(c => c());
+  });
 
   function construirFila() {
     if (!patio || !Array.isArray(patio.filas)) return { fila: [], sinOperador: 0 };
@@ -278,7 +283,7 @@ export function iniciarTurnos(contenedor, datosUsuario, uid) {
   function render() {
     const { fila, sinOperador } = construirFila();
     $("#tu-info").textContent = patio
-      ? `Reporte de patio del ${fechaCorta(patio.importadoMs)}${patio.importadoPor && patio.importadoPor.nombre ? " · pegado por " + patio.importadoPor.nombre : ""} · estatus del operador al ${generadoMs ? horaCorta(generadoMs) : "—"} (toca "Actualizar estatus" para traer lo más reciente)`
+      ? `Reporte de patio del ${fechaCorta(patio.importadoMs)}${patio.importadoPor && patio.importadoPor.nombre ? " · pegado por " + patio.importadoPor.nombre : ""} · ${espejo.operadores ? "estatus del operador en vivo" : "cargando estatus…"}`
       : "Todavía no se ha pegado ningún reporte de patio.";
 
     const cuenta = (f) => fila.filter(it => { const prev = filtro; filtro = f; const ok = pasaFiltro(it); filtro = prev; return ok; }).length;
@@ -317,7 +322,6 @@ export function iniciarTurnos(contenedor, datosUsuario, uid) {
       : "";
   }
 
-  $("#tu-refrescar").addEventListener("click", cargarEstado);
   $("#tu-pegar").addEventListener("click", () => abrirPegado(datosUsuario, uid));
 }
 
