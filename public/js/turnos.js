@@ -32,6 +32,11 @@ const HORAS_VIGENCIA_CORTA = 4; // pasará a Configuración en la parte 4
 // abajo solo vuelve a dibujar (para que "vence a las…" avance), sin consultar.
 const REDIBUJO_MS = 60 * 1000;
 
+// Última consulta guardada mientras la página siga abierta: si el usuario se va
+// a otra pestaña y regresa a Turnos, se muestra lo que ya había sin volver a
+// consultar. Solo "Actualizar estatus" (o recargar la página) trae datos nuevos.
+let cacheEstado = null; // { operadores, generadoMs }
+
 const ETIQUETA_RUTA = { larga: "LARGA", corta: "CORTA", local: "LOCAL" };
 const ESTATUS = {
   disponible: { txt: "Disponible", clase: "tu-di" },
@@ -219,8 +224,8 @@ export function iniciarTurnos(contenedor, datosUsuario, uid) {
   `;
   const $ = (s) => contenedor.querySelector(s);
   let patio = null;      // { filas, importadoEn, importadoPor }
-  let operadores = [];   // de estadoTurnosOperadores
-  let generadoMs = 0;
+  let operadores = cacheEstado ? cacheEstado.operadores : [];   // de estadoTurnosOperadores
+  let generadoMs = cacheEstado ? cacheEstado.generadoMs : 0;
   let filtro = "todas";
 
   const cancelarPatio = onSnapshot(DOC_PATIO, (snap) => {
@@ -233,13 +238,14 @@ export function iniciarTurnos(contenedor, datosUsuario, uid) {
       const res = await fnEstadoTurnos();
       operadores = res.data.operadores || [];
       generadoMs = res.data.generadoMs || Date.now();
+      cacheEstado = { operadores, generadoMs };
       $("#tu-error").textContent = "";
       render();
     } catch (err) {
       $("#tu-error").textContent = (err && err.message) || "No se pudo cargar el estado de los operadores.";
     }
   }
-  cargarEstado();
+  if (!cacheEstado) cargarEstado(); // si ya se consultó en esta sesión, no se repite
   const reloj = setInterval(() => {
     if (!contenedor.isConnected) { clearInterval(reloj); cancelarPatio(); return; }
     render(); // solo redibuja; no consulta a Alanis Operadores
