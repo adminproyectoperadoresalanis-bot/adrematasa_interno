@@ -161,11 +161,12 @@ const OPCION_QR = {
 const OPCION_OPERADORES = {
   id: "operadores",
   etiqueta: "Operadores",
-  descripcion: "Aceptación · Órdenes de trabajo · Registrados",
+  descripcion: "Aceptación · Órdenes de trabajo · Registrados · Turnos",
   subtabs: [
     { id: "operadoresSolicitudes", etiqueta: "Aceptación de ingreso" },
     { id: "operadoresOrdenes", etiqueta: "Órdenes de trabajo" },
-    { id: "operadoresRegistrados", etiqueta: "Operadores registrados" }
+    { id: "operadoresRegistrados", etiqueta: "Operadores registrados" },
+    { id: "operadoresTurnos", etiqueta: "Turnos" }
   ]
 };
 

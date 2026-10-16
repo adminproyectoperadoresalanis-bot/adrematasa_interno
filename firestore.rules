@@ -758,6 +758,19 @@ service cloud.firestore {
     // a un operador desde ADREMATASA. La llena solo la Cloud Function
     // resolverSolicitudOperador (cuenta de servicio); nadie escribe aquí
     // desde el navegador.
+    // Turnos (2026-10-16): reporte de patio del Adrematasa oficial pegado en
+    // Operadores → Turnos. Lo leen y lo reemplazan quienes tienen acceso a
+    // Operadores (igual que las funciones de operadoresAlanis.js), siempre a
+    // su propio nombre.
+    match /turnos_patio/{id} {
+      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('operadores');
+      allow write: if usuarioActivoValido() && tieneAccesoUtilidad('operadores')
+        && request.resource.data.keys().hasOnly(['filas', 'importadoMs', 'importadoEn', 'importadoPor'])
+        && request.resource.data.importadoPor.uid == request.auth.uid
+        && request.resource.data.filas is list
+        && request.resource.data.filas.size() <= 1000;
+    }
+
     match /bitacora_acciones_operadores/{id} {
       allow read: if esAdmin();
       allow write: if false;

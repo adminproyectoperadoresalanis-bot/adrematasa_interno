@@ -533,6 +533,87 @@ exports.asignarRutaOperadores = onCall({ region: REGION }, async (request) => {
   }
 });
 
+// ---- Turnos (2026-10-16, fase 2 de rutas) ------------------------------------
+// Lo que cada operador ya reporta desde su app de Alanis Operadores, para el
+// tablero de Turnos de ADREMATASA (que ordena por la Fecha en Patio del
+// reporte pegado del Adrematasa oficial):
+//   - eventos: último estatus de PATIO (disponible, taller, enfermo, permiso,
+//     vacaciones, incapacitado) de los últimos 14 días.
+//   - asignaciones: la más reciente (pendiente / aceptada / rechazada).
+//   - ordenes_trabajo: la más reciente (para "En taller").
+// Solo lectura; no cambia nada en Alanis Operadores.
+const ESTATUS_PATIO = ["disponible", "taller", "enfermo", "permiso", "vacaciones", "incapacitado"];
+const DIAS_TURNOS = 14;
+
+exports.estadoTurnosOperadores = onCall({ region: REGION }, async (request) => {
+  await leerActor_(request);
+  try {
+    const desde = new Date(Date.now() - DIAS_TURNOS * 24 * 60 * 60 * 1000);
+    const [snapOps, snapEv, snapAsig, snapOT] = await Promise.all([
+      dbAlanis.collection("usuarios").where("rol", "==", "operador").get(),
+      dbAlanis.collection("eventos").where("timestamp", ">=", desde).orderBy("timestamp", "desc").limit(3000).get(),
+      dbAlanis.collection("asignaciones").orderBy("timestamp", "desc").limit(400).get(),
+      dbAlanis.collection("ordenes_trabajo").orderBy("timestamp", "desc").limit(400).get(),
+    ]);
+
+    const estado = {};
+    snapOps.docs.forEach((d) => {
+      const o = d.data();
+      estado[d.id] = {
+        uid: d.id,
+        nombre: o.nombre || "",
+        nombreOficial: o.nombreOficial || "",
+        numero: o.numero || "",
+        tipoRuta: TIPOS_RUTA.includes(o.tipoRuta) ? o.tipoRuta : null,
+        lada: o.lada || "52",
+        telefono: o.telefono || "",
+        activo: o.activo === true,
+        estatus: null, asignacion: null, ot: null,
+      };
+    });
+
+    // Vienen del más reciente al más viejo: el primero que se ve por operador es el último.
+    snapEv.docs.forEach((d) => {
+      const ev = d.data();
+      const e = estado[ev.uid];
+      if (!e || e.estatus) return;
+      const id = ev.estatus || (Array.isArray(ev.estatus_ids) ? ev.estatus_ids[0] : "");
+      if (!ESTATUS_PATIO.includes(id)) return;
+      e.estatus = {
+        id, ms: aMillis_(ev.timestamp), fecha: ev.fecha || "", hora: ev.hora || "",
+        fechaRegreso: ev.fecha_regreso || ev.vac_fin || "", autorizo: ev.autorizo || "",
+        dias: ev.dias_incapacidad || "",
+        fallas: (ev.fallas || []).map((f) => f && f.name).filter(Boolean).slice(0, 5),
+      };
+    });
+    snapAsig.docs.forEach((d) => {
+      const a = d.data();
+      const e = estado[a.uid_operador];
+      if (!e || e.asignacion) return;
+      e.asignacion = {
+        id: d.id, estado: a.estado || "pendiente", ms: aMillis_(a.timestamp),
+        cliente: a.cliente || "", destino: a.destino || "", remolque: a.remolque || "",
+        cita: a.cita || "", motivoRechazo: a.motivo_rechazo || "",
+        creadaDesde: a.creadaDesde || null,
+      };
+    });
+    snapOT.docs.forEach((d) => {
+      const o = d.data();
+      const e = estado[o.uid];
+      if (!e || e.ot) return;
+      e.ot = {
+        id: d.id, folio: o.folio || "", ms: aMillis_(o.timestamp), fecha: o.fecha || "", hora: o.hora || "",
+        fallas: (o.fallas || []).map((f) => f && f.name).filter(Boolean).slice(0, 3),
+      };
+    });
+
+    return { ok: true, operadores: Object.values(estado), generadoMs: Date.now() };
+  } catch (error) {
+    logger.error(`[estadoTurnosOperadores] ${error.message}`);
+    throw new HttpsError("internal", "No se pudo cargar el estado de los operadores.");
+  }
+});
+
 // entrada: { uid, activo: boolean }
 exports.cambiarEstadoOperador = onCall({ region: REGION }, async (request) => {
   const actor = await leerActor_(request);
