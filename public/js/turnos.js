@@ -101,7 +101,13 @@ export function parsearReportePatio(texto) {
     return c.includes("unidad") && c.includes("fecha en patio");
   });
   if (idxEnc === -1) throw new Error("No encontré la fila de títulos (Unidad, Fecha en Patio…). Copia el reporte incluyendo los encabezados.");
-  const enc = lineas[idxEnc].split("\t").map(normalizar);
+  let enc = lineas[idxEnc].split("\t").map(normalizar);
+  // El Adrematasa a veces copia los títulos SIN la columna vacía inicial que
+  // sí traen los renglones de datos (empiezan con tabulador). Si es así, se
+  // agrega esa columna a los títulos para que todo quede alineado.
+  const datos = lineas.slice(idxEnc + 1).filter(l => l.trim());
+  const conTabInicial = datos.filter(l => l.startsWith("\t")).length;
+  if (!lineas[idxEnc].startsWith("\t") && datos.length && conTabInicial > datos.length / 2) enc = ["", ...enc];
   const col = {};
   Object.entries(COLUMNAS).forEach(([k, nombres]) => { col[k] = enc.findIndex(h => nombres.includes(h)); });
   const val = (c, k) => (col[k] >= 0 ? String(c[col[k]] || "").trim() : "");
