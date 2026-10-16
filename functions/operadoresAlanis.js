@@ -32,6 +32,18 @@ const dbAlanis = getFirestore(getApp("alanis")); // alanis-operadores (inicializ
 const ID_OPCION = "operadores";
 const COL_BITACORA = "bitacora_acciones_operadores"; // en appadrematasainterno
 
+// Tipo de ruta del operador (2026-10-15, pedido de Ivan): se define al aceptar
+// el ingreso y se edita en Operadores registrados. Se guarda en
+// usuarios/{uid}.tipoRuta de alanis-operadores. Base para la fase 2 (tablero
+// de turnos por ruta y pago diario de ruta corta según disponibilidad).
+const TIPOS_RUTA = ["larga", "corta", "local"];
+function leerTipoRuta_(valor, obligatorio) {
+  const v = typeof valor === "string" ? valor.trim().toLowerCase() : "";
+  if (TIPOS_RUTA.includes(v)) return v;
+  if (obligatorio || v !== "") throw new HttpsError("invalid-argument", "Elige el tipo de ruta: Larga, Corta o Local.");
+  return null;
+}
+
 // ---- Permisos ---------------------------------------------------------------
 async function leerActor_(request) {
   if (!request.auth) {
@@ -139,6 +151,7 @@ exports.resolverSolicitudOperador = onCall({ region: REGION }, async (request) =
       }
       const numero = typeof e.numero === "string" ? e.numero.trim() : "";
       const nombreOficial = typeof e.nombreOficial === "string" ? e.nombreOficial.trim() : "";
+      const tipoRuta = leerTipoRuta_(e.tipoRuta, true);
       const lada = e.lada === "1" ? "1" : "52";
       const telefono = typeof e.telefono === "string" ? e.telefono.replace(/\D/g, "") : "";
       if (telefono !== "" && telefono.length !== 10) {
@@ -156,7 +169,7 @@ exports.resolverSolicitudOperador = onCall({ region: REGION }, async (request) =
 
       // Mismos campos que aprobarSolicitud() de admin2.js (set completo).
       const datos = {
-        nombre, correo, numero, nombreOficial,
+        nombre, correo, numero, nombreOficial, tipoRuta,
         rol: "operador", activo: true,
         timestamp: FieldValue.serverTimestamp(),
       };
@@ -404,6 +417,7 @@ exports.listarOperadoresRegistrados = onCall({ region: REGION }, async (request)
         correo: o.correo || "",
         nombreOficial: o.nombreOficial || "",
         numero: o.numero || "",
+        tipoRuta: TIPOS_RUTA.includes(o.tipoRuta) ? o.tipoRuta : null,
         lada: o.lada || "52",
         telefono: o.telefono || "",
         activo: o.activo === true,
@@ -427,6 +441,7 @@ exports.guardarDatosOperador = onCall({ region: REGION }, async (request) => {
     const nombreOficial = typeof e.nombreOficial === "string" ? e.nombreOficial.trim() : "";
     const lada = e.lada === "1" ? "1" : "52";
     const telefono = typeof e.telefono === "string" ? e.telefono.replace(/\D/g, "") : "";
+    const tipoRuta = leerTipoRuta_(e.tipoRuta, false); // opcional: null = no se cambia
     if (!numero) throw new HttpsError("invalid-argument", "Ingresa un número de unidad.");
     if (numero.length > 10) throw new HttpsError("invalid-argument", "El número de unidad es demasiado largo.");
     if (telefono !== "" && !RE_TELEFONO.test(telefono)) {
@@ -446,6 +461,7 @@ exports.guardarDatosOperador = onCall({ region: REGION }, async (request) => {
     // quede vacío); el teléfono solo si se capturó.
     const update = { numero, nombreOficial };
     if (telefono !== "") { update.lada = lada; update.telefono = telefono; }
+    if (tipoRuta) update.tipoRuta = tipoRuta;
     await ref.update(update);
 
     if (numero !== unidadAnterior) {
@@ -463,8 +479,8 @@ exports.guardarDatosOperador = onCall({ region: REGION }, async (request) => {
       tipo: "datos_actualizados",
       operadorUid: uid,
       operadorNombre: d.nombre || "",
-      antes: { numero: unidadAnterior, nombreOficial: d.nombreOficial || "", lada: d.lada || null, telefono: d.telefono || null },
-      despues: { numero, nombreOficial, lada: telefono !== "" ? lada : (d.lada || null), telefono: telefono !== "" ? telefono : (d.telefono || null) },
+      antes: { numero: unidadAnterior, nombreOficial: d.nombreOficial || "", lada: d.lada || null, telefono: d.telefono || null, tipoRuta: d.tipoRuta || null },
+      despues: { numero, nombreOficial, lada: telefono !== "" ? lada : (d.lada || null), telefono: telefono !== "" ? telefono : (d.telefono || null), tipoRuta: tipoRuta || d.tipoRuta || null },
       realizadoPor: actor,
       timestamp: FieldValue.serverTimestamp(),
     });
@@ -475,6 +491,45 @@ exports.guardarDatosOperador = onCall({ region: REGION }, async (request) => {
     if (error instanceof HttpsError) throw error;
     logger.error(`[guardarDatosOperador] ${error.message}`);
     throw new HttpsError("internal", "No se pudieron guardar los datos. Intenta de nuevo.");
+  }
+});
+
+// entrada: { uids: [uid...], tipoRuta: "larga" | "corta" | "local" }
+// Modo "Asignar rutas" de Operadores registrados: aplica el mismo tipo de ruta
+// a varios operadores en un solo paso (todo o nada). Solo cuentas con
+// rol:'operador'; nunca toca admins de Alanis Operadores.
+exports.asignarRutaOperadores = onCall({ region: REGION }, async (request) => {
+  const actor = await leerActor_(request);
+  const e = request.data || {};
+  const tipoRuta = leerTipoRuta_(e.tipoRuta, true);
+  const uids = Array.isArray(e.uids) ? [...new Set(e.uids.filter(u => typeof u === "string" && u.trim() && !u.includes("/")))] : [];
+  if (uids.length === 0) throw new HttpsError("invalid-argument", "Selecciona al menos un operador.");
+  if (uids.length > 200) throw new HttpsError("invalid-argument", "Demasiados operadores en un solo paso.");
+  try {
+    const refs = uids.map(u => dbAlanis.collection("usuarios").doc(u));
+    const snaps = await dbAlanis.getAll(...refs);
+    const lote = dbAlanis.batch();
+    const cambios = [];
+    snaps.forEach((snap) => {
+      if (!snap.exists || snap.data().rol !== "operador") return;
+      lote.update(snap.ref, { tipoRuta });
+      cambios.push({ uid: snap.id, nombre: snap.data().nombreOficial || snap.data().nombre || "", antes: snap.data().tipoRuta || null });
+    });
+    if (cambios.length === 0) throw new HttpsError("failed-precondition", "Ninguna de las cuentas seleccionadas es de operador.");
+    await lote.commit();
+    await dbLocal.collection(COL_BITACORA).add({
+      tipo: "ruta_asignada",
+      tipoRuta,
+      operadores: cambios,
+      realizadoPor: actor,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+    logger.info(`[asignarRutaOperadores] ${cambios.length} → ${tipoRuta} por ${actor.uid}`);
+    return { ok: true, total: cambios.length };
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    logger.error(`[asignarRutaOperadores] ${error.message}`);
+    throw new HttpsError("internal", "No se pudo asignar la ruta. Intenta de nuevo.");
   }
 });
 

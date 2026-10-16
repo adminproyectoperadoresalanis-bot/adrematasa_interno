@@ -24,6 +24,28 @@ const fnGuardarDatos = httpsCallable(funciones, "guardarDatosOperador");
 const fnCambiarEstado = httpsCallable(funciones, "cambiarEstadoOperador");
 const fnHistorialUnidad = httpsCallable(funciones, "historialUnidadOperador");
 const fnGuardarOT = httpsCallable(funciones, "guardarOrdenTrabajo");
+const fnAsignarRuta = httpsCallable(funciones, "asignarRutaOperadores");
+
+// ---- Tipo de ruta (2026-10-15) ----
+const TIPOS_RUTA = ["larga", "corta", "local"];
+const ETIQUETA_RUTA = { larga: "Larga", corta: "Corta", local: "Local", sindefinir: "Sin definir" };
+
+function pillRuta(ruta) {
+  const r = TIPOS_RUTA.includes(ruta) ? ruta : "sindefinir";
+  return `<span class="or-ruta ${r}">${ETIQUETA_RUTA[r].toUpperCase()}</span>`;
+}
+
+// Botones Larga / Corta / Local. alElegir(ruta) se llama al tocar uno.
+function selectorRuta(actual) {
+  return `<div class="or-ruta-sel" role="radiogroup" aria-label="Tipo de ruta">${TIPOS_RUTA.map(r =>
+    `<button type="button" role="radio" class="or-ruta-op${actual === r ? " activo" : ""}" data-ruta="${r}" aria-checked="${actual === r}">${ETIQUETA_RUTA[r]}</button>`).join("")}</div>`;
+}
+function conectarSelectorRuta(raiz, alElegir) {
+  raiz.querySelectorAll(".or-ruta-op").forEach(b => b.addEventListener("click", () => {
+    raiz.querySelectorAll(".or-ruta-op").forEach(x => { x.classList.toggle("activo", x === b); x.setAttribute("aria-checked", x === b); });
+    alElegir(b.dataset.ruta);
+  }));
+}
 
 // Mismo logo que imprime admin2.js en Alanis Operadores.
 const LOGO_ORDEN_TALLER = "https://alanis-operadores.web.app/img/logo-reporte.png";
@@ -118,6 +140,35 @@ function inyectarEstilos() {
     .or-acciones { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
     .or-acciones button { flex: 1; min-width: 100px; }
     .or-hist { border-top: 1px solid #efebe5; margin-top: 10px; padding-top: 8px; font-size: 12px; color: #6b5f52; }
+    .or-ruta { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 10px; white-space: nowrap; letter-spacing: .02em; }
+    .or-ruta.larga { background: #E6F1FB; color: #0C447C; } .or-ruta.corta { background: #EAF3DE; color: #27500A; }
+    .or-ruta.local { background: #FAEEDA; color: #633806; } .or-ruta.sindefinir { background: #F1EFE8; color: #5F5E5A; }
+    .or-ruta-sel { display: flex; gap: 4px; border: 1px solid #e2ddd5; border-radius: 10px; padding: 3px; }
+    .or-ruta-op { flex: 1; background: none; border: none; border-radius: 8px; padding: 8px 4px; font: inherit; font-size: 13px;
+      font-weight: 600; color: #6b5f52; cursor: pointer; }
+    .or-ruta-op.activo { background: #2c1e0f; color: #fff; }
+    .or-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
+    .or-chip { background: #fff; border: 1px solid #e2ddd5; border-radius: 14px; padding: 5px 11px; font: inherit; font-size: 12px;
+      color: #6b5f52; cursor: pointer; }
+    .or-chip.activo { background: #2c1e0f; border-color: #2c1e0f; color: #fff; }
+    .or-lista { background: #fff; border: 1px solid #e2ddd5; border-radius: 12px; overflow: hidden; }
+    .or-renglon { display: flex; align-items: center; gap: 10px; width: 100%; background: #fff; border: none;
+      border-bottom: 1px solid #efebe5; padding: 11px 14px; text-align: left; font: inherit; color: #2c1e0f; cursor: pointer; }
+    .or-renglon:last-child { border-bottom: none; }
+    .or-renglon:hover { background: #f5f3f0; }
+    .or-renglon.inactivo { opacity: .6; }
+    .or-unidad-num { font-weight: 700; font-size: 14px; min-width: 46px; }
+    .or-nom { flex: 1; min-width: 0; font-size: 14px; }
+    .or-nom small { display: block; font-size: 11.5px; color: #6b5f52; }
+    .or-punto { width: 8px; height: 8px; border-radius: 50%; background: #3B6D11; flex-shrink: 0; }
+    .or-punto.off { background: #B4B2A9; }
+    .or-volver { background: none; border: none; padding: 0; margin: 0 0 10px; font: inherit; font-size: 14px; color: #6b5f52; cursor: pointer; }
+    .or-volver:hover { color: #2c1e0f; }
+    .or-barra { position: sticky; bottom: 8px; margin-top: 10px; background: #2c1e0f; color: #fff; border-radius: 12px;
+      padding: 10px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+    .or-barra-btn { background: #fff; color: #2c1e0f; border: none; border-radius: 8px; padding: 7px 12px; font: inherit;
+      font-size: 13px; font-weight: 600; cursor: pointer; }
+    .or-barra-btn:disabled { opacity: .5; cursor: default; }
   `;
   document.head.appendChild(estilo);
 }
@@ -215,6 +266,8 @@ export function iniciarSolicitudesOperadores(contenedor) {
           </select>
           <input type="tel" id="op-m-telefono" placeholder="10 dígitos" style="flex:1;min-width:0;" value="${esc(s.telefono || "")}">
         </div>
+        <label>Tipo de ruta</label>
+        ${selectorRuta("")}
         <div class="error op-m-error" style="margin-top:10px;"></div>
         <div class="op-botones">
           <button type="button" class="btn-rechazar op-rechazar">Rechazar</button>
@@ -228,6 +281,8 @@ export function iniciarSolicitudesOperadores(contenedor) {
     fondo.addEventListener("click", (e) => { if (e.target === fondo) cerrar(); });
 
     const errorModal = fondo.querySelector(".op-m-error");
+    let tipoRuta = "";
+    conectarSelectorRuta(fondo, (r) => { tipoRuta = r; errorModal.textContent = ""; });
     const btnAprobar = fondo.querySelector(".op-aprobar");
     const btnRechazar = fondo.querySelector(".op-rechazar");
 
@@ -236,6 +291,10 @@ export function iniciarSolicitudesOperadores(contenedor) {
       const telefono = fondo.querySelector("#op-m-telefono").value.replace(/\D/g, "");
       if (accion === "aprobar" && telefono !== "" && telefono.length !== 10) {
         errorModal.textContent = "El teléfono debe tener 10 dígitos.";
+        return;
+      }
+      if (accion === "aprobar" && !tipoRuta) {
+        errorModal.textContent = "Elige el tipo de ruta antes de aprobar.";
         return;
       }
       btnAprobar.disabled = true;
@@ -247,7 +306,8 @@ export function iniciarSolicitudesOperadores(contenedor) {
           numero: fondo.querySelector("#op-m-numero").value,
           nombreOficial: fondo.querySelector("#op-m-nombre").value,
           lada: fondo.querySelector("#op-m-lada").value,
-          telefono
+          telefono,
+          tipoRuta: accion === "aprobar" ? tipoRuta : undefined
         });
         cerrar();
         exitoP.textContent = accion === "aprobar"
@@ -741,26 +801,31 @@ function imprimirOrdenTaller(ot, nombreUsuario) {
 // las hace la Cloud Function; aquí solo se adelantan para avisar rápido.
 // ============================================================================
 export function iniciarOperadoresRegistrados(contenedor) {
+  // Rediseño 2026-10-15 (pedido de Ivan): lista compacta (unidad, nombre,
+  // teléfono, tipo de ruta, activo) con buscador y filtros por ruta; al tocar
+  // un operador se abre su detalle para editar. Modo "Asignar rutas" para
+  // poner el mismo tipo de ruta a varios a la vez.
   inyectarEstilos();
   contenedor.innerHTML = `
     <section class="panel">
-      <h2>Operadores registrados</h2>
-      <p class="nota">Operadores con acceso a Alanis Operadores. El nombre oficial es el que se ve en ADREMATASA; desactivar a un operador lo quita del selector de Validación de QR.</p>
+      <div class="or-encabezado" style="justify-content:space-between;">
+        <h2 style="margin:0;">Operadores registrados</h2>
+        <button type="button" class="secundario" id="or-modo-ruta">Asignar rutas</button>
+      </div>
       <div id="or-error" class="error"></div>
       <p id="or-exito" class="nota oculto" style="color:#1c7a41;"></p>
-      <div class="or-encabezado">
-        <input type="text" id="or-buscar" placeholder="Buscar por nombre, correo o unidad...">
-        <span class="or-total" id="or-total">—</span>
-      </div>
-      <div id="or-lista"><p class="nota">Cargando…</p></div>
+      <div id="or-vista"></div>
     </section>
   `;
-  const lista = contenedor.querySelector("#or-lista");
-  const buscar = contenedor.querySelector("#or-buscar");
-  const totalEl = contenedor.querySelector("#or-total");
+  const vista = contenedor.querySelector("#or-vista");
   const errorDiv = contenedor.querySelector("#or-error");
   const exitoP = contenedor.querySelector("#or-exito");
+  const btnModo = contenedor.querySelector("#or-modo-ruta");
   let operadores = [];
+  let filtroRuta = "todos";
+  let busqueda = "";
+  let modoRuta = false;
+  const seleccion = new Set();
 
   function avisar(texto) {
     exitoP.textContent = texto;
@@ -772,37 +837,116 @@ export function iniciarOperadoresRegistrados(contenedor) {
     errorDiv.textContent = "";
     try {
       const res = await fnListarRegistrados();
-      operadores = res.data.operadores || [];
-      const activos = operadores.filter(o => o.activo).length;
-      totalEl.textContent = `${operadores.length} operadores · ${activos} activos`;
-      render();
+      operadores = (res.data.operadores || []).slice().sort((a, b) =>
+        (b.activo - a.activo) || String(a.numero).localeCompare(String(b.numero), "es", { numeric: true }));
+      return true;
     } catch (err) {
-      lista.innerHTML = "";
       errorDiv.textContent = mensajeError(err, "No se pudieron cargar los operadores.");
+      return false;
     }
   }
 
-  function render() {
-    const q = (buscar.value || "").trim().toLowerCase();
-    const filtrados = !q ? operadores : operadores.filter(o =>
-      o.nombre.toLowerCase().includes(q) || o.correo.toLowerCase().includes(q) ||
-      o.nombreOficial.toLowerCase().includes(q) || String(o.numero).toLowerCase().includes(q));
-    if (filtrados.length === 0) {
-      lista.innerHTML = `<p class="nota" style="text-align:center;padding:16px;">Sin operadores${q ? " que coincidan" : " registrados"}.</p>`;
-      return;
+  const nombreDe = (o) => o.nombreOficial || o.nombre || o.correo || "Sin nombre";
+  const telefonoDe = (o) => o.telefono ? `+${o.lada || "52"} ${o.telefono}` : "Sin teléfono";
+  const rutaDe = (o) => o.tipoRuta || "sindefinir";
+
+  function filtrados() {
+    const q = busqueda.trim().toLowerCase();
+    return operadores.filter(o => (filtroRuta === "todos" || rutaDe(o) === filtroRuta) && (!q
+      || o.nombre.toLowerCase().includes(q) || o.correo.toLowerCase().includes(q)
+      || o.nombreOficial.toLowerCase().includes(q) || String(o.numero).toLowerCase().includes(q)));
+  }
+
+  // ---- Lista ----
+  function renderLista() {
+    btnModo.textContent = modoRuta ? "Terminar" : "Asignar rutas";
+    btnModo.classList.remove("oculto");
+    const cuenta = (r) => operadores.filter(o => r === "todos" || rutaDe(o) === r).length;
+    const chips = ["todos", ...TIPOS_RUTA, "sindefinir"].map(r =>
+      `<button type="button" class="or-chip${filtroRuta === r ? " activo" : ""}" data-ruta="${r}">${r === "todos" ? "Todos" : ETIQUETA_RUTA[r]} ${cuenta(r)}</button>`).join("");
+    const lista = filtrados();
+    vista.innerHTML = `
+      <input type="text" id="or-buscar" class="op-buscar" placeholder="Buscar por nombre, correo o unidad..." value="${esc(busqueda)}">
+      <div class="or-chips">${chips}</div>
+      ${modoRuta ? `<p class="nota" style="margin:0 0 6px;">Marca a los operadores y elige la ruta abajo.</p>` : ""}
+      <div class="or-lista">${lista.length === 0
+        ? `<p class="nota" style="text-align:center;padding:16px;">Sin operadores${busqueda || filtroRuta !== "todos" ? " con este filtro" : " registrados"}.</p>`
+        : lista.map(o => `
+          <${modoRuta ? "label" : "button type=\"button\""} class="or-renglon${o.activo ? "" : " inactivo"}" data-uid="${esc(o.uid)}">
+            ${modoRuta ? `<input type="checkbox" class="or-sel" data-uid="${esc(o.uid)}"${seleccion.has(o.uid) ? " checked" : ""}>` : ""}
+            <span class="or-unidad-num">${esc(o.numero || "—")}</span>
+            <span class="or-nom"><span>${esc(nombreDe(o))}</span><small>${o.activo ? esc(telefonoDe(o)) : "Inactivo"}</small></span>
+            ${pillRuta(o.tipoRuta)}
+            <span class="or-punto${o.activo ? "" : " off"}" title="${o.activo ? "Activo" : "Inactivo"}"></span>
+          </${modoRuta ? "label" : "button"}>`).join("")}
+      </div>
+      ${modoRuta ? `
+        <div class="or-barra">
+          <span id="or-sel-texto">${seleccion.size} seleccionado${seleccion.size === 1 ? "" : "s"} · asignar ruta:</span>
+          ${TIPOS_RUTA.map(r => `<button type="button" class="or-barra-btn" data-ruta="${r}"${seleccion.size ? "" : " disabled"}>${ETIQUETA_RUTA[r]}</button>`).join("")}
+        </div>` : ""}
+    `;
+    const inBuscar = vista.querySelector("#or-buscar");
+    inBuscar.addEventListener("input", () => {
+      busqueda = inBuscar.value;
+      const pos = inBuscar.selectionStart;
+      renderLista();
+      const nuevo = vista.querySelector("#or-buscar");
+      nuevo.focus();
+      nuevo.setSelectionRange(pos, pos);
+    });
+    vista.querySelectorAll(".or-chip").forEach(b => b.addEventListener("click", () => { filtroRuta = b.dataset.ruta; renderLista(); }));
+    if (modoRuta) {
+      vista.querySelectorAll(".or-sel").forEach(chk => chk.addEventListener("change", () => {
+        if (chk.checked) seleccion.add(chk.dataset.uid); else seleccion.delete(chk.dataset.uid);
+        vista.querySelector("#or-sel-texto").textContent = `${seleccion.size} seleccionado${seleccion.size === 1 ? "" : "s"} · asignar ruta:`;
+        vista.querySelectorAll(".or-barra-btn").forEach(b => { b.disabled = seleccion.size === 0; });
+      }));
+      vista.querySelectorAll(".or-barra-btn").forEach(b => b.addEventListener("click", async () => {
+        if (seleccion.size === 0) return;
+        vista.querySelectorAll(".or-barra-btn").forEach(x => { x.disabled = true; });
+        errorDiv.textContent = "";
+        try {
+          const res = await fnAsignarRuta({ uids: [...seleccion], tipoRuta: b.dataset.ruta });
+          avisar(`Ruta ${ETIQUETA_RUTA[b.dataset.ruta]} asignada a ${res.data.total} operador${res.data.total === 1 ? "" : "es"}.`);
+          seleccion.clear();
+          await cargar();
+          renderLista();
+        } catch (err) {
+          errorDiv.textContent = mensajeError(err, "No se pudo asignar la ruta.");
+          vista.querySelectorAll(".or-barra-btn").forEach(x => { x.disabled = false; });
+        }
+      }));
+    } else {
+      vista.querySelectorAll("button.or-renglon").forEach(b => b.addEventListener("click", () => {
+        const o = operadores.find(x => x.uid === b.dataset.uid);
+        if (o) renderDetalle(o);
+      }));
     }
-    lista.innerHTML = filtrados.map(o => `
-      <div class="or-card ${o.activo ? "" : "inactivo"}" data-uid="${esc(o.uid)}">
+  }
+
+  btnModo.addEventListener("click", () => {
+    modoRuta = !modoRuta;
+    seleccion.clear();
+    // Al entrar, arranca en "Sin definir" (lo que falta asignar), si hay.
+    if (modoRuta && operadores.some(o => !o.tipoRuta)) filtroRuta = "sindefinir";
+    renderLista();
+  });
+
+  // ---- Detalle ----
+  function renderDetalle(o) {
+    btnModo.classList.add("oculto");
+    let rutaElegida = o.tipoRuta || "";
+    vista.innerHTML = `
+      <button type="button" class="or-volver">← Operadores registrados</button>
+      <div class="or-card ${o.activo ? "" : "inactivo"}">
         <div class="or-fila">
-          <span class="op-avatar">${esc(iniciales(o.nombre))}</span>
+          <span class="op-avatar">${esc(iniciales(nombreDe(o)))}</span>
           <span style="flex:1;min-width:0;">
-            <span class="op-nombre" style="display:block;">${esc(o.nombre || "—")}</span>
-            <span class="op-sub">${esc(o.correo || "—")}</span>
+            <span class="op-nombre" style="display:block;">${esc(nombreDe(o))}</span>
+            <span class="op-sub">${esc(o.correo || "—")}${o.nombreOficial && o.nombre && o.nombre !== o.nombreOficial ? " · se registró como " + esc(o.nombre) : ""}</span>
           </span>
           <span class="or-badge ${o.activo ? "activo" : "inactivo"}">${o.activo ? "Activo" : "Inactivo"}</span>
-        </div>
-        <div style="margin-top:8px;">
-          <span class="or-badge ${o.nombreOficial ? "oficial" : "sinoficial"}">${o.nombreOficial ? "✓ Nombre oficial" : "Sin nombre oficial"}</span>
         </div>
         <label>Nombre oficial (el que se ve en ADREMATASA)</label>
         <input type="text" class="or-oficial" value="${esc(o.nombreOficial)}" placeholder="${esc(o.nombre || "Nombre completo oficial")}">
@@ -813,83 +957,90 @@ export function iniciarOperadoresRegistrados(contenedor) {
             <option value="1"${o.lada === "1" ? " selected" : ""}>US +1</option></select></div>
           <div class="t"><label>Celular</label><input type="tel" class="or-tel" value="${esc(o.telefono)}" maxlength="14" placeholder="10 dígitos"></div>
         </div>
+        <label>Tipo de ruta</label>
+        ${selectorRuta(rutaElegida)}
         <div class="error or-card-error" style="margin-top:8px;"></div>
         <div class="or-acciones">
           <button type="button" class="or-guardar">Guardar datos</button>
+        </div>
+        <div class="or-acciones">
+          <button type="button" class="secundario or-historial">Historial de unidad</button>
           <button type="button" class="secundario or-estado">${o.activo ? "Desactivar" : "Activar"}</button>
-          <button type="button" class="secundario or-historial">Historial</button>
         </div>
         <div class="or-hist oculto"></div>
-      </div>`).join("");
+      </div>
+    `;
+    const card = vista.querySelector(".or-card");
+    const errCard = card.querySelector(".or-card-error");
+    const botones = card.querySelectorAll("button");
+    const bloquear = (b) => botones.forEach(x => { x.disabled = b; });
+    const volver = () => renderLista();
+    vista.querySelector(".or-volver").addEventListener("click", volver);
+    conectarSelectorRuta(card, (r) => { rutaElegida = r; });
 
-    lista.querySelectorAll(".or-card").forEach(card => {
-      const uid = card.dataset.uid;
-      const op = operadores.find(o => o.uid === uid);
-      const errCard = card.querySelector(".or-card-error");
-      const botones = card.querySelectorAll("button");
-      const bloquear = (b) => botones.forEach(x => { x.disabled = b; });
+    card.querySelector(".or-guardar").addEventListener("click", async () => {
+      errCard.textContent = "";
+      const numero = card.querySelector(".or-unidad").value.trim();
+      const telefono = card.querySelector(".or-tel").value.replace(/\D/g, "");
+      if (!numero) { errCard.textContent = "Ingresa un número de unidad."; return; }
+      if (telefono !== "" && telefono.length !== 10) { errCard.textContent = "El teléfono debe tener 10 dígitos."; return; }
+      if (!rutaElegida) { errCard.textContent = "Elige el tipo de ruta."; return; }
+      bloquear(true);
+      try {
+        await fnGuardarDatos({
+          uid: o.uid, numero, telefono, tipoRuta: rutaElegida,
+          nombreOficial: card.querySelector(".or-oficial").value,
+          lada: card.querySelector(".or-lada").value
+        });
+        avisar(`Datos de ${nombreDe(o)} guardados.`);
+        await cargar();
+        volver();
+      } catch (err) {
+        errCard.textContent = mensajeError(err, "No se pudieron guardar los datos.");
+        bloquear(false);
+      }
+    });
 
-      card.querySelector(".or-guardar").addEventListener("click", async () => {
-        errCard.textContent = "";
-        const numero = card.querySelector(".or-unidad").value.trim();
-        const telefono = card.querySelector(".or-tel").value.replace(/\D/g, "");
-        if (!numero) { errCard.textContent = "Ingresa un número de unidad."; return; }
-        if (telefono !== "" && telefono.length !== 10) { errCard.textContent = "El teléfono debe tener 10 dígitos."; return; }
-        bloquear(true);
-        try {
-          await fnGuardarDatos({
-            uid, numero, telefono,
-            nombreOficial: card.querySelector(".or-oficial").value,
-            lada: card.querySelector(".or-lada").value
-          });
-          avisar(`Datos de ${op.nombre || "operador"} guardados.`);
-          await cargar();
-        } catch (err) {
-          errCard.textContent = mensajeError(err, "No se pudieron guardar los datos.");
-          bloquear(false);
-        }
-      });
+    card.querySelector(".or-estado").addEventListener("click", async () => {
+      errCard.textContent = "";
+      const activar = !o.activo;
+      const pregunta = activar
+        ? `¿Activar a ${nombreDe(o)}? Volverá a poder entrar a Alanis Operadores y aparecerá en el selector de Validación de QR.`
+        : `¿Desactivar a ${nombreDe(o)}? Ya no podrá entrar a Alanis Operadores y saldrá del selector de Validación de QR.`;
+      if (!confirm(pregunta)) return;
+      bloquear(true);
+      try {
+        await fnCambiarEstado({ uid: o.uid, activo: activar });
+        avisar(`${nombreDe(o)} ${activar ? "activado" : "desactivado"}.`);
+        await cargar();
+        volver();
+      } catch (err) {
+        errCard.textContent = mensajeError(err, "No se pudo cambiar el estado.");
+        bloquear(false);
+      }
+    });
 
-      card.querySelector(".or-estado").addEventListener("click", async () => {
-        errCard.textContent = "";
-        const activar = !op.activo;
-        const pregunta = activar
-          ? `¿Activar a ${op.nombre || "este operador"}? Volverá a poder entrar a Alanis Operadores y aparecerá en el selector de Validación de QR.`
-          : `¿Desactivar a ${op.nombre || "este operador"}? Ya no podrá entrar a Alanis Operadores y saldrá del selector de Validación de QR.`;
-        if (!confirm(pregunta)) return;
-        bloquear(true);
-        try {
-          await fnCambiarEstado({ uid, activo: activar });
-          avisar(`${op.nombre || "Operador"} ${activar ? "activado" : "desactivado"}.`);
-          await cargar();
-        } catch (err) {
-          errCard.textContent = mensajeError(err, "No se pudo cambiar el estado.");
-          bloquear(false);
-        }
-      });
-
-      card.querySelector(".or-historial").addEventListener("click", async () => {
-        const cont = card.querySelector(".or-hist");
-        if (!cont.classList.contains("oculto")) { cont.classList.add("oculto"); return; }
-        cont.classList.remove("oculto");
-        cont.textContent = "Cargando…";
-        try {
-          const res = await fnHistorialUnidad({ uid });
-          const cambios = res.data.cambios || [];
-          cont.innerHTML = cambios.length === 0
-            ? "Sin cambios de unidad registrados."
-            : cambios.map(c => {
-                const p = (c.fecha || "").split("-");
-                const f = p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : c.fecha;
-                return `<div>${esc(f)} ${esc(c.hora)} · ${esc(c.anterior)} → ${esc(c.nueva)}</div>`;
-              }).join("");
-        } catch (err) {
-          cont.textContent = mensajeError(err, "No se pudo cargar el historial.");
-        }
-      });
+    card.querySelector(".or-historial").addEventListener("click", async () => {
+      const cont = card.querySelector(".or-hist");
+      if (!cont.classList.contains("oculto")) { cont.classList.add("oculto"); return; }
+      cont.classList.remove("oculto");
+      cont.textContent = "Cargando…";
+      try {
+        const res = await fnHistorialUnidad({ uid: o.uid });
+        const cambios = res.data.cambios || [];
+        cont.innerHTML = cambios.length === 0
+          ? "Sin cambios de unidad registrados."
+          : cambios.map(c => {
+              const p = (c.fecha || "").split("-");
+              const f = p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : c.fecha;
+              return `<div>${esc(f)} ${esc(c.hora)} · ${esc(c.anterior)} → ${esc(c.nueva)}</div>`;
+            }).join("");
+      } catch (err) {
+        cont.textContent = mensajeError(err, "No se pudo cargar el historial.");
+      }
     });
   }
 
-  buscar.addEventListener("input", render);
-  cargar();
+  vista.innerHTML = `<p class="nota">Cargando…</p>`;
+  cargar().then(ok => { if (ok) renderLista(); else vista.innerHTML = ""; });
 }
