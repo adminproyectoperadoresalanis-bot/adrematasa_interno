@@ -614,6 +614,82 @@ exports.estadoTurnosOperadores = onCall({ region: REGION }, async (request) => {
   }
 });
 
+// ---- Espejos en vivo: copia inicial / resincronizar (2026-10-16) --------------
+// Los triggers de alanis-operadores (espejosAdrematasa.js) copian cada CAMBIO.
+// Esta función llena los espejos con lo que YA existe (una sola vez al
+// estrenarlos, o para reparar si algo quedó desfasado). Solo admin.
+// Usa la misma forma de los espejos que los triggers (espejosOperadoresComun.js,
+// archivo idéntico en los dos proyectos).
+const comunEspejos = require("./espejosOperadoresComun");
+const DIAS_ESPEJO_ORDENES = 120;
+const DIAS_ESPEJO_ASIGNACIONES = 60;
+const DIAS_ESPEJO_EVENTOS = 14;
+
+async function escribirEnLotes_(coleccion, pares) {
+  // pares: [[id, datos|null]]; null = borrar el espejo
+  for (let i = 0; i < pares.length; i += 400) {
+    const lote = dbLocal.batch();
+    pares.slice(i, i + 400).forEach(([id, datos]) => {
+      const ref = dbLocal.collection(coleccion).doc(id);
+      if (datos) lote.set(ref, { ...datos, espejoMs: Date.now() });
+      else lote.delete(ref);
+    });
+    await lote.commit();
+  }
+}
+
+exports.poblarEspejosOperadores = onCall({ region: REGION, timeoutSeconds: 300, memory: "512MiB" }, async (request) => {
+  const actor = await leerActor_(request);
+  if (actor.rol !== "admin") throw new HttpsError("permission-denied", "Solo un administrador puede resincronizar los espejos.");
+  const dias = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
+  try {
+    const [snapSol, snapUsr, snapOT, snapAsig, snapEv, espejoSol] = await Promise.all([
+      dbAlanis.collection("solicitudes").where("estado", "==", "pendiente").get(),
+      dbAlanis.collection("usuarios").where("rol", "==", "operador").get(),
+      dbAlanis.collection("ordenes_trabajo").where("timestamp", ">=", dias(DIAS_ESPEJO_ORDENES)).get(),
+      dbAlanis.collection("asignaciones").where("timestamp", ">=", dias(DIAS_ESPEJO_ASIGNACIONES)).get(),
+      dbAlanis.collection("eventos").where("timestamp", ">=", dias(DIAS_ESPEJO_EVENTOS)).orderBy("timestamp", "desc").get(),
+      dbLocal.collection(comunEspejos.COL.solicitudes).get(),
+    ]);
+
+    // Solicitudes: además de copiar las pendientes, borra espejos de las que ya se resolvieron.
+    const pendientes = new Set(snapSol.docs.map((d) => d.id));
+    const paresSol = snapSol.docs.map((d) => [d.id, comunEspejos.solicitud(d.data())]);
+    espejoSol.docs.forEach((d) => { if (!pendientes.has(d.id)) paresSol.push([d.id, null]); });
+
+    const ultimos = new Map();
+    snapEv.docs.forEach((d) => {
+      const ev = d.data();
+      if (!ev.uid || ultimos.has(ev.uid)) return;
+      const est = comunEspejos.estatus(ev);
+      if (est) ultimos.set(ev.uid, est);
+    });
+
+    const conteo = {
+      solicitudes: paresSol.length,
+      operadores: snapUsr.size,
+      ordenes: snapOT.size,
+      asignaciones: snapAsig.size,
+      estatus: ultimos.size,
+    };
+    await escribirEnLotes_(comunEspejos.COL.solicitudes, paresSol);
+    await escribirEnLotes_(comunEspejos.COL.operadores, snapUsr.docs.map((d) => [d.id, comunEspejos.operador(d.data())]));
+    await escribirEnLotes_(comunEspejos.COL.ordenes, snapOT.docs.map((d) => [d.id, comunEspejos.orden(d.data())]));
+    await escribirEnLotes_(comunEspejos.COL.asignaciones, snapAsig.docs.map((d) => [d.id, comunEspejos.asignacion(d.data())]));
+    await escribirEnLotes_(comunEspejos.COL.estatus, [...ultimos.entries()]);
+
+    await dbLocal.collection(COL_BITACORA).add({
+      tipo: "espejos_resincronizados", conteo, realizadoPor: actor, timestamp: FieldValue.serverTimestamp(),
+    });
+    logger.info(`[poblarEspejosOperadores] ${JSON.stringify(conteo)} por ${actor.uid}`);
+    return { ok: true, conteo };
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    logger.error(`[poblarEspejosOperadores] ${error.message}`);
+    throw new HttpsError("internal", "No se pudieron llenar los espejos: " + error.message);
+  }
+});
+
 // entrada: { uid, activo: boolean }
 exports.cambiarEstadoOperador = onCall({ region: REGION }, async (request) => {
   const actor = await leerActor_(request);

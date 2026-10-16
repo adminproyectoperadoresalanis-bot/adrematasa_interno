@@ -1,0 +1,120 @@
+// ============================================================================
+// Espejos en vivo Alanis Operadores → ADREMATASA (2026-10-16).
+//
+// ESTE ARCHIVO ES IDÉNTICO EN LOS DOS PROYECTOS (verificar con md5sum):
+//   - alanis-operadores/alanis-app-v2/functions/espejosOperadoresComun.js
+//     (lo usan los triggers de espejosAdrematasa.js: copian cada cambio)
+//   - adrematasa_interno/functions/espejosOperadoresComun.js
+//     (lo usa poblarEspejosOperadores: la copia inicial / resincronizar)
+// Si se cambia, se cambia en los dos y se despliegan ambos lados.
+//
+// Cada función recibe los datos del documento original y regresa lo que se
+// guarda en el espejo, o null si ese documento NO debe tener espejo (en cuyo
+// caso el espejo se borra). Solo se copian los campos que usan las pantallas
+// de ADREMATASA (nada de GPS, fotos ni datos que no se muestran).
+// ============================================================================
+
+const COL = {
+  solicitudes: "espejo_op_solicitudes",   // {uid}  solicitudes de ingreso PENDIENTES
+  operadores: "espejo_op_operadores",     // {uid}  usuarios con rol operador (activos e inactivos)
+  ordenes: "espejo_op_ordenes",           // {id}   ordenes_trabajo
+  asignaciones: "espejo_op_asignaciones", // {id}   asignaciones de viaje
+  estatus: "espejo_op_estatus",           // {uid}  ÚLTIMO estatus de patio de cada operador
+};
+
+const ESTATUS_PATIO = ["disponible", "taller", "enfermo", "permiso", "vacaciones", "incapacitado"];
+const TIPOS_RUTA = ["larga", "corta", "local"];
+
+function ms(ts) {
+  if (!ts) return null;
+  if (typeof ts.toMillis === "function") return ts.toMillis();
+  if (ts instanceof Date) return ts.getTime();
+  return null;
+}
+const txt = (v) => (v == null ? "" : String(v));
+
+function solicitud(d) {
+  if (!d || d.estado !== "pendiente") return null;
+  return {
+    nombre: txt(d.nombre),
+    correo: txt(d.correo),
+    unidad: txt(d.unidad),
+    lada: d.lada === "1" ? "1" : "52",
+    telefono: txt(d.telefono),
+    timestampMs: ms(d.timestamp),
+  };
+}
+
+function operador(d) {
+  if (!d || d.rol !== "operador") return null;
+  return {
+    nombre: txt(d.nombre),
+    nombreOficial: txt(d.nombreOficial),
+    correo: txt(d.correo),
+    numero: txt(d.numero),
+    tipoRuta: TIPOS_RUTA.includes(d.tipoRuta) ? d.tipoRuta : null,
+    lada: d.lada === "1" ? "1" : "52",
+    telefono: txt(d.telefono),
+    activo: d.activo === true,
+  };
+}
+
+function orden(d) {
+  if (!d) return null;
+  return {
+    folio: txt(d.folio),
+    uid: txt(d.uid),
+    operador: txt(d.operador),
+    unidad: txt(d.unidad || d.numero),
+    fecha: txt(d.fecha),
+    hora: txt(d.hora),
+    estado: d.estado || null,
+    fallas: (Array.isArray(d.fallas) ? d.fallas : []).filter(Boolean).map((f) => ({
+      id: typeof f.id === "number" ? f.id : null,
+      cat: txt(f.cat),
+      name: txt(f.name),
+      sev: txt(f.sev),
+      custom: !!f.custom,
+    })),
+    creadaDesde: d.creadaDesde || null,
+    creadoPorNombre: (d.creadoPorAdrematasa && d.creadoPorAdrematasa.nombre) || null,
+    timestampMs: ms(d.timestamp),
+  };
+}
+
+function asignacion(d) {
+  if (!d) return null;
+  return {
+    uidOperador: txt(d.uid_operador),
+    operadorNombre: txt(d.operador_nombre),
+    unidad: txt(d.unidad),
+    remolque: txt(d.remolque),
+    linea: txt(d.linea),
+    cliente: txt(d.cliente),
+    destino: txt(d.destino),
+    cita: txt(d.cita),
+    estado: txt(d.estado) || "pendiente",
+    motivoRechazo: txt(d.motivo_rechazo),
+    creadaDesde: d.creadaDesde || null,
+    timestampMs: ms(d.timestamp),
+  };
+}
+
+// De un documento de eventos: solo los estatus de PATIO cuentan para Turnos.
+function estatus(ev) {
+  if (!ev || !ev.uid) return null;
+  const id = ev.estatus || (Array.isArray(ev.estatus_ids) ? ev.estatus_ids[0] : "");
+  if (!ESTATUS_PATIO.includes(id)) return null;
+  return {
+    id,
+    ms: ms(ev.timestamp),
+    fecha: txt(ev.fecha),
+    hora: txt(ev.hora),
+    fechaRegreso: txt(ev.fecha_regreso || ev.vac_fin),
+    autorizo: txt(ev.autorizo),
+    dias: txt(ev.dias_incapacidad),
+    fallas: (Array.isArray(ev.fallas) ? ev.fallas : []).map((f) => f && f.name).filter(Boolean).slice(0, 5),
+  };
+}
+
+module.exports = { COL, ESTATUS_PATIO, solicitud, operador, orden, asignacion, estatus };

@@ -176,14 +176,57 @@ export function iniciarConfiguracion(contenedor) {
           <span class="cfg-titulos"><span class="cfg-titulo">Validación de QR</span><span class="cfg-resumen">Espacio para sus ajustes futuros (hoy no tiene).</span></span>
         </div>
       </div>
-      <div class="cfg-acordeon cfg-reservado">
-        <div class="cfg-fila">
+      <details class="cfg-acordeon">
+        <summary>
           <svg class="cfg-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="6" width="14" height="10" rx="1"/><path d="M15 9h4l3 3v4h-7"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg>
-          <span class="cfg-titulos"><span class="cfg-titulo">Operadores</span><span class="cfg-resumen">Aquí entrará el catálogo de fallas de las órdenes de trabajo (pendiente).</span></span>
-        </div>
+          <span class="cfg-titulos"><span class="cfg-titulo">Operadores</span><span class="cfg-resumen">Datos en vivo de Alanis Operadores (espejos).</span></span>
+          <span class="cfg-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div class="cfg-cuerpo">
+      <p class="nota">
+        Las pantallas de Operadores leen una copia en vivo de Alanis Operadores que se
+        actualiza sola en 1–2 segundos con cada cambio. Usa este botón solo la primera
+        vez, o si notas que algo no cuadra: vuelve a copiar todo (solicitudes pendientes,
+        operadores, órdenes de trabajo de 120 días, viajes de 60 días y el último estatus
+        de patio). Solo administradores.
+      </p>
+      <div id="espejos-error" class="error"></div>
+      <p id="espejos-exito" class="nota oculto" style="color:#1c7a41;"></p>
+      <div class="acciones-form" style="margin-top:14px;">
+        <button type="button" id="btn-resincronizar-espejos">Resincronizar datos de Alanis Operadores</button>
       </div>
+        </div>
+      </details>
     </div>
   `;
+
+  // Resincronizar espejos de Alanis Operadores (2026-10-16): llama a
+  // poblarEspejosOperadores (functions/operadoresAlanis.js, solo admin).
+  const btnEspejos = contenedor.querySelector("#btn-resincronizar-espejos");
+  btnEspejos.addEventListener("click", async () => {
+    const errorEspejos = contenedor.querySelector("#espejos-error");
+    const exitoEspejos = contenedor.querySelector("#espejos-exito");
+    errorEspejos.textContent = "";
+    exitoEspejos.classList.add("oculto");
+    btnEspejos.disabled = true;
+    const textoOriginal = btnEspejos.textContent;
+    btnEspejos.textContent = "Copiando… (puede tardar un minuto)";
+    try {
+      const { getFunctions, httpsCallable } = await import("https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js");
+      const fn = httpsCallable(getFunctions(undefined, "us-central1"), "poblarEspejosOperadores", { timeout: 300000 });
+      const { data } = await fn();
+      const c = (data && data.conteo) || {};
+      const nombres = { solicitudes: "solicitudes pendientes", operadores: "operadores", ordenes: "órdenes de trabajo", asignaciones: "viajes", estatus: "estatus de patio" };
+      const partes = Object.keys(c).map(k => `${c[k]} ${nombres[k] || k}`);
+      exitoEspejos.textContent = "Listo. " + (partes.length ? partes.join(" · ") : "Copia terminada.");
+      exitoEspejos.classList.remove("oculto");
+    } catch (err) {
+      errorEspejos.textContent = "No se pudo resincronizar: " + (err.message || err);
+    } finally {
+      btnEspejos.disabled = false;
+      btnEspejos.textContent = textoOriginal;
+    }
+  });
 
   contenedor.querySelectorAll(".cfg-secciones .subnav-boton").forEach(btn => {
     btn.addEventListener("click", () => {

@@ -771,6 +771,30 @@ service cloud.firestore {
         && request.resource.data.filas.size() <= 1000;
     }
 
+    // Espejos en vivo de Alanis Operadores (2026-10-16): los llenan las
+    // Cloud Functions (espejosAdrematasa.js allá y poblarEspejosOperadores
+    // aquí). Desde el navegador solo se leen.
+    match /espejo_op_solicitudes/{id} {
+      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('operadores');
+      allow write: if false;
+    }
+    match /espejo_op_operadores/{id} {
+      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('operadores');
+      allow write: if false;
+    }
+    match /espejo_op_ordenes/{id} {
+      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('operadores');
+      allow write: if false;
+    }
+    match /espejo_op_asignaciones/{id} {
+      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('operadores');
+      allow write: if false;
+    }
+    match /espejo_op_estatus/{id} {
+      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('operadores');
+      allow write: if false;
+    }
+
     match /bitacora_acciones_operadores/{id} {
       allow read: if esAdmin();
       allow write: if false;
