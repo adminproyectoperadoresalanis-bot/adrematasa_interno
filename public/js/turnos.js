@@ -12,8 +12,8 @@ import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/
 //
 // Estatus: lo que el operador ya marca desde su app (Disponible, Taller,
 // Enfermo, Permiso, Vacaciones, Incapacitado) y sus asignaciones de viaje,
-// leídos con la función estadoTurnosOperadores (otro proyecto → se refresca
-// cada minuto). Reglas acordadas con Ivan:
+// leídos con la función estadoTurnosOperadores (otro proyecto: se consulta al
+// abrir la pestaña y con "Actualizar estatus", sin refresco automático). Reglas acordadas con Ivan:
 //   - Un estatus solo cuenta si se marcó DESPUÉS de su entrada a patio.
 //   - Ruta corta: "Disponible" vence a las N horas (4 por default).
 // Partes siguientes: Asignar viaje (WhatsApp), Perdieron turno / En taller,
@@ -25,7 +25,12 @@ const fnEstadoTurnos = httpsCallable(funciones, "estadoTurnosOperadores");
 
 const DOC_PATIO = doc(db, "turnos_patio", "actual");
 const HORAS_VIGENCIA_CORTA = 4; // pasará a Configuración en la parte 4
-const REFRESCO_MS = 60 * 1000;
+// Sin refresco automático de estatus (2026-10-16): cada consulta lee ~2 semanas
+// de eventos/asignaciones/OT en Alanis Operadores (miles de lecturas). Se
+// consulta al abrir la pestaña y con "Actualizar estatus". Cuando existan los
+// espejos en vivo, Turnos se actualizará solo y sin este costo. El reloj de
+// abajo solo vuelve a dibujar (para que "vence a las…" avance), sin consultar.
+const REDIBUJO_MS = 60 * 1000;
 
 const ETIQUETA_RUTA = { larga: "LARGA", corta: "CORTA", local: "LOCAL" };
 const ESTATUS = {
@@ -237,8 +242,8 @@ export function iniciarTurnos(contenedor, datosUsuario, uid) {
   cargarEstado();
   const reloj = setInterval(() => {
     if (!contenedor.isConnected) { clearInterval(reloj); cancelarPatio(); return; }
-    cargarEstado();
-  }, REFRESCO_MS);
+    render(); // solo redibuja; no consulta a Alanis Operadores
+  }, REDIBUJO_MS);
 
   function construirFila() {
     if (!patio || !Array.isArray(patio.filas)) return { fila: [], sinOperador: 0 };
@@ -267,7 +272,7 @@ export function iniciarTurnos(contenedor, datosUsuario, uid) {
   function render() {
     const { fila, sinOperador } = construirFila();
     $("#tu-info").textContent = patio
-      ? `Reporte de patio del ${fechaCorta(patio.importadoMs)}${patio.importadoPor && patio.importadoPor.nombre ? " · pegado por " + patio.importadoPor.nombre : ""} · estatus del operador al ${generadoMs ? horaCorta(generadoMs) : "—"} (se actualiza cada minuto)`
+      ? `Reporte de patio del ${fechaCorta(patio.importadoMs)}${patio.importadoPor && patio.importadoPor.nombre ? " · pegado por " + patio.importadoPor.nombre : ""} · estatus del operador al ${generadoMs ? horaCorta(generadoMs) : "—"} (toca "Actualizar estatus" para traer lo más reciente)`
       : "Todavía no se ha pegado ningún reporte de patio.";
 
     const cuenta = (f) => fila.filter(it => { const prev = filtro; filtro = f; const ok = pasaFiltro(it); filtro = prev; return ok; }).length;
