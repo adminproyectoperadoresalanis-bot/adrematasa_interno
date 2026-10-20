@@ -26,6 +26,17 @@ const HORAS_VIGENCIA_CORTA = 4; // pasará a Configuración en la parte 4
 // El reloj solo vuelve a dibujar (para que "vence a las…" avance); no lee nada.
 const REDIBUJO_MS = 60 * 1000;
 
+// Color del renglón por estatus (2026-10-20, decidido con Ivan).
+const COLOR_FILA = {
+  disponible: "verde",
+  liberado_taller: "verdec",
+  vencido: "ambar",
+  taller: "rojo", enfermo: "rojo", incapacitado: "rojo",
+  permiso: "rojo", vacaciones: "rojo", rechazo: "rojo",
+  asignado: "azul", viaje: "azul",
+  sin: "gris",
+};
+
 const ETIQUETA_RUTA = { larga: "LARGA", corta: "CORTA", local: "LOCAL" };
 const ESTATUS = {
   disponible: { txt: "Disponible", clase: "tu-di" },
@@ -174,6 +185,21 @@ function inyectarEstilos() {
     .tu-chip { background: #fff; border: 1px solid #e2ddd5; border-radius: 14px; padding: 5px 11px; font: inherit; font-size: 12px; color: #6b5f52; cursor: pointer; }
     .tu-chip.activo { background: #2c1e0f; border-color: #2c1e0f; color: #fff; }
     .tu-tabla td { vertical-align: middle; }
+    /* Color por estatus (2026-10-20, pedido de Ivan): todo el renglón se pinta,
+       con una franja más fuerte a la izquierda. Texto casi negro (contraste >= 10:1). */
+    .tu-tabla { border-collapse: separate; border-spacing: 0 6px; }
+    .tu-tabla tr.tu-f td { border-bottom: none; color: #1F1A14; }
+    .tu-tabla tr.tu-f td:first-child { border-radius: 10px 0 0 10px; border-left: 6px solid transparent; }
+    .tu-tabla tr.tu-f td:last-child { border-radius: 0 10px 10px 0; }
+    .tu-tabla tr.tu-f .tu-sub, .tu-tabla tr.tu-f .tu-ad, .tu-tabla tr.tu-f .tu-num { color: #3D342B; }
+    .tu-tabla tr.tu-f .tu-ruta { background: rgba(255,255,255,.75); }
+    .tu-est { display: block; font-weight: 800; font-size: 13px; }
+    tr.tu-verde td { background: #B9E3A0; } tr.tu-verde td:first-child { border-left-color: #3B7A1E; }
+    tr.tu-verdec td { background: #DCEFCF; } tr.tu-verdec td:first-child { border-left-color: #3B7A1E; }
+    tr.tu-rojo td { background: #F5B7B1; } tr.tu-rojo td:first-child { border-left-color: #C0392B; }
+    tr.tu-gris td { background: #E4E1DC; } tr.tu-gris td:first-child { border-left-color: #9A938A; }
+    tr.tu-ambar td { background: #FBE3A8; } tr.tu-ambar td:first-child { border-left-color: #B45309; }
+    tr.tu-azul td { background: #CFE2F7; } tr.tu-azul td:first-child { border-left-color: #185FA5; }
     .tu-num { font-weight: 700; color: #8a7f73; width: 28px; }
     .tu-unidad { font-weight: 700; font-size: 14px; }
     .tu-sub { display: block; font-size: 11.5px; color: #8a7f73; }
@@ -306,13 +332,14 @@ export function iniciarTurnos(contenedor, datosUsuario, uid) {
           const horas = Math.max(0, Math.round((Date.now() - r.fechaPatioMs) / 3600000));
           const adre = [r.taller, r.disponible].filter(Boolean).join(" · ");
           const estatusHtml = it.noCoincide
-            ? `<span class="tu-b tu-nc">No coincide</span><span class="tu-sub">Reporte: ${esc(r.operador)} · corregir en Registrados</span>`
-            : `<span class="tu-b ${est.clase}">${esc(est.txt)}</span>${est.sub ? `<span class="tu-sub">${esc(est.sub)}</span>` : ""}${adre ? `<span class="tu-sub tu-ad">Adrematasa: ${esc(adre)}</span>` : ""}`;
+            ? `<span class="tu-est">No coincide</span><span class="tu-sub">Reporte: ${esc(r.operador)} · corregir en Registrados</span>`
+            : `<span class="tu-est">${esc(est.txt)}</span>${est.sub ? `<span class="tu-sub">${esc(est.sub)}</span>` : ""}${adre ? `<span class="tu-sub tu-ad">Adrematasa: ${esc(adre)}</span>` : ""}`;
+          const color = it.noCoincide ? "rojo" : (COLOR_FILA[est.clave] || "gris");
           const asig = op.asignacion && op.asignacion.ms >= r.fechaPatioMs ? op.asignacion : null;
           const viajeHtml = asig
             ? `${esc([asig.remolque, asig.cliente].filter(Boolean).join(" · ") || "Viaje")}<span class="tu-sub">${esc(asig.destino || "")}${asig.cita ? " · cita " + esc(asig.cita) : ""}</span>`
             : (r.remolque || r.cliente ? `${esc([r.remolque, r.cliente].filter(Boolean).join(" · "))}<span class="tu-sub">${esc(r.destino || "")} · preasignado en Adrematasa</span>` : "—");
-          return `<tr>
+          return `<tr class="tu-f tu-${color}">
             <td class="tu-num">${i + 1}</td>
             <td><span class="tu-unidad">${esc(op.numero)}</span>${ruta}<span class="tu-sub">${esc(nombre)}</span></td>
             <td>${fechaCorta(r.fechaPatioMs)}<span class="tu-sub">${horas} h</span></td>
