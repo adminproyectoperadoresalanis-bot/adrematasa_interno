@@ -22,7 +22,8 @@ const COL = {
   estatus: "espejo_op_estatus",           // {uid}  ÚLTIMO estatus de patio de cada operador
 };
 
-const ESTATUS_PATIO = ["disponible", "taller", "enfermo", "permiso", "vacaciones", "incapacitado"];
+// "liberado_taller" (2026-10-19): lo escribe el servidor al terminar la última OT abierta.
+const ESTATUS_PATIO = ["disponible", "taller", "enfermo", "permiso", "vacaciones", "incapacitado", "liberado_taller"];
 const TIPOS_RUTA = ["larga", "corta", "local"];
 
 function ms(ts) {
@@ -68,7 +69,6 @@ function orden(d) {
     unidad: txt(d.unidad || d.numero),
     fecha: txt(d.fecha),
     hora: txt(d.hora),
-    estado: d.estado || null,
     fallas: (Array.isArray(d.fallas) ? d.fallas : []).filter(Boolean).map((f) => ({
       id: typeof f.id === "number" ? f.id : null,
       cat: txt(f.cat),
@@ -79,6 +79,11 @@ function orden(d) {
     creadaDesde: d.creadaDesde || null,
     creadoPorNombre: (d.creadoPorAdrematasa && d.creadoPorAdrematasa.nombre) || null,
     timestampMs: ms(d.timestamp),
+    // Control de taller (2026-10-19): 'abierta' | 'terminada' | null (OTs viejas).
+    estado: d.estado === "abierta" || d.estado === "terminada" ? d.estado : null,
+    terminadaMs: ms(d.terminadaEn),
+    terminadaPorNombre: (d.terminadaPor && d.terminadaPor.nombre) || null,
+    comentarioCierre: txt(d.comentarioCierre),
   };
 }
 

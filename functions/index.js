@@ -773,3 +773,6 @@ exports.asignarRutaOperadores = require("./operadoresAlanis").asignarRutaOperado
 exports.estadoTurnosOperadores = require("./operadoresAlanis").estadoTurnosOperadores;
 
 exports.poblarEspejosOperadores = require("./operadoresAlanis").poblarEspejosOperadores;
+
+exports.terminarOrdenTrabajo = require("./operadoresAlanis").terminarOrdenTrabajo;
+exports.copiarEntradasPatio = require("./operadoresAlanis").copiarEntradasPatio;

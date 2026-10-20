@@ -20,6 +20,7 @@ const COL = {
   operadores: "espejo_op_operadores",
   asignaciones: "espejo_op_asignaciones",
   estatus: "espejo_op_estatus",
+  otAbiertas: "espejo_op_ordenes", // solo las OTs abiertas (control de taller, 2026-10-19)
 };
 // Turnos solo necesita los viajes recientes (la fila se reinicia con cada entrada a patio).
 const DIAS_ASIGNACIONES = 30;
@@ -28,6 +29,7 @@ const fuentes = {}; // nombre -> { lista, oyentes:Set, cancelar }
 
 function consulta(nombre) {
   const ref = collection(db, COL[nombre]);
+  if (nombre === "otAbiertas") return query(ref, where("estado", "==", "abierta"));
   if (nombre === "asignaciones") {
     return query(ref, where("timestampMs", ">=", Date.now() - DIAS_ASIGNACIONES * 24 * 60 * 60 * 1000));
   }

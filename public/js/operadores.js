@@ -14,8 +14,8 @@
 
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
 import { marcarAlerta } from "./navegacion.js";
-import { db } from "./firebase-config.js";
-import { collection, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { db, auth } from "./firebase-config.js";
+import { collection, query, where, onSnapshot, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { suscribirEspejo, leerEspejo, alSalirDePantalla, detenerEspejos } from "./espejosOperadores.js";
 
 const funciones = getFunctions(undefined, "us-central1");
@@ -24,6 +24,7 @@ const fnGuardarDatos = httpsCallable(funciones, "guardarDatosOperador");
 const fnCambiarEstado = httpsCallable(funciones, "cambiarEstadoOperador");
 const fnHistorialUnidad = httpsCallable(funciones, "historialUnidadOperador");
 const fnGuardarOT = httpsCallable(funciones, "guardarOrdenTrabajo");
+const fnTerminarOT = httpsCallable(funciones, "terminarOrdenTrabajo");
 const fnAsignarRuta = httpsCallable(funciones, "asignarRutaOperadores");
 
 // ---- Tipo de ruta (2026-10-15) ----
@@ -101,6 +102,17 @@ function inyectarEstilos() {
     .ot-acciones button { flex: 1; }
     .ot-encabezado { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
     .ot-origen { font-size: 11px; color: #8a7f73; margin-top: 4px; }
+    .ot-cab { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .ot-estado { font-size: 11px; font-weight: 700; border-radius: 10px; padding: 2px 9px; }
+    .ot-estado.abierta { background: #FCEBEB; color: #A32D2D; }
+    .ot-estado.terminada { background: #EAF3DE; color: #27500A; }
+    .ot-card.abierta { border-color: #E9B4AE; }
+    .ot-terminar { background: #3B7A1E !important; border-color: #3B7A1E !important; color: #fff !important; }
+    .ot-cierre { font-size: 11.5px; color: #27500A; margin-top: 6px; }
+    .ot-filtro-abiertas { margin: 4px 0 10px; }
+    .ot-filtro-abiertas button.activo { background: #A32D2D; border-color: #A32D2D; color: #fff; }
+    .ot-t-fila { display: flex; gap: 8px; }
+    .ot-t-fila input { flex: 1; min-width: 0; }
     .ot-m-fila { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid #f0ece6; font-size: 13px; }
     .ot-m-fila .ot-sev { margin-left: auto; }
     .ot-m-quitar { background: none; border: none; color: #E24B4A; font-size: 16px; cursor: pointer; padding: 0 4px; }
@@ -423,6 +435,7 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
         <div><label for="ot-hasta">Hasta</label><input type="date" id="ot-hasta" value="${fechaLocal(hoy)}"></div>
         <div style="flex:0 0 auto;min-width:0;"><button type="button" id="ot-buscar">Buscar</button></div>
       </div>
+      <div class="ot-filtro-abiertas"><button type="button" class="secundario" id="ot-abiertas">En taller ahora (…)</button></div>
       <div id="ot-error" class="error"></div>
       <div id="ot-lista"><p class="nota">Cargando…</p></div>
       <p id="ot-limite" class="nota oculto" style="margin-top:8px;"></p>
@@ -434,6 +447,26 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
   const inHasta = contenedor.querySelector("#ot-hasta");
   let ordenes = [];
   let cancelarOT = null;
+  // Control de taller (2026-10-19): "En taller ahora" muestra las OTs
+  // abiertas sin importar la fecha (las que tienen operadores bloqueados).
+  let soloAbiertas = false;
+  let abiertas = [];
+  const btnAbiertas = contenedor.querySelector("#ot-abiertas");
+  const cancelarAbiertas = suscribirEspejo("otAbiertas", (docs) => {
+    abiertas = docs.map(d => ({ ...d, id: d._id }))
+      .sort((a, b) => (a.timestampMs || 0) - (b.timestampMs || 0));
+    btnAbiertas.textContent = `En taller ahora (${abiertas.length})`;
+    if (soloAbiertas) render();
+  }, () => { btnAbiertas.textContent = "En taller ahora"; });
+  alSalirDePantalla(contenedor, cancelarAbiertas);
+  btnAbiertas.addEventListener("click", () => {
+    soloAbiertas = !soloAbiertas;
+    btnAbiertas.classList.toggle("activo", soloAbiertas);
+    render();
+  });
+  // ¿Puede terminar OTs? admin, o puesto/área de Coordinador (igual que la función).
+  let puedeTerminar = false;
+  leerPuedeTerminarOT().then(v => { puedeTerminar = v; render(); });
   // Si ya se consultó otro rango en esta sesión, se abre con ese mismo rango.
   if (otVivo) { inDesde.value = otVivo.desde; inHasta.value = otVivo.hasta; }
 
@@ -466,11 +499,12 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
   alSalirDePantalla(contenedor, () => { if (cancelarOT) cancelarOT(); });
 
   function render() {
-    if (ordenes.length === 0) {
-      lista.innerHTML = `<p class="nota" style="text-align:center;padding:16px;">Sin órdenes en este período.</p>`;
+    const fuente = soloAbiertas ? abiertas : ordenes;
+    if (fuente.length === 0) {
+      lista.innerHTML = `<p class="nota" style="text-align:center;padding:16px;">${soloAbiertas ? "No hay unidades en taller." : "Sin órdenes en este período."}</p>`;
       return;
     }
-    lista.innerHTML = ordenes.map(o => {
+    lista.innerHTML = fuente.map(o => {
       let fechaFmt = "—";
       if (o.fecha) {
         const p = o.fecha.split("-");
@@ -480,28 +514,47 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
         <div class="ot-falla"><span>• ${esc(f.name)}</span>
           <span class="ot-sev ${esc(f.sev)}">${esc(SEV_LABEL[f.sev] || f.sev)}</span></div>`).join("");
       const mas = o.fallas.length > 5 ? `<div class="op-sub" style="margin-top:4px;">+${o.fallas.length - 5} más...</div>` : "";
+      const estadoHtml = o.estado === "abierta"
+        ? `<span class="ot-estado abierta">Abierta · operador en taller</span>`
+        : o.estado === "terminada" ? `<span class="ot-estado terminada">Terminada</span>` : "";
+      const cierre = o.estado === "terminada"
+        ? `<div class="ot-cierre">✔ Terminada ${esc(fechaHoraCorta(o.terminadaMs))}${o.terminadaPorNombre ? " por " + esc(o.terminadaPorNombre) : ""}${o.comentarioCierre ? " · " + esc(o.comentarioCierre) : ""}</div>` : "";
+      const btnTerminar = puedeTerminar && o.estado === "abierta"
+        ? `<button type="button" class="ot-terminar" data-id="${esc(o.id)}">✔ Terminar OT</button>` : "";
       return `
-        <div class="ot-card">
-          <div class="ot-folio">${esc(o.folio)}</div>
+        <div class="ot-card${o.estado === "abierta" ? " abierta" : ""}">
+          <div class="ot-cab"><div class="ot-folio">${esc(o.folio)}</div>${estadoHtml}</div>
           <div class="op-sub" style="margin:4px 0 8px;">${esc(o.operador || "—")} — Unidad: ${esc(o.unidad || "—")} — ${esc(fechaFmt)}</div>
           <div>${fallas}${mas}</div>
           ${o.creadaDesde === "ADREMATASA" ? `<div class="ot-origen">Creada desde ADREMATASA${o.creadoPorNombre ? " por " + esc(o.creadoPorNombre) : ""}</div>` : ""}
+          ${o.creadaDesde === "app_operador" ? `<div class="ot-origen">Reportada por el operador desde su app</div>` : ""}
+          ${cierre}
           <div class="ot-acciones">
             <button type="button" class="secundario ot-editar" data-id="${esc(o.id)}">Editar</button>
             <button type="button" class="ot-imprimir" data-id="${esc(o.id)}">Imprimir</button>
+            ${btnTerminar}
           </div>
         </div>`;
     }).join("");
     lista.querySelectorAll(".ot-imprimir").forEach(btn => {
       btn.addEventListener("click", () => {
-        const ot = ordenes.find(x => x.id === btn.dataset.id);
+        const ot = fuente.find(x => x.id === btn.dataset.id);
         if (ot) imprimirOrdenTaller(ot, nombreUsuario);
       });
     });
     lista.querySelectorAll(".ot-editar").forEach(btn => {
       btn.addEventListener("click", () => {
-        const ot = ordenes.find(x => x.id === btn.dataset.id);
+        const ot = fuente.find(x => x.id === btn.dataset.id);
         if (ot) abrirModalOT(ot, alGuardar);
+      });
+    });
+    lista.querySelectorAll(".ot-terminar").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const ot = fuente.find(x => x.id === btn.dataset.id);
+        if (ot) abrirModalTerminarOT(ot, (folio) => {
+          exitoP.textContent = `Orden ${folio} terminada. El operador ya puede ponerse Disponible.`;
+          exitoP.classList.remove("oculto");
+        });
       });
     });
   }
@@ -517,6 +570,81 @@ export function iniciarOrdenesTrabajo(contenedor, nombreUsuario) {
   contenedor.querySelector("#ot-nueva").addEventListener("click", () => abrirModalOT(null, alGuardar));
   contenedor.querySelector("#ot-buscar").addEventListener("click", cargar);
   cargar();
+}
+
+// ---- Terminar OT (2026-10-19) — control de taller ----------------------------
+function fechaHoraCorta(ms) {
+  if (!ms) return "—";
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function sinAcentos(t) {
+  return String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+let promesaPuedeTerminar = null;
+function leerPuedeTerminarOT() {
+  if (!promesaPuedeTerminar) {
+    const uid = auth.currentUser && auth.currentUser.uid;
+    promesaPuedeTerminar = !uid ? Promise.resolve(false) : getDoc(doc(db, "usuarios", uid)).then(s => {
+      const u = s.exists() ? s.data() : {};
+      return u.rol === "admin" || sinAcentos(u.puesto).includes("coordinador") || sinAcentos(u.area).includes("coordinador");
+    }).catch(() => { promesaPuedeTerminar = null; return false; });
+  }
+  return promesaPuedeTerminar;
+}
+
+function abrirModalTerminarOT(ot, alTerminar) {
+  const ahora = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const hoyTxt = `${ahora.getFullYear()}-${p(ahora.getMonth() + 1)}-${p(ahora.getDate())}`;
+  const horaTxt = `${p(ahora.getHours())}:${p(ahora.getMinutes())}`;
+  const fondo = document.createElement("div");
+  fondo.className = "op-modal-fondo";
+  fondo.innerHTML = `
+    <div class="op-modal" role="dialog" aria-modal="true">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+        <div style="font-size:17px;font-weight:700;">Terminar OT ${esc(ot.folio)}</div>
+        <button type="button" class="secundario op-cerrar" aria-label="Cerrar">✕</button>
+      </div>
+      <div class="op-sub" style="margin-top:4px;">${esc(ot.operador || "—")} — Unidad ${esc(ot.unidad || "—")}</div>
+      <label>Fecha y hora en que se terminó</label>
+      <div class="ot-t-fila">
+        <input type="date" class="ot-t-fecha" value="${hoyTxt}" max="${hoyTxt}">
+        <input type="time" class="ot-t-hora" value="${horaTxt}">
+      </div>
+      <label>Comentario (opcional)</label>
+      <input type="text" class="ot-t-coment" maxlength="300" placeholder="Ej: se cambió sensor, unidad lista">
+      <p class="nota" style="margin:10px 0 0;">${esc(ot.operador || "El operador")} saldrá de <b>En taller</b> y su app le pedirá ponerse Disponible.</p>
+      <div class="error ot-t-error" style="margin-top:10px;"></div>
+      <div class="op-botones"><button type="button" class="secundario op-cerrar2">Cancelar</button><button type="button" class="ot-t-ok">Terminar OT</button></div>
+    </div>`;
+  document.body.appendChild(fondo);
+  const cerrar = () => fondo.remove();
+  fondo.querySelector(".op-cerrar").addEventListener("click", cerrar);
+  fondo.querySelector(".op-cerrar2").addEventListener("click", cerrar);
+  fondo.addEventListener("click", (e) => { if (e.target === fondo) cerrar(); });
+  const errorEl = fondo.querySelector(".ot-t-error");
+  const btn = fondo.querySelector(".ot-t-ok");
+  btn.addEventListener("click", async () => {
+    errorEl.textContent = "";
+    const f = fondo.querySelector(".ot-t-fecha").value;
+    const h = fondo.querySelector(".ot-t-hora").value;
+    if (!f || !h) { errorEl.textContent = "Indica la fecha y la hora."; return; }
+    const ms = new Date(`${f}T${h}:00`).getTime();
+    if (!isFinite(ms)) { errorEl.textContent = "Fecha u hora no válida."; return; }
+    if (ms > Date.now() + 60 * 1000) { errorEl.textContent = "La fecha de término no puede ser futura."; return; }
+    if (ot.timestampMs && ms < ot.timestampMs - 60 * 1000) { errorEl.textContent = "No puede ser anterior a la creación de la orden (" + fechaHoraCorta(ot.timestampMs) + ")."; return; }
+    btn.disabled = true;
+    try {
+      const res = await fnTerminarOT({ id: ot.id, fechaMs: ms, comentario: fondo.querySelector(".ot-t-coment").value });
+      cerrar();
+      alTerminar(res.data.folio || ot.folio);
+    } catch (err) {
+      errorEl.textContent = mensajeError(err, "No se pudo terminar la orden.");
+      btn.disabled = false;
+    }
+  });
 }
 
 // ---- Lista de operadores para el selector de la OT (2026-10-14) ----

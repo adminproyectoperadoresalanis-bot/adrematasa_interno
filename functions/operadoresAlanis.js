@@ -21,8 +21,9 @@
 // ============================================================================
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { getApp } = require("firebase-admin/app");
-const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 
 const REGION = "us-central1";
@@ -740,5 +741,106 @@ exports.historialUnidadOperador = onCall({ region: REGION }, async (request) => 
     if (error instanceof HttpsError) throw error;
     logger.error(`[historialUnidadOperador] ${error.message}`);
     throw new HttpsError("internal", "No se pudo cargar el historial.");
+  }
+});
+
+// ---- Control de taller (2026-10-19, pedido de Ivan) ---------------------------
+// Terminar una OT libera al operador de "En taller" (lo hace el trigger
+// estatusOperadorPorOT en alanis-operadores al ver estado:'terminada').
+// Solo admin o un Coordinador (puesto o área que diga "Coordinador").
+// entrada: { id, fechaMs, comentario? }
+function normalizarTexto_(t) {
+  return String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+function puedeTerminarOT_(actor) {
+  return actor.rol === "admin"
+    || normalizarTexto_(actor.puesto).includes("coordinador")
+    || normalizarTexto_(actor.area).includes("coordinador");
+}
+
+exports.terminarOrdenTrabajo = onCall({ region: REGION }, async (request) => {
+  const actor = await leerActor_(request);
+  if (!puedeTerminarOT_(actor)) {
+    throw new HttpsError("permission-denied", "Solo un Coordinador o un administrador puede terminar órdenes de trabajo.");
+  }
+  const e = request.data || {};
+  const id = typeof e.id === "string" ? e.id.trim() : "";
+  if (!id || id.includes("/")) throw new HttpsError("invalid-argument", "Orden no válida.");
+  const fechaMs = Number(e.fechaMs);
+  if (!isFinite(fechaMs) || fechaMs <= 0) throw new HttpsError("invalid-argument", "Indica la fecha y hora en que se terminó.");
+  if (fechaMs > Date.now() + 2 * 60 * 1000) throw new HttpsError("invalid-argument", "La fecha de término no puede ser futura.");
+  const comentario = typeof e.comentario === "string" ? e.comentario.trim().slice(0, 300) : "";
+
+  const ref = dbAlanis.collection("ordenes_trabajo").doc(id);
+  try {
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError("not-found", "La orden ya no existe.");
+    const o = snap.data();
+    if (o.estado === "terminada") throw new HttpsError("failed-precondition", "Esta orden ya estaba terminada.");
+    const creadaMs = aMillis_(o.timestamp);
+    if (creadaMs && fechaMs < creadaMs - 60 * 1000) {
+      throw new HttpsError("invalid-argument", "La fecha de término no puede ser anterior a la creación de la orden.");
+    }
+    const terminadaPor = { uid: actor.uid, nombre: actor.nombre, puesto: actor.puesto };
+    await ref.update({
+      estado: "terminada",
+      terminadaEn: Timestamp.fromMillis(fechaMs),
+      terminadaPor,
+      comentarioCierre: comentario,
+      terminadaRegistradaEn: FieldValue.serverTimestamp(),
+    });
+    await dbLocal.collection(COL_BITACORA).add({
+      tipo: "ot_terminada",
+      otId: id,
+      folio: o.folio || "",
+      operadorNombre: o.operador || "",
+      unidad: o.unidad || o.numero || "",
+      terminadaMs: fechaMs,
+      comentario,
+      realizadoPor: actor,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+    logger.info(`[terminarOrdenTrabajo] ${o.folio || id} por ${actor.uid}`);
+    return { ok: true, folio: o.folio || "" };
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    logger.error(`[terminarOrdenTrabajo] ${error.message}`);
+    throw new HttpsError("internal", "No se pudo terminar la orden. Intenta de nuevo.");
+  }
+});
+
+// Entradas a patio → Alanis Operadores (2026-10-19): cada vez que se pega el
+// reporte de patio en Turnos (turnos_patio/actual), se copia a
+// entradas_patio/{UNIDAD} allá la fecha de entrada de cada unidad. La app del
+// operador la usa para dejarlo (o no) ponerse Disponible. Las unidades que ya
+// no vienen en el reporte se borran: sin entrada, no hay Disponible.
+exports.copiarEntradasPatio = onDocumentWritten({ document: "turnos_patio/{id}", region: REGION }, async (event) => {
+  if (event.params.id !== "actual") return;
+  const despues = event.data.after.exists ? event.data.after.data() : null;
+  const reporteMs = despues ? Number(despues.importadoMs) || Date.now() : null;
+  const porUnidad = new Map();
+  ((despues && Array.isArray(despues.filas)) ? despues.filas : []).forEach((r) => {
+    const unidad = String((r && r.unidad) || "").trim().toUpperCase();
+    const ms = Number(r && r.fechaPatioMs);
+    if (!unidad || unidad.includes("/") || unidad.length > 20 || !isFinite(ms)) return;
+    if (!porUnidad.has(unidad) || porUnidad.get(unidad) < ms) porUnidad.set(unidad, ms);
+  });
+  try {
+    const col = dbAlanis.collection("entradas_patio");
+    const existentes = await col.get();
+    const ops = [];
+    existentes.docs.forEach((d) => { if (!porUnidad.has(d.id)) ops.push((b) => b.delete(d.ref)); });
+    porUnidad.forEach((ms, unidad) => {
+      ops.push((b) => b.set(col.doc(unidad), { unidad, fechaPatioMs: ms, reporteMs, copiadoEn: FieldValue.serverTimestamp() }));
+    });
+    for (let i = 0; i < ops.length; i += 400) {
+      const lote = dbAlanis.batch();
+      ops.slice(i, i + 400).forEach((op) => op(lote));
+      await lote.commit();
+    }
+    logger.info(`[copiarEntradasPatio] ${porUnidad.size} unidades`);
+  } catch (error) {
+    logger.error(`[copiarEntradasPatio] ${error.message}`);
+    throw error;
   }
 });

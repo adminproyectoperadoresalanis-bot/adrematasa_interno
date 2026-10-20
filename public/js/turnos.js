@@ -34,6 +34,8 @@ const ESTATUS = {
   permiso: { txt: "Permiso", clase: "tu-pe" },
   vacaciones: { txt: "Vacaciones", clase: "tu-pe" },
   incapacitado: { txt: "Incapacitado", clase: "tu-en" },
+  // 2026-10-19: lo escribe el servidor al terminar su OT; debe marcar Disponible.
+  liberado_taller: { txt: "Liberado de taller", clase: "tu-sr" },
 };
 
 function esc(t) {
@@ -156,6 +158,7 @@ function calcularEstatus(op, fechaPatioMs, ahora) {
     return { clave: "disponible", txt: "Disponible", clase: base.clase, sub: `App ${fechaCorta(est.ms)}` };
   }
   let sub = `App ${fechaCorta(est.ms)}`;
+  if (est.id === "liberado_taller") sub = `${fechaCorta(est.ms)} · falta marcar Disponible`;
   if (est.id === "taller" && est.fallas && est.fallas.length) sub = est.fallas.join(", ");
   if ((est.id === "permiso" || est.id === "vacaciones") && est.fechaRegreso) sub = `regresa ${est.fechaRegreso}${est.autorizo ? " · autorizó " + est.autorizo : ""}`;
   return { clave: est.id, txt: base.txt, clase: base.clase, sub };
