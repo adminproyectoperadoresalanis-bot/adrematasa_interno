@@ -776,3 +776,10 @@ exports.poblarEspejosOperadores = require("./operadoresAlanis").poblarEspejosOpe
 
 exports.terminarOrdenTrabajo = require("./operadoresAlanis").terminarOrdenTrabajo;
 exports.copiarEntradasPatio = require("./operadoresAlanis").copiarEntradasPatio;
+
+exports.calcularAsistenciaSemana = require("./operadoresAlanis").calcularAsistenciaSemana;
+exports.ajustarAsistenciaDia = require("./operadoresAlanis").ajustarAsistenciaDia;
+exports.autorizarAsistenciaSemana = require("./operadoresAlanis").autorizarAsistenciaSemana;
+exports.reabrirAsistenciaSemana = require("./operadoresAlanis").reabrirAsistenciaSemana;
+
+exports.correoAsistenciaAutorizada = require("./operadoresAlanis").correoAsistenciaAutorizada;

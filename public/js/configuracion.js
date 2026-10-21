@@ -1,6 +1,6 @@
 import { db } from "./firebase-config.js";
 import {
-  doc, setDoc, onSnapshot
+  doc, setDoc, onSnapshot, getDoc
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { UMBRALES_DEFAULT, FESTIVOS_DEFAULT } from "./vacacionesCalculo.js";
 import { AREAS_DEFAULT } from "./estructuraOrganizacional.js";
@@ -179,10 +179,32 @@ export function iniciarConfiguracion(contenedor) {
       <details class="cfg-acordeon">
         <summary>
           <svg class="cfg-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="6" width="14" height="10" rx="1"/><path d="M15 9h4l3 3v4h-7"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg>
-          <span class="cfg-titulos"><span class="cfg-titulo">Operadores</span><span class="cfg-resumen">Datos en vivo de Alanis Operadores (espejos).</span></span>
+          <span class="cfg-titulos"><span class="cfg-titulo">Operadores</span><span class="cfg-resumen" id="resumen-operadores">Asistencia ruta corta · datos en vivo de Alanis Operadores</span></span>
           <span class="cfg-chevron" aria-hidden="true">›</span>
         </summary>
         <div class="cfg-cuerpo">
+      <h3 style="font-size:15px;margin:0 0 6px;">Asistencia · ruta corta</h3>
+      <p class="nota">
+        Pago diario a operadores de ruta corta (Operadores → Asistencia). Un día se paga si tuvo
+        entrada a patio y además estuvo Disponible sin dejarlo vencer hasta la hora de corte,
+        aceptó un viaje o estuvo en taller.
+      </p>
+      <div id="asist-error" class="error"></div>
+      <p id="asist-exito" class="nota oculto" style="color:#1c7a41;"></p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:160px;"><label for="asist-pago">Pago por día ($)</label><input type="number" id="asist-pago" min="0" step="0.01" placeholder="Ej: 350"></div>
+        <div style="flex:1;min-width:160px;"><label for="asist-corte">Hora de corte del día</label><input type="time" id="asist-corte" value="18:00"></div>
+      </div>
+      <label for="asist-para" style="margin-top:12px;display:block;">Correo al autorizar la semana · Para (separa con coma)</label>
+      <input type="text" id="asist-para" placeholder="nomina@alanis.com.mx, ...">
+      <label for="asist-cc" style="margin-top:8px;display:block;">CC</label>
+      <input type="text" id="asist-cc" placeholder="opcional">
+      <label style="margin-top:12px;display:block;">Pueden reabrir una semana ya autorizada (además del admin)</label>
+      <div id="asist-puestos" class="nota" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:6px;">Cargando puestos…</div>
+      <div class="acciones-form" style="margin-top:14px;">
+        <button type="button" id="btn-guardar-asistencia">Guardar asistencia</button>
+      </div>
+      <hr style="border:none;border-top:1px solid #efebe5;margin:18px 0;">
       <p class="nota">
         Las pantallas de Operadores leen una copia en vivo de Alanis Operadores que se
         actualiza sola en 1–2 segundos con cada cambio. Usa este botón solo la primera
@@ -199,6 +221,56 @@ export function iniciarConfiguracion(contenedor) {
       </details>
     </div>
   `;
+
+  // Asistencia ruta corta (2026-10-20): configuracion/asistencia
+  // { pagoDia, horaCorte, reabrenPuestos[] }. Lo leen las funciones de
+  // operadoresAlanis.js (calcularAsistenciaSemana, reabrirAsistenciaSemana).
+  const refAsistencia = doc(db, "configuracion", "asistencia");
+  const cajaPuestos = contenedor.querySelector("#asist-puestos");
+  let reabrenGuardados = [];
+  function pintarPuestos(lista) {
+    if (!lista.length) { cajaPuestos.textContent = "No hay puestos en Áreas y puestos."; return; }
+    cajaPuestos.innerHTML = lista.map(p => `<label style="display:inline-flex;gap:5px;align-items:center;margin:0;color:#2c1e0f;"><input type="checkbox" class="asist-puesto" value="${escapeHtml(p)}" style="width:auto;"${reabrenGuardados.includes(p) ? " checked" : ""}> ${escapeHtml(p)}</label>`).join("");
+  }
+  let puestosCatalogo = [];
+  getDoc(doc(db, "configuracion", "estructura")).then(s => {
+    const areas = (s.exists() && Array.isArray(s.data().areas)) ? s.data().areas : AREAS_DEFAULT;
+    puestosCatalogo = [...new Set(areas.flatMap(a => (a && Array.isArray(a.puestos)) ? a.puestos : []).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
+    pintarPuestos(puestosCatalogo);
+  }).catch(() => { cajaPuestos.textContent = "No se pudieron cargar los puestos."; });
+  onSnapshot(refAsistencia, (s) => {
+    const c = s.exists() ? s.data() : {};
+    contenedor.querySelector("#asist-pago").value = typeof c.pagoDia === "number" ? c.pagoDia : "";
+    contenedor.querySelector("#asist-corte").value = c.horaCorte || "18:00";
+    contenedor.querySelector("#asist-para").value = Array.isArray(c.destinatarios) ? c.destinatarios.join(", ") : "";
+    contenedor.querySelector("#asist-cc").value = Array.isArray(c.cc) ? c.cc.join(", ") : "";
+    reabrenGuardados = Array.isArray(c.reabrenPuestos) ? c.reabrenPuestos : [];
+    if (puestosCatalogo.length) pintarPuestos(puestosCatalogo);
+    const r = contenedor.querySelector("#resumen-operadores");
+    if (r) r.textContent = typeof c.pagoDia === "number"
+      ? `Asistencia: $${c.pagoDia.toLocaleString("es-MX")} por día · corte ${c.horaCorte || "18:00"}`
+      : "Asistencia ruta corta: falta capturar el pago por día";
+  });
+  contenedor.querySelector("#btn-guardar-asistencia").addEventListener("click", async () => {
+    const err = contenedor.querySelector("#asist-error");
+    const ok = contenedor.querySelector("#asist-exito");
+    err.textContent = ""; ok.classList.add("oculto");
+    const pago = Number(contenedor.querySelector("#asist-pago").value);
+    const corte = contenedor.querySelector("#asist-corte").value || "18:00";
+    if (!isFinite(pago) || pago < 0 || contenedor.querySelector("#asist-pago").value === "") { err.textContent = "Captura un pago por día válido."; return; }
+    const reabren = [...cajaPuestos.querySelectorAll(".asist-puesto:checked")].map(x => x.value);
+    const correos = (id) => contenedor.querySelector(id).value.split(/[,;\s]+/).map(x => x.trim()).filter(Boolean);
+    const para = correos("#asist-para"), cc = correos("#asist-cc");
+    const malo = [...para, ...cc].find(x => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+    if (malo) { err.textContent = `Correo no válido: ${malo}`; return; }
+    try {
+      await setDoc(refAsistencia, { pagoDia: Math.round(pago * 100) / 100, horaCorte: corte, reabrenPuestos: reabren, destinatarios: para, cc, actualizadoEn: new Date().toISOString() }, { merge: true });
+      ok.textContent = "Guardado. Aplica a las semanas que todavía no estén autorizadas.";
+      ok.classList.remove("oculto");
+    } catch (e) {
+      err.textContent = "No se pudo guardar: " + e.message;
+    }
+  });
 
   // Resincronizar espejos de Alanis Operadores (2026-10-16): llama a
   // poblarEspejosOperadores (functions/operadoresAlanis.js, solo admin).

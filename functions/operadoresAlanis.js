@@ -22,6 +22,7 @@
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentWritten } = require("firebase-functions/v2/firestore");
+const { defineSecret } = require("firebase-functions/params");
 const { getApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
@@ -838,9 +839,431 @@ exports.copiarEntradasPatio = onDocumentWritten({ document: "turnos_patio/{id}",
       ops.slice(i, i + 400).forEach((op) => op(lote));
       await lote.commit();
     }
+    // Historial (2026-10-20, Asistencia): cada entrada queda guardada aquí
+    // (appadrematasainterno) para saber qué días tuvo entrada a patio cada
+    // unidad. Mismo id por unidad + fecha de entrada: volver a pegar el mismo
+    // reporte no duplica nada.
+    const hist = [...porUnidad.entries()];
+    for (let i = 0; i < hist.length; i += 400) {
+      const lote = dbLocal.batch();
+      hist.slice(i, i + 400).forEach(([unidad, ms]) => {
+        lote.set(dbLocal.collection(COL_HIST_ENTRADAS).doc(`${unidad}_${ms}`), { unidad, fechaPatioMs: ms, reporteMs }, { merge: true });
+      });
+      await lote.commit();
+    }
     logger.info(`[copiarEntradasPatio] ${porUnidad.size} unidades`);
   } catch (error) {
     logger.error(`[copiarEntradasPatio] ${error.message}`);
     throw error;
   }
 });
+
+// ============================================================================
+// ASISTENCIA ruta corta (2026-10-20, pedido de Ivan)
+// ============================================================================
+// Semana de lunes a domingo (hora de Nuevo Laredo). Un día es PAGABLE si el
+// operador tuvo entrada a patio (historial_entradas_patio) y además:
+//   - aceptó un viaje ese día, o
+//   - estuvo en taller en algún momento del día, o
+//   - estuvo Disponible y lo mantuvo vigente: cada Disponible dura
+//     HORAS_VIGENCIA_ASIST; si vence antes de la hora de corte del día sin
+//     reconfirmar (ni pasar a viaje/taller/otro estatus) => "vencido": se
+//     guarda en el historial pero NO se paga.
+// Quien revisa (Coordinador/Supervisor/Auxiliar o admin) puede ajustar un día
+// (pagar / no pagar) con motivo, y autorizar la semana: queda congelada.
+// Reabrir: admin o los puestos marcados en Configuración.
+const COL_HIST_ENTRADAS = "historial_entradas_patio";
+const COL_ASIST_SEMANAS = "asistencia_semanas";
+const COL_ASIST_AJUSTES = "asistencia_ajustes";
+const HORAS_VIGENCIA_ASIST = 4; // igual que Turnos y la app del operador
+const PUESTOS_REVISAN = ["coordinador", "supervisor", "auxiliar"];
+const DIA_MS = 24 * 60 * 60 * 1000;
+const RE_FECHA_ASIST = /^\d{4}-\d{2}-\d{2}$/;
+
+function offsetTZ_(ms) {
+  const p = new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ_OPERACION, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(new Date(ms));
+  const v = (t) => Number((p.find((x) => x.type === t) || {}).value);
+  return Date.UTC(v("year"), v("month") - 1, v("day"), v("hour") % 24, v("minute"), v("second")) - Math.floor(ms / 1000) * 1000;
+}
+// "2026-10-19" + minutos del día (hora local) -> ms
+function msLocal_(fecha, minutos) {
+  const [y, m, d] = fecha.split("-").map(Number);
+  const base = Date.UTC(y, m - 1, d) + minutos * 60000;
+  let ms = base - offsetTZ_(base);
+  ms = base - offsetTZ_(ms);
+  return ms;
+}
+function sumarDias_(fecha, n) {
+  const [y, m, d] = fecha.split("-").map(Number);
+  const x = new Date(Date.UTC(y, m - 1, d + n));
+  return x.toISOString().slice(0, 10);
+}
+function horaLocal_(ms) {
+  return new Intl.DateTimeFormat("es-MX", { timeZone: TZ_OPERACION, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(ms));
+}
+function minutosCorte_(txt) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(txt || ""));
+  if (!m) return 18 * 60;
+  return Math.min(23 * 60 + 59, Number(m[1]) * 60 + Number(m[2]));
+}
+function normPuesto_(t) {
+  return String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+}
+function puedeRevisarAsistencia_(actor) {
+  if (actor.rol === "admin") return true;
+  const p = normPuesto_(actor.puesto);
+  return PUESTOS_REVISAN.some((x) => p.includes(x));
+}
+async function leerConfigAsistencia_() {
+  const s = await dbLocal.collection("configuracion").doc("asistencia").get();
+  const c = s.exists ? s.data() : {};
+  return {
+    pagoDia: typeof c.pagoDia === "number" && c.pagoDia >= 0 ? c.pagoDia : 0,
+    horaCorte: typeof c.horaCorte === "string" ? c.horaCorte : "18:00",
+    reabrenPuestos: Array.isArray(c.reabrenPuestos) ? c.reabrenPuestos.map(normPuesto_) : [],
+  };
+}
+function validarLunes_(lunes) {
+  if (typeof lunes !== "string" || !RE_FECHA_ASIST.test(lunes)) throw new HttpsError("invalid-argument", "Semana no válida.");
+  const [y, m, d] = lunes.split("-").map(Number);
+  if (new Date(Date.UTC(y, m - 1, d)).getUTCDay() !== 1) throw new HttpsError("invalid-argument", "La semana debe empezar en lunes.");
+  return lunes;
+}
+
+const PATIO_ASIST = ["disponible", "taller", "enfermo", "permiso", "vacaciones", "incapacitado", "liberado_taller"];
+const ETQ_ASIST = { disponible: "Disponible", taller: "Taller", enfermo: "Enfermo", permiso: "Permiso", vacaciones: "Vacaciones", incapacitado: "Incapacitado", liberado_taller: "Liberado de taller" };
+
+async function calcularSemana_(lunes, cfg) {
+  const fechas = [0, 1, 2, 3, 4, 5, 6].map((i) => sumarDias_(lunes, i));
+  const inicio = msLocal_(fechas[0], 0);
+  const fin = msLocal_(sumarDias_(lunes, 7), 0);
+  const ahora = Date.now();
+  const corteMin = minutosCorte_(cfg.horaCorte);
+  const vig = HORAS_VIGENCIA_ASIST * 3600 * 1000;
+
+  const [snapOps, snapEv, snapAsig, snapEnt, snapAj] = await Promise.all([
+    dbAlanis.collection("usuarios").where("rol", "==", "operador").get(),
+    dbAlanis.collection("eventos").where("timestamp", ">=", new Date(inicio - 14 * DIA_MS)).where("timestamp", "<", new Date(fin)).get(),
+    dbAlanis.collection("asignaciones").where("timestamp", ">=", new Date(inicio - 14 * DIA_MS)).get(),
+    dbLocal.collection(COL_HIST_ENTRADAS).where("fechaPatioMs", ">=", inicio - 60 * DIA_MS).where("fechaPatioMs", "<", fin).get(),
+    dbLocal.collection(COL_ASIST_AJUSTES).where("semana", "==", lunes).get(),
+  ]);
+
+  const ops = snapOps.docs.map((d) => ({ uid: d.id, ...d.data() }))
+    .filter((o) => o.tipoRuta === "corta")
+    .map((o) => ({ uid: o.uid, unidad: String(o.numero || "").trim().toUpperCase(), nombre: o.nombreOficial || o.nombre || "", activo: o.activo === true }))
+    .sort((a, b) => a.unidad.localeCompare(b.unidad, "es", { numeric: true }));
+  const uids = new Set(ops.map((o) => o.uid));
+
+  const evPorUid = new Map();
+  snapEv.docs.forEach((d) => {
+    const e = d.data();
+    if (!uids.has(e.uid)) return;
+    const id = e.estatus || (Array.isArray(e.estatus_ids) ? e.estatus_ids[0] : "");
+    if (!PATIO_ASIST.includes(id)) return;
+    const ms = aMillis_(e.timestamp);
+    if (!ms) return;
+    if (!evPorUid.has(e.uid)) evPorUid.set(e.uid, []);
+    evPorUid.get(e.uid).push({ id, ms, precision: e.gps && typeof e.gps.precision === "number" ? e.gps.precision : null, otFolio: e.otFolio || "" });
+  });
+  evPorUid.forEach((l) => l.sort((a, b) => a.ms - b.ms));
+
+  const viajesPorUid = new Map();
+  snapAsig.docs.forEach((d) => {
+    const a = d.data();
+    if (!uids.has(a.uid_operador) || a.estado !== "aceptada") return;
+    const ms = aMillis_(a.fecha_respuesta) || aMillis_(a.timestamp);
+    if (!ms) return;
+    if (!viajesPorUid.has(a.uid_operador)) viajesPorUid.set(a.uid_operador, []);
+    viajesPorUid.get(a.uid_operador).push({ ms, txt: [a.remolque, a.cliente, a.destino].filter(Boolean).join(" · ") });
+  });
+
+  const entPorUnidad = new Map();
+  snapEnt.docs.forEach((d) => {
+    const x = d.data();
+    if (!entPorUnidad.has(x.unidad)) entPorUnidad.set(x.unidad, []);
+    entPorUnidad.get(x.unidad).push(x.fechaPatioMs);
+  });
+  entPorUnidad.forEach((l) => l.sort((a, b) => a - b));
+
+  const ajustes = new Map();
+  snapAj.docs.forEach((d) => { const a = d.data(); ajustes.set(`${a.uid}_${a.fecha}`, a); });
+
+  const filas = ops.map((op) => {
+    const evs = evPorUid.get(op.uid) || [];
+    const viajes = viajesPorUid.get(op.uid) || [];
+    const entradas = entPorUnidad.get(op.unidad) || [];
+    const dias = fechas.map((fecha) => {
+      const ini = msLocal_(fecha, 0);
+      const finDia = msLocal_(sumarDias_(fecha, 1), 0);
+      const corte = msLocal_(fecha, corteMin);
+      if (ini > ahora) return { fecha, codigo: "futuro", paga: false, detalle: [] };
+      const detalle = [];
+      const entrada = entradas.filter((ms) => ms < finDia).pop() || null;
+      if (entrada) detalle.push({ ms: entrada, txt: `Entrada a patio${entrada < ini ? " (" + new Intl.DateTimeFormat("es-MX", { timeZone: TZ_OPERACION, day: "2-digit", month: "2-digit" }).format(new Date(entrada)) + ")" : ""}` });
+      const delDia = evs.filter((e) => e.ms >= ini && e.ms < finDia);
+      delDia.forEach((e) => detalle.push({ ms: e.ms, txt: ETQ_ASIST[e.id] + (e.precision != null ? ` · ± ${e.precision} m` : "") + (e.otFolio ? ` · OT ${e.otFolio}` : "") + (e.id === "disponible" ? ` · vence ${horaLocal_(e.ms + vig)}` : "") }));
+      const viajesDia = viajes.filter((v) => v.ms >= ini && v.ms < finDia);
+      viajesDia.forEach((v) => detalle.push({ ms: v.ms, txt: "Aceptó viaje" + (v.txt ? " · " + v.txt : "") }));
+      detalle.sort((a, b) => a.ms - b.ms);
+
+      let codigo = "nada";
+      if (!entrada) codigo = "sin_entrada";
+      else {
+        const previo = evs.filter((e) => e.ms < ini).pop();
+        const enTaller = (previo && previo.id === "taller") || delDia.some((e) => e.id === "taller");
+        const viajeOk = viajesDia.some((v) => v.ms >= entrada);
+        const disp = delDia.filter((e) => e.id === "disponible" && e.ms >= entrada);
+        if (viajeOk) codigo = "viaje";
+        else if (enTaller) codigo = "taller";
+        else if (disp.length) {
+          // ¿Mantuvo el Disponible vigente hasta la hora de corte?
+          let vencido = false;
+          const limite = Math.min(corte, ahora);
+          let vence = disp[0].ms + vig;
+          const siguientes = delDia.filter((e) => e.ms > disp[0].ms).map((e) => ({ ms: e.ms, id: e.id }))
+            .concat(viajesDia.filter((v) => v.ms > disp[0].ms).map((v) => ({ ms: v.ms, id: "viaje" })))
+            .sort((a, b) => a.ms - b.ms);
+          for (const s of siguientes) {
+            if (vence >= limite) break;
+            if (s.ms > vence) { vencido = true; break; }
+            if (s.id === "disponible") vence = s.ms + vig;
+            else { vence = Infinity; break; } // pasó a viaje/taller/otro estatus antes de vencer
+          }
+          if (!vencido && vence < limite) vencido = true;
+          codigo = vencido ? "vencido" : "disponible";
+        }
+      }
+      const pagaCalc = ["viaje", "taller", "disponible"].includes(codigo);
+      const aj = ajustes.get(`${op.uid}_${fecha}`) || null;
+      const paga = aj ? aj.pagar === true : pagaCalc;
+      return {
+        fecha, codigo, paga, pagaCalculado: pagaCalc,
+        ajuste: aj ? { pagar: aj.pagar === true, motivo: aj.motivo || "", porNombre: (aj.por && aj.por.nombre) || "", ms: aj.ms || null } : null,
+        detalle,
+      };
+    });
+    const totalDias = dias.filter((d) => d.paga).length;
+    return { uid: op.uid, unidad: op.unidad, nombre: op.nombre, activo: op.activo, dias, totalDias, monto: totalDias * cfg.pagoDia };
+  });
+  return {
+    semana: lunes, fechas, pagoDia: cfg.pagoDia, horaCorte: cfg.horaCorte, filas,
+    totales: { dias: filas.reduce((s, f) => s + f.totalDias, 0), monto: filas.reduce((s, f) => s + f.monto, 0) },
+    calculadoMs: Date.now(),
+  };
+}
+
+// entrada: { lunes: "YYYY-MM-DD" }
+exports.calcularAsistenciaSemana = onCall({ region: REGION, timeoutSeconds: 120 }, async (request) => {
+  const actor = await leerActor_(request);
+  const lunes = validarLunes_((request.data || {}).lunes);
+  try {
+    const cfg = await leerConfigAsistencia_();
+    const snapSem = await dbLocal.collection(COL_ASIST_SEMANAS).doc(lunes).get();
+    const sem = snapSem.exists ? snapSem.data() : null;
+    const permisos = {
+      revisar: puedeRevisarAsistencia_(actor),
+      reabrir: actor.rol === "admin" || cfg.reabrenPuestos.some((p) => p && normPuesto_(actor.puesto) === p),
+    };
+    if (sem && sem.estado === "autorizada") {
+      return { ok: true, ...sem.calculo, estado: "autorizada", autorizadaPor: sem.autorizadaPor || null, autorizadaMs: sem.autorizadaMs || null, correo: sem.correo || null, permisos };
+    }
+    const calc = await calcularSemana_(lunes, cfg);
+    return { ok: true, ...calc, estado: "abierta", reabiertaPor: (sem && sem.reabiertaPor) || null, permisos };
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    logger.error(`[calcularAsistenciaSemana] ${error.message}`);
+    throw new HttpsError("internal", "No se pudo calcular la asistencia: " + error.message);
+  }
+});
+
+// entrada: { lunes, uid, fecha, pagar: boolean|null, motivo }  (pagar null = quitar el ajuste)
+exports.ajustarAsistenciaDia = onCall({ region: REGION }, async (request) => {
+  const actor = await leerActor_(request);
+  if (!puedeRevisarAsistencia_(actor)) throw new HttpsError("permission-denied", "Solo Coordinador, Supervisor, Auxiliar o admin pueden ajustar la asistencia.");
+  const e = request.data || {};
+  const lunes = validarLunes_(e.lunes);
+  const fecha = typeof e.fecha === "string" && RE_FECHA_ASIST.test(e.fecha) ? e.fecha : "";
+  const uid = typeof e.uid === "string" && e.uid && !e.uid.includes("/") ? e.uid : "";
+  if (!fecha || !uid || fecha < lunes || fecha > sumarDias_(lunes, 6)) throw new HttpsError("invalid-argument", "Día no válido.");
+  const sem = await dbLocal.collection(COL_ASIST_SEMANAS).doc(lunes).get();
+  if (sem.exists && sem.data().estado === "autorizada") throw new HttpsError("failed-precondition", "La semana ya está autorizada. Primero hay que reabrirla.");
+  const ref = dbLocal.collection(COL_ASIST_AJUSTES).doc(`${lunes}_${uid}_${fecha}`);
+  if (e.pagar === null || e.pagar === undefined) {
+    await ref.delete();
+  } else {
+    const motivo = typeof e.motivo === "string" ? e.motivo.trim().slice(0, 300) : "";
+    if (!motivo) throw new HttpsError("invalid-argument", "Escribe el motivo del ajuste.");
+    await ref.set({ semana: lunes, uid, fecha, pagar: e.pagar === true, motivo, por: { uid: actor.uid, nombre: actor.nombre }, ms: Date.now() });
+  }
+  await dbLocal.collection(COL_BITACORA).add({ tipo: "asistencia_ajuste", semana: lunes, uid, fecha, pagar: e.pagar ?? null, realizadoPor: actor, timestamp: FieldValue.serverTimestamp() });
+  return { ok: true };
+});
+
+// entrada: { lunes }
+exports.autorizarAsistenciaSemana = onCall({ region: REGION, timeoutSeconds: 120 }, async (request) => {
+  const actor = await leerActor_(request);
+  if (!puedeRevisarAsistencia_(actor)) throw new HttpsError("permission-denied", "Solo Coordinador, Supervisor, Auxiliar o admin pueden autorizar la semana.");
+  const lunes = validarLunes_((request.data || {}).lunes);
+  if (msLocal_(sumarDias_(lunes, 7), 0) > Date.now()) throw new HttpsError("failed-precondition", "La semana todavía no termina (cierra el domingo a medianoche).");
+  const ref = dbLocal.collection(COL_ASIST_SEMANAS).doc(lunes);
+  const prev = await ref.get();
+  if (prev.exists && prev.data().estado === "autorizada") throw new HttpsError("failed-precondition", "Esta semana ya estaba autorizada.");
+  const cfg = await leerConfigAsistencia_();
+  const calculo = await calcularSemana_(lunes, cfg);
+  const autorizadaPor = { uid: actor.uid, nombre: actor.nombre, puesto: actor.puesto };
+  await ref.set({
+    semana: lunes, estado: "autorizada", calculo, autorizadaPor, autorizadaMs: Date.now(),
+    historial: FieldValue.arrayUnion({ accion: "autorizada", por: autorizadaPor, ms: Date.now() }),
+  }, { merge: true });
+  await dbLocal.collection(COL_BITACORA).add({ tipo: "asistencia_autorizada", semana: lunes, totales: calculo.totales, realizadoPor: actor, timestamp: FieldValue.serverTimestamp() });
+  return { ok: true, totales: calculo.totales };
+});
+
+// entrada: { lunes, motivo }
+exports.reabrirAsistenciaSemana = onCall({ region: REGION }, async (request) => {
+  const actor = await leerActor_(request);
+  const cfg = await leerConfigAsistencia_();
+  const puede = actor.rol === "admin" || cfg.reabrenPuestos.some((p) => p && normPuesto_(actor.puesto) === p);
+  if (!puede) throw new HttpsError("permission-denied", "No tienes permiso para reabrir semanas autorizadas.");
+  const e = request.data || {};
+  const lunes = validarLunes_(e.lunes);
+  const motivo = typeof e.motivo === "string" ? e.motivo.trim().slice(0, 300) : "";
+  if (!motivo) throw new HttpsError("invalid-argument", "Escribe el motivo para reabrir.");
+  const ref = dbLocal.collection(COL_ASIST_SEMANAS).doc(lunes);
+  const s = await ref.get();
+  if (!s.exists || s.data().estado !== "autorizada") throw new HttpsError("failed-precondition", "Esta semana no está autorizada.");
+  const por = { uid: actor.uid, nombre: actor.nombre, puesto: actor.puesto };
+  await ref.set({
+    estado: "abierta", reabiertaPor: { ...por, motivo, ms: Date.now() },
+    historial: FieldValue.arrayUnion({ accion: "reabierta", por, motivo, ms: Date.now() }),
+  }, { merge: true });
+  await dbLocal.collection(COL_BITACORA).add({ tipo: "asistencia_reabierta", semana: lunes, motivo, realizadoPor: actor, timestamp: FieldValue.serverTimestamp() });
+  return { ok: true };
+});
+
+// ---- Correo automático al autorizar la semana (2026-10-21) --------------------
+// Cuando una semana pasa a "autorizada" se manda por Brevo (mismo secreto
+// BREVO_API_KEY que enviarResetContrasena) el resumen + el Excel adjunto a
+// configuracion/asistencia.destinatarios / cc. Si se reabre y se vuelve a
+// autorizar, sale otro correo con los datos nuevos.
+const brevoApiKeyAsistencia = defineSecret("BREVO_API_KEY");
+const REMITENTE_ASISTENCIA = { name: "Ivan Landa", email: "ilanda@alanis.com.mx" };
+const DIAS_LARGOS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"];
+const MESES_LARGOS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const LARGO_CODIGO = { disponible: "Disponible", viaje: "Aceptó viaje", taller: "En taller", vencido: "Disponible vencido", sin_entrada: "Sin entrada a patio", nada: "No se reportó", futuro: "" };
+
+function fechaLarga_(f) {
+  const [y, m, d] = f.split("-").map(Number);
+  return `${d} de ${MESES_LARGOS[m - 1]} de ${y}`;
+}
+function dineroMx_(n) {
+  return "$" + Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function escHtml_(t) {
+  return String(t == null ? "" : t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+function listaCorreos_(v) {
+  return (Array.isArray(v) ? v : String(v || "").split(/[,;\s]+/)).map((x) => String(x).trim()).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+}
+
+async function excelAsistencia_(calc, autorizadaPor, autorizadaMs) {
+  const ExcelJS = require("exceljs");
+  const libro = new ExcelJS.Workbook();
+  const hoja = libro.addWorksheet("Asistencia");
+  const dias = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+  hoja.addRow([`Asistencia ruta corta · semana del ${fechaLarga_(calc.fechas[0])} al ${fechaLarga_(calc.fechas[6])}`]).font = { bold: true, size: 13 };
+  hoja.addRow([`Autorizada por ${(autorizadaPor && autorizadaPor.nombre) || ""} · ${new Intl.DateTimeFormat("es-MX", { timeZone: TZ_OPERACION, dateStyle: "short", timeStyle: "short" }).format(new Date(autorizadaMs))}`]);
+  hoja.addRow([`Pago por día: ${dineroMx_(calc.pagoDia)}`]);
+  hoja.addRow([]);
+  const cab = hoja.addRow(["Unidad", "Operador", ...calc.fechas.map((f, i) => `${dias[i]} ${f.slice(8)}/${f.slice(5, 7)}`), "Días pagados", "Pago"]);
+  cab.font = { bold: true };
+  cab.eachCell((c) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEDE7DE" } }; });
+  calc.filas.forEach((f) => {
+    const fila = hoja.addRow([f.unidad, f.nombre, ...f.dias.map((x) => (x.paga ? "PAGA" : LARGO_CODIGO[x.codigo] || "") + (x.ajuste ? " (ajuste)" : "")), f.totalDias, f.monto]);
+    f.dias.forEach((x, i) => {
+      const c = fila.getCell(3 + i);
+      const color = x.paga ? "FFB9E3A0" : x.codigo === "vencido" ? "FFFBE3A8" : null;
+      if (color) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: color } };
+    });
+    fila.getCell(11).numFmt = '"$"#,##0.00';
+  });
+  const tot = hoja.addRow(["", "TOTAL", "", "", "", "", "", "", "", calc.totales.dias, calc.totales.monto]);
+  tot.font = { bold: true };
+  tot.getCell(11).numFmt = '"$"#,##0.00';
+  hoja.columns = [{ width: 9 }, { width: 34 }, ...calc.fechas.map(() => ({ width: 15 })), { width: 13 }, { width: 13 }];
+  const ajustes = [];
+  calc.filas.forEach((f) => f.dias.forEach((x) => { if (x.ajuste) ajustes.push([f.unidad, f.nombre, x.fecha, x.ajuste.pagar ? "Pagar" : "No pagar", x.ajuste.motivo, x.ajuste.porNombre]); }));
+  if (ajustes.length) {
+    const h2 = libro.addWorksheet("Ajustes");
+    h2.addRow(["Unidad", "Operador", "Fecha", "Ajuste", "Motivo", "Ajustó"]).font = { bold: true };
+    ajustes.forEach((a) => h2.addRow(a));
+    h2.columns = [{ width: 9 }, { width: 34 }, { width: 12 }, { width: 10 }, { width: 50 }, { width: 28 }];
+  }
+  return Buffer.from(await libro.xlsx.writeBuffer());
+}
+
+exports.correoAsistenciaAutorizada = onDocumentWritten(
+  { document: `${COL_ASIST_SEMANAS}/{lunes}`, region: REGION, secrets: [brevoApiKeyAsistencia], memory: "512MiB" },
+  async (event) => {
+    const antes = event.data.before.exists ? event.data.before.data() : null;
+    const despues = event.data.after.exists ? event.data.after.data() : null;
+    if (!despues || despues.estado !== "autorizada" || (antes && antes.estado === "autorizada")) return;
+    const lunes = event.params.lunes;
+    const ref = event.data.after.ref;
+    try {
+      const cfgSnap = await dbLocal.collection("configuracion").doc("asistencia").get();
+      const cfg = cfgSnap.exists ? cfgSnap.data() : {};
+      const para = listaCorreos_(cfg.destinatarios);
+      const cc = listaCorreos_(cfg.cc).filter((x) => !para.includes(x));
+      if (!para.length) {
+        await ref.set({ correo: { estado: "sin_destinatarios", ms: Date.now() } }, { merge: true });
+        logger.warn(`[correoAsistenciaAutorizada] ${lunes}: sin destinatarios configurados`);
+        return;
+      }
+      const calc = despues.calculo;
+      const quien = (despues.autorizadaPor && despues.autorizadaPor.nombre) || "";
+      const cuando = new Intl.DateTimeFormat("es-MX", { timeZone: TZ_OPERACION, day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(despues.autorizadaMs || Date.now()));
+      const fIni = calc.fechas[0], fFin = calc.fechas[6];
+      const reautorizada = Array.isArray(despues.historial) && despues.historial.some((h) => h && h.accion === "reabierta");
+      const asunto = `Asistencia ruta corta · semana del ${fechaLarga_(fIni)} al ${fechaLarga_(fFin)}${reautorizada ? " · actualizada" : ""}`;
+      const filasHtml = calc.filas.map((f) => `<tr><td style="padding:4px 8px;border-bottom:1px solid #eee;">${escHtml_(f.unidad)}</td><td style="padding:4px 8px;border-bottom:1px solid #eee;">${escHtml_(f.nombre)}</td><td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:center;">${f.totalDias}</td><td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right;">${dineroMx_(f.monto)}</td></tr>`).join("");
+      const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;line-height:1.5;">
+<p>Buen día:</p>
+<p>Se ${reautorizada ? "volvió a autorizar, con cambios," : "autorizó"} la asistencia semanal de los operadores de ruta corta correspondiente a la semana del ${DIAS_LARGOS[0]} ${fechaLarga_(fIni)} al ${DIAS_LARGOS[6]} ${fechaLarga_(fFin)}.</p>
+<p>Resumen:<br>
+- Operadores: ${calc.filas.length}<br>
+- Días pagados: ${calc.totales.dias}<br>
+- Pago por día: ${dineroMx_(calc.pagoDia)}<br>
+- Total a pagar: <b>${dineroMx_(calc.totales.monto)}</b></p>
+<p>Autorizó: ${escHtml_(quien)}, el ${cuando}.</p>
+<table style="border-collapse:collapse;font-size:13px;margin:8px 0 14px;"><tr style="background:#EDE7DE;"><th style="padding:5px 8px;text-align:left;">Unidad</th><th style="padding:5px 8px;text-align:left;">Operador</th><th style="padding:5px 8px;">Días</th><th style="padding:5px 8px;text-align:right;">Pago</th></tr>${filasHtml}</table>
+<p>Se adjunta el detalle por día en Excel.</p>
+<p>Quedo a tus órdenes.<br>Un saludo.</p>
+<p style="font-size:11px;color:#888;">Mensaje automático de ADREMATASA Interno.</p>
+</div>`;
+      const excel = await excelAsistencia_(calc, despues.autorizadaPor, despues.autorizadaMs || Date.now());
+      const resp = await fetch("https://api.brevo.com/v3/smtp/email", {
+        method: "POST",
+        headers: { "api-key": brevoApiKeyAsistencia.value(), "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({
+          sender: REMITENTE_ASISTENCIA,
+          to: para.map((email) => ({ email })),
+          ...(cc.length ? { cc: cc.map((email) => ({ email })) } : {}),
+          subject: asunto,
+          htmlContent: html,
+          attachment: [{ name: `Asistencia_ruta_corta_${lunes}.xlsx`, content: excel.toString("base64") }],
+        }),
+      });
+      if (!resp.ok) throw new Error(`Brevo ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
+      await ref.set({ correo: { estado: "enviado", ms: Date.now(), para, cc } }, { merge: true });
+      logger.info(`[correoAsistenciaAutorizada] ${lunes} enviado a ${para.join(",")}`);
+    } catch (error) {
+      logger.error(`[correoAsistenciaAutorizada] ${lunes}: ${error.message}`);
+      await ref.set({ correo: { estado: "error", ms: Date.now(), detalle: String(error.message).slice(0, 300) } }, { merge: true }).catch(() => {});
+    }
+  }
+);
