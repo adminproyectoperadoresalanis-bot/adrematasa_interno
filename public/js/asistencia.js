@@ -1,9 +1,15 @@
+// ##########################################################################
+// PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+// RUTA:     /workspaces/adrematasa_interno/public/js/asistencia.js
+// ##########################################################################
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
 
 // ============================================================================
 // Operadores → Asistencia (2026-10-20, pedido de Ivan).
 //
-// Pago diario a operadores de RUTA CORTA. Semana de lunes a domingo. El cálculo
+// Pago a operadores de RUTA CORTA y CIRCUITO. Semana de VIERNES a JUEVES
+// (2026-10-22). Pago semanal por tipo de ruta (Configuración), proporcional a
+// los días pagables (monto ÷ 7 × días). El cálculo
 // lo hace la Cloud Function calcularAsistenciaSemana (operadoresAlanis.js):
 // día pagable = entrada a patio + (Disponible vigente hasta la hora de corte,
 // viaje aceptado o taller). Disponible vencido se muestra pero no se paga.
@@ -19,7 +25,8 @@ const fnAutorizar = httpsCallable(funciones, "autorizarAsistenciaSemana", { time
 const fnReabrir = httpsCallable(funciones, "reabrirAsistenciaSemana");
 
 const URL_SHEETJS = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-const DIAS_CORTOS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+const DIAS_CORTOS = ["Vie", "Sáb", "Dom", "Lun", "Mar", "Mié", "Jue"];
+const ETQ_RUTA = { corta: "Corta", circuito: "Circuito" };
 const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 const CODIGOS = {
   disponible: { icono: "✔", txt: "Disp.", clase: "as-pago", largo: "Disponible" },
@@ -41,9 +48,9 @@ function esc(t) {
 function dinero(n) {
   return "$" + Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
-function lunesDe(fecha) {
+function viernesDe(fecha) {
   const d = new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate());
-  const dia = (d.getDay() + 6) % 7; // 0 = lunes
+  const dia = (d.getDay() + 2) % 7; // 0 = viernes
   d.setDate(d.getDate() - dia);
   return d;
 }
@@ -51,10 +58,10 @@ function iso(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 function desdeIso(s) { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); }
-function etiquetaSemana(lunesIso) {
-  const a = desdeIso(lunesIso);
+function etiquetaSemana(inicioIso) {
+  const a = desdeIso(inicioIso);
   const b = new Date(a); b.setDate(b.getDate() + 6);
-  return `Lun ${a.getDate()} ${a.getMonth() !== b.getMonth() ? MESES[a.getMonth()] + " " : ""}– Dom ${b.getDate()} ${MESES[b.getMonth()]} ${b.getFullYear()}`;
+  return `Vie ${a.getDate()} ${a.getMonth() !== b.getMonth() ? MESES[a.getMonth()] + " " : ""}– Jue ${b.getDate()} ${MESES[b.getMonth()]} ${b.getFullYear()}`;
 }
 function horaDe(ms) {
   const d = new Date(ms);
@@ -64,6 +71,10 @@ function fechaHora(ms) {
   if (!ms) return "—";
   const d = new Date(ms);
   return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")} ${horaDe(ms)}`;
+}
+function textoPago(m) {
+  m = m || {};
+  return `pago semanal: Corta <b>${dinero(m.corta)}</b> · Circuito <b>${dinero(m.circuito)}</b> (÷ 7 por día)`;
 }
 function textoCorreo(c) {
   if (!c) return " · correo: enviando…";
@@ -116,6 +127,8 @@ function inyectarEstilos() {
     .as-radios { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; font-size: 13px; }
     .as-radios label { display: inline-flex; gap: 5px; align-items: center; margin: 0; color: #2c1e0f; }
     .as-aviso { font-size: 12.5px; color: #92400e; margin: 6px 0 0; }
+    .as-ruta { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 10px; margin-left: 4px; vertical-align: middle; }
+    .as-ruta.corta { background: #EAF3DE; color: #27500A; } .as-ruta.circuito { background: #EEE6F8; color: #4B2A7B; }
     .as-radios input { width: auto !important; }
     /* Mismo modal que operadores.js (por si se abre Asistencia primero). */
     .op-sub { font-size: 12px; color: #6b5f52; }
@@ -134,14 +147,14 @@ function inyectarEstilos() {
 
 export function iniciarAsistencia(contenedor) {
   inyectarEstilos();
-  const lunesActual = iso(lunesDe(new Date()));
+  const lunesActual = iso(viernesDe(new Date())); // inicio (viernes) de la semana actual
   let semana = semanaRecordada || lunesActual;
   let datos = null;
 
   contenedor.innerHTML = `
     <section class="panel">
       <div class="as-top">
-        <h2 style="margin:0;">Asistencia · ruta corta</h2>
+        <h2 style="margin:0;">Asistencia · Corta y Circuito</h2>
         <div class="as-sem">
           <button type="button" class="secundario as-flecha" id="as-prev" aria-label="Semana anterior">‹</button>
           <b id="as-etq"></b>
@@ -160,7 +173,7 @@ export function iniciarAsistencia(contenedor) {
         <span><span class="as-dia as-nada"><i>—</i></span>Sin entrada / no se reportó</span>
         <span><span class="as-dia as-pago as-ajustado"><i>✔</i></span>Ajustado a mano</span>
       </div>
-      <p class="nota" style="margin-top:10px;">Toca un día para ver de dónde sale el resultado. Las entradas a patio cuentan desde que se empezó a guardar su historial (20/10/2026).</p>
+      <p class="nota" style="margin-top:10px;">Toca un día para ver de dónde sale el resultado. Semana de viernes a jueves. Pago = pago semanal de su ruta ÷ 7 × días pagados. Las entradas a patio cuentan desde que se empezó a guardar su historial (21/10/2026).</p>
     </section>
   `;
   const $ = (s) => contenedor.querySelector(s);
@@ -173,7 +186,7 @@ export function iniciarAsistencia(contenedor) {
     $("#as-tabla").innerHTML = `<p class="nota">Calculando…</p>`;
     $("#as-estado").innerHTML = "";
     try {
-      const res = await fnCalcular({ lunes: semana });
+      const res = await fnCalcular({ viernes: semana });
       if (res.data.semana !== semana) return; // cambiaron de semana mientras calculaba
       datos = res.data;
       render();
@@ -192,14 +205,14 @@ export function iniciarAsistencia(contenedor) {
     if (!autorizada && d.permisos.revisar && semanaTerminada) botones += `<button type="button" id="as-autorizar">Autorizar semana</button>`;
     if (autorizada && d.permisos.reabrir) botones += `<button type="button" class="secundario" id="as-reabrir">Reabrir</button>`;
     const texto = autorizada
-      ? `<b>Semana autorizada</b> por ${esc(d.autorizadaPor && d.autorizadaPor.nombre || "—")} el ${fechaHora(d.autorizadaMs)} · pago por día: <b>${dinero(d.pagoDia)}</b>${textoCorreo(d.correo)}`
-      : `<b>${semanaTerminada ? "Semana por revisar" : "Semana en curso"}</b> · pago por día: <b>${dinero(d.pagoDia)}</b> · corte del día ${esc(d.horaCorte)}${d.reabiertaPor ? ` · reabierta por ${esc(d.reabiertaPor.nombre)} (${esc(d.reabiertaPor.motivo)})` : ""}`;
+      ? `<b>Semana autorizada</b> por ${esc(d.autorizadaPor && d.autorizadaPor.nombre || "—")} el ${fechaHora(d.autorizadaMs)} · ${textoPago(d.montoSemana)}${textoCorreo(d.correo)}`
+      : `<b>${semanaTerminada ? "Semana por revisar" : "Semana en curso"}</b> · ${textoPago(d.montoSemana)} · corte del día ${esc(d.horaCorte)}${d.reabiertaPor ? ` · reabierta por ${esc(d.reabiertaPor.nombre)} (${esc(d.reabiertaPor.motivo)})` : ""}`;
     $("#as-estado").innerHTML = `
       <div class="as-estado ${autorizada ? "autorizada" : "abierta"}">
         <span>${texto}</span><span class="as-bot">${botones}</span>
       </div>
-      ${!d.pagoDia ? `<p class="as-aviso">⚠️ Falta capturar el pago por día en Configuración → 2 · Utilidades → Operadores.</p>` : ""}
-      ${!autorizada && !semanaTerminada ? `<p class="as-aviso" style="color:#6b5f52;">La semana se puede autorizar cuando termine (domingo a medianoche).</p>` : ""}`;
+      ${!(d.montoSemana && d.montoSemana.corta && d.montoSemana.circuito) ? `<p class="as-aviso">⚠️ Falta capturar el pago semanal de Corta y/o Circuito en Configuración → 2 · Utilidades → Operadores.</p>` : ""}
+      ${!autorizada && !semanaTerminada ? `<p class="as-aviso" style="color:#6b5f52;">La semana se puede autorizar cuando termine (jueves a medianoche).</p>` : ""}`;
 
     if (!d.filas.length) {
       $("#as-tabla").innerHTML = `<p class="nota" style="text-align:center;padding:16px;">No hay operadores con ruta corta. Asígnala en Operadores registrados.</p>`;
@@ -207,7 +220,7 @@ export function iniciarAsistencia(contenedor) {
       const cab = d.fechas.map((f, i) => `<th>${DIAS_CORTOS[i]} ${Number(f.slice(8))}</th>`).join("");
       const filas = d.filas.map((f, fi) => `
         <tr>
-          <td class="izq as-op"><b>${esc(f.unidad || "—")}</b><small>${esc(f.nombre)}${f.activo ? "" : " · inactivo"}</small></td>
+          <td class="izq as-op"><b>${esc(f.unidad || "—")} <span class="as-ruta ${f.tipoRuta}">${ETQ_RUTA[f.tipoRuta] || ""}</span></b><small>${esc(f.nombre)}${f.activo ? "" : " · inactivo"}</small></td>
           ${f.dias.map((dia, di) => {
             const c = CODIGOS[dia.codigo] || CODIGOS.nada;
             if (dia.codigo === "futuro") return `<td><span class="as-dia as-futuro"></span></td>`;
@@ -220,7 +233,7 @@ export function iniciarAsistencia(contenedor) {
             return `<td><button type="button" class="as-dia ${clase}" data-f="${fi}" data-d="${di}"><i>${icono}</i>${esc(txt)}</button></td>`;
           }).join("")}
           <td class="as-tot">${f.totalDias}</td>
-          <td class="as-monto">${dinero(f.monto)}</td>
+          <td class="as-monto">${dinero(f.monto)}<small style="display:block;font-weight:400;color:#6b5f52;font-size:11px;">de ${dinero(f.pagoSemana)}</small></td>
         </tr>`).join("");
       $("#as-tabla").innerHTML = `
         <table class="as-tabla">
@@ -260,9 +273,9 @@ export function iniciarAsistencia(contenedor) {
           <div style="font-size:16px;font-weight:700;">${esc(fila.unidad)} · ${esc(fila.nombre)}</div>
           <button type="button" class="secundario op-cerrar" aria-label="Cerrar">✕</button>
         </div>
-        <div class="op-sub" style="margin-bottom:8px;">${DIAS_CORTOS[(f.getDay() + 6) % 7]} ${f.getDate()} ${MESES[f.getMonth()]} · cálculo: ${esc(c.largo)}</div>
+        <div class="op-sub" style="margin-bottom:8px;">${DIAS_CORTOS[(f.getDay() + 2) % 7]} ${f.getDate()} ${MESES[f.getMonth()]} · cálculo: ${esc(c.largo)}</div>
         ${lineas}
-        <div class="as-res ${dia.paga ? "si" : "no"}">${dia.paga ? "✔ Día pagable · " + dinero(datos.pagoDia) : "✖ No se paga"}${dia.ajuste ? ` (ajustado por ${esc(dia.ajuste.porNombre)}: "${esc(dia.ajuste.motivo)}")` : ""}</div>
+        <div class="as-res ${dia.paga ? "si" : "no"}">${dia.paga ? "✔ Día pagable · " + dinero(Math.round(fila.pagoSemana / 7 * 100) / 100) + " (" + (ETQ_RUTA[fila.tipoRuta] || "") + ": " + dinero(fila.pagoSemana) + " ÷ 7)" : "✖ No se paga"}${dia.ajuste ? ` (ajustado por ${esc(dia.ajuste.porNombre)}: "${esc(dia.ajuste.motivo)}")` : ""}</div>
         ${puedeAjustar ? `
           <label style="margin-top:12px;">Ajustar este día</label>
           <div class="as-radios">
@@ -292,7 +305,7 @@ export function iniciarAsistencia(contenedor) {
       if (sel.value !== "quitar" && !motivo) { err.textContent = "Escribe el motivo."; return; }
       btn.disabled = true;
       try {
-        await fnAjustar({ lunes: semana, uid: fila.uid, fecha: dia.fecha, pagar: sel.value === "quitar" ? null : sel.value === "si", motivo });
+        await fnAjustar({ viernes: semana, uid: fila.uid, fecha: dia.fecha, pagar: sel.value === "quitar" ? null : sel.value === "si", motivo });
         cerrar();
         avisar("Ajuste guardado.");
         cargar();
@@ -306,7 +319,7 @@ export function iniciarAsistencia(contenedor) {
   async function autorizar() {
     if (!confirm(`¿Autorizar la asistencia de la semana ${etiquetaSemana(semana)}?\n\nTotal: ${datos.totales.dias} días · ${dinero(datos.totales.monto)}.\nYa no cambiará aunque lleguen movimientos atrasados.`)) return;
     try {
-      const res = await fnAutorizar({ lunes: semana });
+      const res = await fnAutorizar({ viernes: semana });
       avisar(`Semana autorizada · ${res.data.totales.dias} días · ${dinero(res.data.totales.monto)}.`);
       cargar();
     } catch (e) {
@@ -319,7 +332,7 @@ export function iniciarAsistencia(contenedor) {
     if (motivo === null) return;
     if (!motivo.trim()) { $("#as-error").textContent = "Escribe el motivo para reabrir."; return; }
     try {
-      await fnReabrir({ lunes: semana, motivo: motivo.trim() });
+      await fnReabrir({ viernes: semana, motivo: motivo.trim() });
       avisar("Semana reabierta.");
       cargar();
     } catch (e) {
@@ -343,21 +356,21 @@ export function iniciarAsistencia(contenedor) {
     try {
       const XLSX = await cargarSheetJS();
       const d = datos;
-      const cab = ["Unidad", "Operador", ...d.fechas.map((f, i) => `${DIAS_CORTOS[i]} ${f.slice(8)}/${f.slice(5, 7)}`), "Días pagados", "Pago"];
+      const cab = ["Unidad", "Operador", "Ruta", ...d.fechas.map((f, i) => `${DIAS_CORTOS[i]} ${f.slice(8)}/${f.slice(5, 7)}`), "Días pagados", "Pago"];
       const filas = d.filas.map(f => [
-        f.unidad, f.nombre,
+        f.unidad, f.nombre, ETQ_RUTA[f.tipoRuta] || "",
         ...f.dias.map(x => x.codigo === "futuro" ? "" : (x.paga ? "PAGA" : (CODIGOS[x.codigo] || CODIGOS.nada).largo) + (x.ajuste ? " (ajuste)" : "")),
         f.totalDias, f.monto,
       ]);
-      const total = ["", "TOTAL", ...d.fechas.map(() => ""), d.totales.dias, d.totales.monto];
+      const total = ["", "TOTAL", "", ...d.fechas.map(() => ""), d.totales.dias, d.totales.monto];
       const encabezado = [
         [`Asistencia ruta corta · ${etiquetaSemana(semana)}`],
         [d.estado === "autorizada" ? `Autorizada por ${(d.autorizadaPor && d.autorizadaPor.nombre) || ""} el ${fechaHora(d.autorizadaMs)}` : "PRELIMINAR · sin autorizar"],
-        [`Pago por día: ${dinero(d.pagoDia)}`],
+        [`Pago semanal: Corta ${dinero((d.montoSemana || {}).corta)} · Circuito ${dinero((d.montoSemana || {}).circuito)} (proporcional a los días pagados, ÷ 7)`],
         [],
       ];
       const hoja = XLSX.utils.aoa_to_sheet([...encabezado, cab, ...filas, total]);
-      hoja["!cols"] = [{ wch: 8 }, { wch: 32 }, ...d.fechas.map(() => ({ wch: 14 })), { wch: 12 }, { wch: 10 }];
+      hoja["!cols"] = [{ wch: 8 }, { wch: 32 }, { wch: 10 }, ...d.fechas.map(() => ({ wch: 14 })), { wch: 12 }, { wch: 10 }];
       const ajustes = [];
       d.filas.forEach(f => f.dias.forEach(x => { if (x.ajuste) ajustes.push([f.unidad, f.nombre, x.fecha, x.ajuste.pagar ? "Pagar" : "No pagar", x.ajuste.motivo, x.ajuste.porNombre]); }));
       const libro = XLSX.utils.book_new();

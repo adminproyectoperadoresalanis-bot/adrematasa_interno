@@ -1,3 +1,7 @@
+// ##########################################################################
+// PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+// RUTA:     /workspaces/adrematasa_interno/public/js/turnos.js
+// ##########################################################################
 import { db } from "./firebase-config.js";
 import { doc, onSnapshot, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { suscribirEspejo, alSalirDePantalla } from "./espejosOperadores.js";
@@ -37,7 +41,7 @@ const COLOR_FILA = {
   sin: "gris",
 };
 
-const ETIQUETA_RUTA = { larga: "LARGA", corta: "CORTA", local: "LOCAL" };
+const ETIQUETA_RUTA = { larga: "LARGA", corta: "CORTA", local: "LOCAL", circuito: "CIRCUITO" };
 const ESTATUS = {
   disponible: { txt: "Disponible", clase: "tu-di" },
   taller: { txt: "En taller", clase: "tu-ta" },
@@ -161,7 +165,7 @@ function calcularEstatus(op, fechaPatioMs, ahora) {
   if (!est) return { clave: "sin", txt: "Sin reportarse", clase: "tu-sr", sub: "" };
   const base = ESTATUS[est.id] || { txt: est.id, clase: "tu-sr" };
   if (est.id === "disponible") {
-    if (op.tipoRuta === "corta") {
+    if (op.tipoRuta === "corta" || op.tipoRuta === "circuito") { // circuito = ruta corta (misma vigencia)
       const vence = est.ms + HORAS_VIGENCIA_CORTA * 3600 * 1000;
       if (ahora > vence) return { clave: "vencido", txt: "Disponible vencido", clase: "tu-ve", sub: `desde ${horaCorta(vence)} · debe reconfirmar` };
       return { clave: "disponible", txt: `Disponible · vence ${horaCorta(vence)}`, clase: base.clase, sub: `App ${fechaCorta(est.ms)}` };
@@ -205,6 +209,7 @@ function inyectarEstilos() {
     .tu-sub { display: block; font-size: 11.5px; color: #8a7f73; }
     .tu-ruta { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 10px; margin-left: 4px; }
     .tu-ruta.larga { background: #E6F1FB; color: #0C447C; } .tu-ruta.corta { background: #EAF3DE; color: #27500A; }
+    .tu-ruta.circuito { background: #EEE6F8; color: #4B2A7B; }
     .tu-ruta.local { background: #FAEEDA; color: #633806; } .tu-ruta.sin { background: #F1EFE8; color: #5F5E5A; }
     .tu-b { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
     .tu-di { background: #EAF3DE; color: #27500A; } .tu-ve { background: #fef3c7; color: #92400e; }
@@ -316,7 +321,7 @@ export function iniciarTurnos(contenedor, datosUsuario, uid) {
       : "Todavía no se ha pegado ningún reporte de patio.";
 
     const cuenta = (f) => fila.filter(it => { const prev = filtro; filtro = f; const ok = pasaFiltro(it); filtro = prev; return ok; }).length;
-    const chips = [["todas", "Todas"], ["corta", "Corta"], ["larga", "Larga"], ["local", "Local"], ["disponibles", "Disponibles"], ["nocoincide", "No coincide"]]
+    const chips = [["todas", "Todas"], ["corta", "Corta"], ["circuito", "Circuito"], ["larga", "Larga"], ["local", "Local"], ["disponibles", "Disponibles"], ["nocoincide", "No coincide"]]
       .filter(([k]) => k !== "nocoincide" || cuenta(k) > 0)
       .map(([k, t]) => `<button type="button" class="tu-chip${filtro === k ? " activo" : ""}" data-f="${k}">${t} ${cuenta(k)}</button>`).join("");
     $("#tu-chips").innerHTML = chips;

@@ -1,3 +1,7 @@
+// ##########################################################################
+// PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+// RUTA:     /workspaces/adrematasa_interno/public/js/operadores.js
+// ##########################################################################
 // Utilidades → Operadores (2026-10-13, pedido de Ivan).
 //
 // Pantallas de ADREMATASA Interno que operan sobre Alanis Operadores. El
@@ -28,8 +32,9 @@ const fnTerminarOT = httpsCallable(funciones, "terminarOrdenTrabajo");
 const fnAsignarRuta = httpsCallable(funciones, "asignarRutaOperadores");
 
 // ---- Tipo de ruta (2026-10-15) ----
-const TIPOS_RUTA = ["larga", "corta", "local"];
-const ETIQUETA_RUTA = { larga: "Larga", corta: "Corta", local: "Local", sindefinir: "Sin definir" };
+// "circuito" (2026-10-22): operadores de ruta corta que trabajan un circuito; se pagan aparte en Asistencia.
+const TIPOS_RUTA = ["larga", "corta", "local", "circuito"];
+const ETIQUETA_RUTA = { larga: "Larga", corta: "Corta", local: "Local", circuito: "Circuito", sindefinir: "Sin definir" };
 
 function pillRuta(ruta) {
   const r = TIPOS_RUTA.includes(ruta) ? ruta : "sindefinir";
@@ -154,6 +159,7 @@ function inyectarEstilos() {
     .or-hist { border-top: 1px solid #efebe5; margin-top: 10px; padding-top: 8px; font-size: 12px; color: #6b5f52; }
     .or-ruta { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 10px; white-space: nowrap; letter-spacing: .02em; }
     .or-ruta.larga { background: #E6F1FB; color: #0C447C; } .or-ruta.corta { background: #EAF3DE; color: #27500A; }
+    .or-ruta.circuito { background: #EEE6F8; color: #4B2A7B; }
     .or-ruta.local { background: #FAEEDA; color: #633806; } .or-ruta.sindefinir { background: #F1EFE8; color: #5F5E5A; }
     .or-ruta-sel { display: flex; gap: 4px; border: 1px solid #e2ddd5; border-radius: 10px; padding: 3px; }
     .or-ruta-op { flex: 1; background: none; border: none; border-radius: 8px; padding: 8px 4px; font: inherit; font-size: 13px;

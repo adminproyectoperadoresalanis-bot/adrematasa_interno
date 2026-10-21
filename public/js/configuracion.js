@@ -1,3 +1,7 @@
+// ##########################################################################
+// PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+// RUTA:     /workspaces/adrematasa_interno/public/js/configuracion.js
+// ##########################################################################
 import { db } from "./firebase-config.js";
 import {
   doc, setDoc, onSnapshot, getDoc
@@ -185,14 +189,16 @@ export function iniciarConfiguracion(contenedor) {
         <div class="cfg-cuerpo">
       <h3 style="font-size:15px;margin:0 0 6px;">Asistencia · ruta corta</h3>
       <p class="nota">
-        Pago diario a operadores de ruta corta (Operadores → Asistencia). Un día se paga si tuvo
-        entrada a patio y además estuvo Disponible sin dejarlo vencer hasta la hora de corte,
+        Pago semanal a operadores de ruta Corta y Circuito (Operadores → Asistencia), semana de
+        viernes a jueves. Se paga proporcional: pago semanal ÷ 7 × días pagados. Un día se paga si
+        tuvo entrada a patio y además estuvo Disponible sin dejarlo vencer hasta la hora de corte,
         aceptó un viaje o estuvo en taller.
       </p>
       <div id="asist-error" class="error"></div>
       <p id="asist-exito" class="nota oculto" style="color:#1c7a41;"></p>
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
-        <div style="flex:1;min-width:160px;"><label for="asist-pago">Pago por día ($)</label><input type="number" id="asist-pago" min="0" step="0.01" placeholder="Ej: 350"></div>
+        <div style="flex:1;min-width:160px;"><label for="asist-corta">Pago semanal · Corta ($)</label><input type="number" id="asist-corta" min="0" step="0.01" placeholder="Ej: 3500"></div>
+        <div style="flex:1;min-width:160px;"><label for="asist-circuito">Pago semanal · Circuito ($)</label><input type="number" id="asist-circuito" min="0" step="0.01" placeholder="Ej: 1500"></div>
         <div style="flex:1;min-width:160px;"><label for="asist-corte">Hora de corte del día</label><input type="time" id="asist-corte" value="18:00"></div>
       </div>
       <label for="asist-para" style="margin-top:12px;display:block;">Correo al autorizar la semana · Para (separa con coma)</label>
@@ -223,7 +229,8 @@ export function iniciarConfiguracion(contenedor) {
   `;
 
   // Asistencia ruta corta (2026-10-20): configuracion/asistencia
-  // { pagoDia, horaCorte, reabrenPuestos[] }. Lo leen las funciones de
+  // { montoSemanaCorta, montoSemanaCircuito, horaCorte, reabrenPuestos[],
+  // destinatarios[], cc[] }. Lo leen las funciones de
   // operadoresAlanis.js (calcularAsistenciaSemana, reabrirAsistenciaSemana).
   const refAsistencia = doc(db, "configuracion", "asistencia");
   const cajaPuestos = contenedor.querySelector("#asist-puestos");
@@ -240,31 +247,33 @@ export function iniciarConfiguracion(contenedor) {
   }).catch(() => { cajaPuestos.textContent = "No se pudieron cargar los puestos."; });
   onSnapshot(refAsistencia, (s) => {
     const c = s.exists() ? s.data() : {};
-    contenedor.querySelector("#asist-pago").value = typeof c.pagoDia === "number" ? c.pagoDia : "";
+    contenedor.querySelector("#asist-corta").value = typeof c.montoSemanaCorta === "number" ? c.montoSemanaCorta : "";
+    contenedor.querySelector("#asist-circuito").value = typeof c.montoSemanaCircuito === "number" ? c.montoSemanaCircuito : "";
     contenedor.querySelector("#asist-corte").value = c.horaCorte || "18:00";
     contenedor.querySelector("#asist-para").value = Array.isArray(c.destinatarios) ? c.destinatarios.join(", ") : "";
     contenedor.querySelector("#asist-cc").value = Array.isArray(c.cc) ? c.cc.join(", ") : "";
     reabrenGuardados = Array.isArray(c.reabrenPuestos) ? c.reabrenPuestos : [];
     if (puestosCatalogo.length) pintarPuestos(puestosCatalogo);
     const r = contenedor.querySelector("#resumen-operadores");
-    if (r) r.textContent = typeof c.pagoDia === "number"
-      ? `Asistencia: $${c.pagoDia.toLocaleString("es-MX")} por día · corte ${c.horaCorte || "18:00"}`
-      : "Asistencia ruta corta: falta capturar el pago por día";
+    if (r) r.textContent = typeof c.montoSemanaCorta === "number" && typeof c.montoSemanaCircuito === "number"
+      ? `Asistencia: Corta $${c.montoSemanaCorta.toLocaleString("es-MX")} · Circuito $${c.montoSemanaCircuito.toLocaleString("es-MX")} por semana · corte ${c.horaCorte || "18:00"}`
+      : "Asistencia: falta capturar el pago semanal de Corta y Circuito";
   });
   contenedor.querySelector("#btn-guardar-asistencia").addEventListener("click", async () => {
     const err = contenedor.querySelector("#asist-error");
     const ok = contenedor.querySelector("#asist-exito");
     err.textContent = ""; ok.classList.add("oculto");
-    const pago = Number(contenedor.querySelector("#asist-pago").value);
+    const leerMonto = (id) => { const v = contenedor.querySelector(id).value; const n = Number(v); return v === "" || !isFinite(n) || n < 0 ? null : Math.round(n * 100) / 100; };
+    const corta = leerMonto("#asist-corta"), circuito = leerMonto("#asist-circuito");
     const corte = contenedor.querySelector("#asist-corte").value || "18:00";
-    if (!isFinite(pago) || pago < 0 || contenedor.querySelector("#asist-pago").value === "") { err.textContent = "Captura un pago por día válido."; return; }
+    if (corta === null || circuito === null) { err.textContent = "Captura el pago semanal de Corta y de Circuito."; return; }
     const reabren = [...cajaPuestos.querySelectorAll(".asist-puesto:checked")].map(x => x.value);
     const correos = (id) => contenedor.querySelector(id).value.split(/[,;\s]+/).map(x => x.trim()).filter(Boolean);
     const para = correos("#asist-para"), cc = correos("#asist-cc");
     const malo = [...para, ...cc].find(x => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
     if (malo) { err.textContent = `Correo no válido: ${malo}`; return; }
     try {
-      await setDoc(refAsistencia, { pagoDia: Math.round(pago * 100) / 100, horaCorte: corte, reabrenPuestos: reabren, destinatarios: para, cc, actualizadoEn: new Date().toISOString() }, { merge: true });
+      await setDoc(refAsistencia, { montoSemanaCorta: corta, montoSemanaCircuito: circuito, horaCorte: corte, reabrenPuestos: reabren, destinatarios: para, cc, actualizadoEn: new Date().toISOString() }, { merge: true });
       ok.textContent = "Guardado. Aplica a las semanas que todavía no estén autorizadas.";
       ok.classList.remove("oculto");
     } catch (e) {
