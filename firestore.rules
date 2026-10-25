@@ -795,6 +795,21 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Inventario (2026-10-24): catálogo del Adrematasa oficial + estatus propio.
+    match /inventario_catalogo/{id} {
+      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('inventario');
+      allow write: if esAdmin();
+    }
+    match /inventario_estatus/{id} {
+      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('inventario');
+      allow write: if esAdmin();
+    }
+    match /inventario_importaciones/{id} {
+      allow read: if esAdmin();
+      allow create: if esAdmin();
+      allow update, delete: if false;
+    }
+
     match /bitacora_acciones_operadores/{id} {
       allow read: if esAdmin();
       allow write: if false;
