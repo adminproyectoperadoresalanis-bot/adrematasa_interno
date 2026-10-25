@@ -1,3 +1,7 @@
+// ##########################################################################
+// PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+// RUTA:     /workspaces/adrematasa_interno/public/js/auth.js
+// ##########################################################################
 import { auth, db } from "./firebase-config.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
 import {
@@ -31,6 +35,7 @@ import { iniciarAlertasRH, detenerAlertasRH } from "./alertasRH.js";
 import { iniciarAlertasQR, detenerAlertasQR } from "./alertasQR.js";
 import { iniciarTurnos } from "./turnos.js";
 import { iniciarAsistencia } from "./asistencia.js";
+import { iniciarInventario } from "./inventario.js";
 
 const DOMINIO_ALANIS = "@alanis.com.mx";
 
@@ -360,6 +365,7 @@ onAuthStateChanged(auth, async (user) => {
       operadoresRegistrados: (c) => iniciarOperadoresRegistrados(c),
       operadoresTurnos: (c) => iniciarTurnos(c, datosUsuario, user.uid),
       operadoresAsistencia: (c) => iniciarAsistencia(c),
+      inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       panel: (c) => iniciarPanelResumenAdmin(c),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarGestionSolicitudes(d, user.uid, datosUsuario.nombre),
@@ -391,6 +397,7 @@ onAuthStateChanged(auth, async (user) => {
       operadoresRegistrados: (c) => iniciarOperadoresRegistrados(c),
       operadoresTurnos: (c) => iniciarTurnos(c, datosUsuario, user.uid),
       operadoresAsistencia: (c) => iniciarAsistencia(c),
+      inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       horasExtra: (c) => iniciarVistaEmpleado(c, datosUsuario, user.uid),
       vacaciones: (c) => iniciarVistaVacacionesEmpleado(c, datosUsuario, user.uid),
       faltas: (c) => iniciarVistaEmpleadoFaltas(c, datosUsuario, user.uid)
@@ -412,6 +419,7 @@ onAuthStateChanged(auth, async (user) => {
       operadoresRegistrados: (c) => iniciarOperadoresRegistrados(c),
       operadoresTurnos: (c) => iniciarTurnos(c, datosUsuario, user.uid),
       operadoresAsistencia: (c) => iniciarAsistencia(c),
+      inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       panel: (c) => iniciarPanelResumenSupervisor(c, user.uid),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarVistaSupervisor(d, user.uid, datosUsuario.nombre),

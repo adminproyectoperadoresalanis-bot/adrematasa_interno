@@ -1,3 +1,7 @@
+// ##########################################################################
+// PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+// RUTA:     /workspaces/adrematasa_interno/public/js/navegacion.js
+// ##########################################################################
 // Menú inferior + sección "Utilidades".
 //
 // 2026-10-12 (paso 1, pedido de Ivan): "Escaneo QR" y "Gestión" (Horas extra /
@@ -34,7 +38,8 @@
 export const OPCIONES_UTILIDADES = [
   { id: "rh", etiqueta: "RH" },
   { id: "validacionQR", etiqueta: "Validación de QR" },
-  { id: "operadores", etiqueta: "Operadores" }
+  { id: "operadores", etiqueta: "Operadores" },
+  { id: "inventario", etiqueta: "Inventario" }
 ];
 
 const SVG = (contenido) =>
@@ -50,6 +55,7 @@ const ICONOS = {
   // Tarjetas de Utilidades
   rh: ICONO_PERSONAS,
   operadores: SVG(`<rect x="1" y="6" width="14" height="10" rx="1"/><path d="M15 9h4l3 3v4h-7"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/>`),
+  inventario: SVG(`<path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>`),
   validacionQR: SVG(`<path d="M3 7V4a1 1 0 0 1 1-1h3"/><path d="M17 3h3a1 1 0 0 1 1 1v3"/><path d="M21 17v3a1 1 0 0 1-1 1h-3"/><path d="M7 21H4a1 1 0 0 1-1-1v-3"/><rect x="7" y="7" width="10" height="10" rx="1"/>`),
   // Renglones de la lista de RH
   solicitudes: SVG(`<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/>`),
@@ -171,19 +177,27 @@ const OPCION_OPERADORES = {
   ]
 };
 
+// Inventario (2026-10-24): catálogo de unidades del Adrematasa oficial (inventario.js).
+const OPCION_INVENTARIO = {
+  id: "inventario",
+  etiqueta: "Inventario",
+  descripcion: "Tractos · Remolques · Refrigeración · Otros",
+  pantalla: "inventario"
+};
+
 const TABS_POR_ROL = {
   // El empleado solo tiene "Utilidades": con un solo botón el menú inferior
   // no aporta nada, así que se oculta y entra directo a las tarjetas.
   empleado: [
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR, OPCION_OPERADORES] }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR, OPCION_OPERADORES, OPCION_INVENTARIO] }
   ],
   supervisor: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES, CONSULTA_SUPERVISOR), OPCION_QR, OPCION_OPERADORES] }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES, CONSULTA_SUPERVISOR), OPCION_QR, OPCION_OPERADORES, OPCION_INVENTARIO] }
   ],
   admin: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR, OPCION_OPERADORES] },
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR, OPCION_OPERADORES, OPCION_INVENTARIO] },
     { id: "configuracion", etiqueta: "Configuración" }
   ]
 };
