@@ -19,6 +19,10 @@ import { suscribirEspejo } from "./espejosOperadores.js";
 //   - inventario_estatus/{económico}: estatus PROPIO de ADREMATASA Interno
 //     (Activa / Baja / Vendida) con fecha del evento, motivo e historial. El
 //     Excel nunca lo pisa (el archivo del Adrematasa oficial no trae bajas).
+//     Se guarda también la SERIE de la unidad (2026-10-26): si LIS reutiliza
+//     el mismo económico para otra unidad física (otra serie), el estatus NO
+//     se le aplica y se avisa. Un económico con punto o letra extra ("R1409.")
+//     es otro activo para LIS, así que aquí también es otra unidad.
 //   - inventario_importaciones/{auto}: bitácora de cada actualización.
 // La columna "estado" del archivo (T / M) se muestra tal cual: todavía no se
 // sabe qué significa cada letra.
@@ -196,9 +200,15 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
     setTimeout(() => $("#in-exito").classList.add("oculto"), 6000);
   }
 
+  // Estatus guardado de OTRA unidad física con el mismo económico (otra serie).
+  function estatusDeOtraSerie(u) {
+    const e = cache.estatus.get(u.id);
+    return !!(e && e.serie && u.serie && e.serie !== u.serie);
+  }
   function estatusDe(u) {
     const e = cache.estatus.get(u.id);
-    return e && ESTATUS[e.estatus] ? e.estatus : "activa";
+    if (!e || !ESTATUS[e.estatus] || estatusDeOtraSerie(u)) return "activa";
+    return e.estatus;
   }
   function cruce(u) {
     if (u.tipo !== "TRACTOCAMION") return { clave: "na" };
@@ -299,7 +309,7 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
             <td>${esc(u.placas || "—")}</td>
             ${esTracto ? `<td>${u.kms ? miles(u.kms) : "—"}</td><td>${u.operador && u.operador !== "SIN ASIGNAR" ? esc(u.operador) : `<span class="in-sub" style="display:inline">Sin asignar</span>`}</td><td>${celdaCruce}</td>` : ""}
             <td><span class="in-chip ${u.estadoArchivo === "M" ? "in-m" : "in-ok"}">${esc(u.estadoArchivo || "—")}</span></td>
-            <td><span class="in-chip ${ESTATUS[est].clase}">${ESTATUS[est].txt}</span>${rev.length ? ` <span class="in-chip in-rev" title="${esc(rev.join(" · "))}">Revisar</span>` : ""}</td>
+            <td><span class="in-chip ${ESTATUS[est].clase}">${ESTATUS[est].txt}</span>${rev.length ? ` <span class="in-chip in-rev" title="${esc(rev.join(" · "))}">Revisar</span>` : ""}${estatusDeOtraSerie(u) ? ` <span class="in-chip in-no" title="El estatus guardado era de otra serie">Cambió la serie</span>` : ""}</td>
           </tr>`;
         }).join("")}</tbody>
       </table></div>
@@ -356,7 +366,8 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
         ${u.tipo === "TRACTOCAMION" ? `<div class="in-bloque"><h4>Órdenes de trabajo (últimas)</h4><div class="in-hist" id="in-ots">Cargando…</div></div>` : ""}
         <div class="in-bloque">
           <h4>Estatus en ADREMATASA Interno</h4>
-          ${e && est !== "activa" ? `<div><b>${ESTATUS[est].txt}</b> desde el ${fechaCorta(e.fechaEvento)} · ${esc(e.motivo || "")}</div>` : `<div>Activa${e ? ` (reactivada el ${fechaCorta(e.fechaEvento)})` : ""}</div>`}
+          ${estatusDeOtraSerie(u) ? `<div class="in-cruce no" style="margin-bottom:8px;">⚠️ Hay un estatus <b>${esc((ESTATUS[e.estatus] || {}).txt || e.estatus)}</b> del ${fechaCorta(e.fechaEvento)} guardado para la serie <b>${esc(e.serie)}</b>. Esta unidad trae otra serie (<b>${esc(u.serie)}</b>), así que no se le aplica: se considera Activa.</div>` : ""}
+          ${e && est !== "activa" && !estatusDeOtraSerie(u) ? `<div><b>${ESTATUS[est].txt}</b> desde el ${fechaCorta(e.fechaEvento)} · ${esc(e.motivo || "")}</div>` : `<div>Activa${e ? ` (reactivada el ${fechaCorta(e.fechaEvento)})` : ""}</div>`}
           ${hist ? `<div class="in-hist">${hist}</div>` : ""}
           ${esAdmin ? `
             <label>Cambiar estatus</label>
@@ -400,15 +411,15 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
       if (!motivo) { err.textContent = "Escribe el motivo."; return; }
       btn.disabled = true;
       const ms = Date.now();
-      const entrada = { estatus: nuevo, fechaEvento: fecha, motivo, porUid: uid, porNombre: datosUsuario.nombre || "", ms };
+      const entrada = { estatus: nuevo, fechaEvento: fecha, motivo, serie: u.serie || "", porUid: uid, porNombre: datosUsuario.nombre || "", ms };
       try {
         await setDoc(doc(db, "inventario_estatus", u.id), {
-          unidad: u.id, tipo: u.tipo, estatus: nuevo, fechaEvento: fecha, motivo,
+          unidad: u.id, tipo: u.tipo, serie: u.serie || "", estatus: nuevo, fechaEvento: fecha, motivo,
           por: { uid, nombre: datosUsuario.nombre || "" }, ms, actualizadoEn: serverTimestamp(),
           historial: arrayUnion(entrada),
         }, { merge: true });
         const previo = cache.estatus.get(u.id) || {};
-        cache.estatus.set(u.id, { ...previo, estatus: nuevo, fechaEvento: fecha, motivo, ms, historial: [...(previo.historial || []), entrada] });
+        cache.estatus.set(u.id, { ...previo, serie: u.serie || "", estatus: nuevo, fechaEvento: fecha, motivo, ms, historial: [...(previo.historial || []), entrada] });
         cerrar();
         avisar(`${u.id}: estatus ${ESTATUS[nuevo].txt} guardado.`);
         renderTabs(); renderLista();
@@ -515,6 +526,12 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
           if (dif.length) cambios.push({ id: u.id, dif });
         });
         const fuera = cache.unidades.filter(u => !idsNuevos.has(u.id));
+        // Económicos con estatus propio cuya SERIE ya no coincide: era otra unidad física.
+        const otraSerie = nuevas.filter(u => {
+          const e = cache.estatus.get(u.id);
+          if (!e || !ESTATUS[e.estatus] || e.estatus === "activa") return false;
+          return !!(e.serie && u.serie && e.serie !== u.serie);
+        });
         const sinCambio = nuevas.length - altas.length - cambios.length;
         res.innerHTML = `
           <div class="in-res">
@@ -524,6 +541,7 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
             <span style="background:#F1EFE8;"><b>${miles(sinCambio)}</b>Sin cambios</span>
           </div>
           ${cambios.length ? `<div class="tabla-wrap"><table class="in-tabla" style="min-width:600px;"><thead><tr><th>Económico</th><th>Cambio</th></tr></thead><tbody>${cambios.slice(0, 40).map(c => `<tr><td class="in-eco">${esc(c.id)}</td><td>${c.dif.map(d => `${esc(d.campo)}: <i>${esc(d.antes || "—")}</i> → <b>${esc(d.despues || "—")}</b>`).join("<br>")}</td></tr>`).join("")}</tbody></table></div>${cambios.length > 40 ? `<p class="nota">… y ${miles(cambios.length - 40)} más.</p>` : ""}` : ""}
+          ${otraSerie.length ? `<div class="in-cruce no" style="margin:10px 0;">⚠️ <b>${otraSerie.length}</b> económico${otraSerie.length === 1 ? "" : "s"} con estatus propio ahora trae${otraSerie.length === 1 ? "" : "n"} <b>otra serie</b> (LIS lo reutilizó para otra unidad). Su estatus no se aplicará a la unidad nueva:<br>${otraSerie.slice(0, 20).map(u => { const e = cache.estatus.get(u.id); return `<b>${esc(u.id)}</b>: ${esc((ESTATUS[e.estatus] || {}).txt || e.estatus)} del ${fechaCorta(e.fechaEvento)} era de la serie ${esc(e.serie)}; ahora ${esc(u.serie)}`; }).join("<br>")}</div>` : ""}
           ${fuera.length ? `<p class="nota">Ya no vienen: ${fuera.slice(0, 30).map(u => esc(u.id)).join(", ")}${fuera.length > 30 ? "…" : ""}. Saldrán del catálogo (su estatus propio se conserva).</p>` : ""}
           <div class="error" id="in-imp-error"></div>
           <div class="in-botones" style="max-width:420px;"><button type="button" class="secundario" id="in-imp-cancelar">Cancelar</button><button type="button" id="in-imp-aplicar">Aplicar cambios (${miles(nuevas.length)} unidades)</button></div>`;
