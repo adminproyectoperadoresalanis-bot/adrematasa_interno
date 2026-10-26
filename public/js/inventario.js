@@ -24,8 +24,6 @@ import { suscribirEspejo } from "./espejosOperadores.js";
 //     se le aplica y se avisa. Un económico con punto o letra extra ("R1409.")
 //     es otro activo para LIS, así que aquí también es otra unidad.
 //   - inventario_importaciones/{auto}: bitácora de cada actualización.
-// La columna "estado" del archivo (T / M) se muestra tal cual: todavía no se
-// sabe qué significa cada letra.
 // Cruce de operador: el operador del archivo contra el que tiene esa unidad
 // en Alanis Operadores (espejo en vivo; requiere acceso a Operadores).
 // Actualizar catálogo y cambiar estatus: solo admin (fase 1).
@@ -47,7 +45,7 @@ const ESTATUS = {
 };
 const CAMPOS_CAMBIO = [
   ["tipo", "Tipo"], ["marca", "Marca"], ["modelo", "Año"], ["serie", "Serie"], ["placas", "Placas"],
-  ["kms", "Kms"], ["estadoArchivo", "Estado (archivo)"], ["area", "Área"], ["tarjeta", "Tarjeta/llave"],
+  ["kms", "Kms"], ["area", "Área"], ["tarjeta", "Tarjeta/llave"],
   ["motor", "Motor"], ["operador", "Operador"],
 ];
 
@@ -108,7 +106,7 @@ function inyectarEstilos() {
     .in-tabla tr.in-fuera td { color: #9A938A; }
     .in-eco { font-weight: 800; font-size: 14px; }
     .in-chip { display: inline-block; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 2px 8px; white-space: nowrap; }
-    .in-ok { background: #EAF3DE; color: #27500A; } .in-m { background: #FBE3A8; color: #7a3e06; }
+    .in-ok { background: #EAF3DE; color: #27500A; }
     .in-no { background: #FCEBEB; color: #A32D2D; } .in-gris { background: #F1EFE8; color: #6b5f52; }
     .in-rev { background: #FBF0D5; color: #7a3e06; }
     .in-sub { color: #6b5f52; font-size: 11.5px; display: block; }
@@ -170,7 +168,7 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
   let tab = "tracto";
   let pagina = 1;
   let operadoresPorUnidad = null; // Map unidad -> operador de Alanis Operadores (o null si no hay acceso)
-  const f = { q: "", marca: "", estadoArchivo: "", estatus: "activas", operador: "", revisar: false };
+  const f = { q: "", marca: "", estatus: "activas", operador: "", revisar: false };
 
   contenedor.innerHTML = `
     <section class="panel">
@@ -227,7 +225,7 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
       + (esAdmin ? `<button type="button" class="in-tab${tab === "importar" ? " activo" : ""}" data-tab="importar">Actualizar catálogo</button>` : "");
     $("#in-tabs").querySelectorAll(".in-tab").forEach(b => b.addEventListener("click", () => {
       tab = b.dataset.tab; pagina = 1;
-      f.q = ""; f.marca = ""; f.estadoArchivo = ""; f.estatus = "activas"; f.operador = ""; f.revisar = false;
+      f.q = ""; f.marca = ""; f.estatus = "activas"; f.operador = ""; f.revisar = false;
       renderTabs();
       tab === "importar" ? renderImportar() : renderLista();
     }));
@@ -241,7 +239,6 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
       if (f.estatus === "activas" && est !== "activa") return false;
       if (f.estatus !== "activas" && f.estatus !== "todas" && est !== f.estatus) return false;
       if (f.marca && u.marca !== f.marca) return false;
-      if (f.estadoArchivo && u.estadoArchivo !== f.estadoArchivo) return false;
       if (f.operador === "con" && (!u.operador || u.operador === "SIN ASIGNAR")) return false;
       if (f.operador === "sin" && u.operador && u.operador !== "SIN ASIGNAR") return false;
       if (f.operador === "nocoincide" && cruce(u).clave !== "no") return false;
@@ -262,7 +259,6 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
     const kpis = [
       `<div class="in-kpi v"><b>${miles(activas.length)}</b><small>Activas</small></div>`,
       `<div class="in-kpi r"><b>${miles(delTipo.length - activas.length)}</b><small>Baja / vendida</small></div>`,
-      `<div class="in-kpi"><b>${miles(activas.filter(u => u.estadoArchivo === "T").length)} / ${miles(activas.filter(u => u.estadoArchivo === "M").length)}</b><small>Estado T / M (activas)</small></div>`,
       `<div class="in-kpi a"><b>${miles(activas.filter(u => motivosRevisar(u, cache.porId).length).length)}</b><small>Por revisar si siguen en la flota</small></div>`,
     ];
     if (esTracto) {
@@ -277,7 +273,6 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
       <div class="in-filtros">
         <input type="text" id="in-q" placeholder="Buscar económico, serie, placas, motor${esTracto ? " u operador" : ""}…" value="${esc(f.q)}">
         <select id="in-marca"><option value="">Marca: todas</option>${marcas.map(m => `<option${f.marca === m ? " selected" : ""}>${esc(m)}</option>`).join("")}</select>
-        <select id="in-estado"><option value="">Estado: T y M</option><option value="T"${f.estadoArchivo === "T" ? " selected" : ""}>Estado T</option><option value="M"${f.estadoArchivo === "M" ? " selected" : ""}>Estado M</option></select>
         <select id="in-estatus">
           <option value="activas"${f.estatus === "activas" ? " selected" : ""}>Solo activas</option>
           <option value="baja"${f.estatus === "baja" ? " selected" : ""}>Bajas</option>
@@ -289,7 +284,7 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
         <button type="button" class="secundario" id="in-excel">Exportar Excel</button>
       </div>
       <div class="tabla-wrap"><table class="in-tabla">
-        <thead><tr><th>Económico</th><th>Marca · Año</th><th>Serie</th><th>Placas</th>${esTracto ? "<th>Kms</th><th>Operador (archivo)</th><th>Alanis Operadores</th>" : ""}<th>Estado</th><th>Estatus</th></tr></thead>
+        <thead><tr><th>Económico</th><th>Marca · Año</th><th>Serie</th><th>Placas</th>${esTracto ? "<th>Kms</th><th>Operador (archivo)</th><th>Alanis Operadores</th>" : ""}<th>Estatus</th></tr></thead>
         <tbody>${visibles.map(u => {
           const est = estatusDe(u);
           const rev = est === "activa" ? motivosRevisar(u, cache.porId) : [];
@@ -308,7 +303,6 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
             <td>${esc(u.serie || "—")}</td>
             <td>${esc(u.placas || "—")}</td>
             ${esTracto ? `<td>${u.kms ? miles(u.kms) : "—"}</td><td>${u.operador && u.operador !== "SIN ASIGNAR" ? esc(u.operador) : `<span class="in-sub" style="display:inline">Sin asignar</span>`}</td><td>${celdaCruce}</td>` : ""}
-            <td><span class="in-chip ${u.estadoArchivo === "M" ? "in-m" : "in-ok"}">${esc(u.estadoArchivo || "—")}</span></td>
             <td><span class="in-chip ${ESTATUS[est].clase}">${ESTATUS[est].txt}</span>${rev.length ? ` <span class="in-chip in-rev" title="${esc(rev.join(" · "))}">Revisar</span>` : ""}${estatusDeOtraSerie(u) ? ` <span class="in-chip in-no" title="El estatus guardado era de otra serie">Cambió la serie</span>` : ""}</td>
           </tr>`;
         }).join("")}</tbody>
@@ -319,7 +313,7 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
     const q = $("#in-q");
     q.addEventListener("input", () => { f.q = q.value; pagina = 1; const pos = q.selectionStart; renderLista(); const n = $("#in-q"); n.focus(); n.setSelectionRange(pos, pos); });
     const enlazar = (id, campo) => { const el = $(id); if (el) el.addEventListener("change", () => { f[campo] = el.type === "checkbox" ? el.checked : el.value; pagina = 1; renderLista(); }); };
-    enlazar("#in-marca", "marca"); enlazar("#in-estado", "estadoArchivo"); enlazar("#in-estatus", "estatus"); enlazar("#in-op", "operador"); enlazar("#in-rev", "revisar");
+    enlazar("#in-marca", "marca"); enlazar("#in-estatus", "estatus"); enlazar("#in-op", "operador"); enlazar("#in-rev", "revisar");
     const mas = $("#in-mas"); if (mas) mas.addEventListener("click", () => { pagina++; renderLista(); });
     $("#in-excel").addEventListener("click", () => exportarExcel(lista));
     $("#in-cuerpo").querySelectorAll("tbody tr").forEach(tr => tr.addEventListener("click", () => {
@@ -349,7 +343,7 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
     fondo.innerHTML = `
       <div class="in-modal-caja in-modal" role="dialog" aria-modal="true">
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
-          <div style="font-size:18px;font-weight:800;">${esc(u.id)} <span class="in-chip ${ESTATUS[est].clase}" style="vertical-align:middle;">${ESTATUS[est].txt}</span> <span class="in-chip ${u.estadoArchivo === "M" ? "in-m" : "in-ok"}" style="vertical-align:middle;">Estado ${esc(u.estadoArchivo || "—")}</span></div>
+          <div style="font-size:18px;font-weight:800;">${esc(u.id)} <span class="in-chip ${ESTATUS[est].clase}" style="vertical-align:middle;">${ESTATUS[est].txt}</span></div>
           <button type="button" class="secundario in-cerrar" aria-label="Cerrar">✕</button>
         </div>
         <div class="in-sub" style="font-size:13px;margin-top:2px;">${esc(u.tipo)} · ${esc(u.marca || "—")} · ${esc(u.modelo || "—")} · ${esc(u.area || "—")}</div>
@@ -450,7 +444,7 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
         return {
           "Económico": u.id, "Tipo": u.tipo, "Marca": u.marca, "Año": u.modelo, "Serie": u.serie, "Placas": u.placas,
           "Motor": u.motor, "Tarjeta/llave": u.tarjeta, "Kms": u.kms, "Área": u.area, "Operador (archivo)": u.operador,
-          "Estado (archivo)": u.estadoArchivo, "Estatus": ESTATUS[est].txt,
+          "Estatus": ESTATUS[est].txt,
           "Fecha evento": est !== "activa" ? e.fechaEvento || "" : "", "Motivo": est !== "activa" ? e.motivo || "" : "",
           "Por revisar": est === "activa" ? motivosRevisar(u, cache.porId).join(" · ") : "",
         };
@@ -593,7 +587,7 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
   function pintarMeta() {
     const m = cache.meta;
     $("#in-meta").textContent = m
-      ? `Catálogo del Adrematasa oficial · actualizado ${fechaHora(m.importadoMs)} por ${(m.importadoPor || {}).nombre || ""} · ${miles(m.total)} unidades. El estado T/M viene del archivo; el estatus Activa/Baja/Vendida es propio de esta app.`
+      ? `Catálogo del Adrematasa oficial · actualizado ${fechaHora(m.importadoMs)} por ${(m.importadoPor || {}).nombre || ""} · ${miles(m.total)} unidades. El estatus Activa/Baja/Vendida es propio de esta app.`
       : "Todavía no se ha cargado el catálogo.";
   }
 
