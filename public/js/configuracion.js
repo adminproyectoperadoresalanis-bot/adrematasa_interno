@@ -225,8 +225,64 @@ export function iniciarConfiguracion(contenedor) {
       </div>
         </div>
       </details>
+      <details class="cfg-acordeon">
+        <summary>
+          <svg class="cfg-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg>
+          <span class="cfg-titulos"><span class="cfg-titulo">Inventario</span><span class="cfg-resumen" id="resumen-inventario">Quién puede editar</span></span>
+          <span class="cfg-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div class="cfg-cuerpo">
+      <p class="nota">
+        Puestos que pueden <b>editar</b> el Inventario: cambiar el estatus de una unidad
+        (Activa / Baja / Vendida) y actualizar el catálogo con el archivo de LIS. El resto de
+        quienes tienen acceso a Inventario solo consulta. El administrador siempre puede editar.
+      </p>
+      <div id="inv-error" class="error"></div>
+      <p id="inv-exito" class="nota oculto" style="color:#1c7a41;"></p>
+      <div id="inv-puestos" class="nota" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:6px;">Cargando puestos…</div>
+      <div class="acciones-form" style="margin-top:14px;">
+        <button type="button" id="btn-guardar-inventario">Guardar</button>
+      </div>
+        </div>
+      </details>
     </div>
   `;
+
+  // Inventario (2026-10-27): configuracion/inventario { editanPuestos[] }.
+  // Lo leen inventario.js (para mostrar edición) y firestore.rules (puedeEditarInventario).
+  const refInventario = doc(db, "configuracion", "inventario");
+  const cajaInv = contenedor.querySelector("#inv-puestos");
+  let invGuardados = [];
+  let invCatalogo = null;
+  function pintarInv() {
+    if (!invCatalogo) return;
+    if (!invCatalogo.length) { cajaInv.textContent = "No hay puestos en Áreas y puestos."; return; }
+    cajaInv.innerHTML = invCatalogo.map(p => `<label style="display:inline-flex;gap:5px;align-items:center;margin:0;color:#2c1e0f;"><input type="checkbox" class="inv-puesto" value="${escapeHtml(p)}" style="width:auto;"${invGuardados.includes(p) ? " checked" : ""}> ${escapeHtml(p)}</label>`).join("");
+  }
+  getDoc(doc(db, "configuracion", "estructura")).then(s => {
+    const areasInv = (s.exists() && Array.isArray(s.data().areas)) ? s.data().areas : AREAS_DEFAULT;
+    invCatalogo = [...new Set(areasInv.flatMap(a => (a && Array.isArray(a.puestos)) ? a.puestos : []).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
+    pintarInv();
+  }).catch(() => { cajaInv.textContent = "No se pudieron cargar los puestos."; });
+  onSnapshot(refInventario, (s) => {
+    invGuardados = s.exists() && Array.isArray(s.data().editanPuestos) ? s.data().editanPuestos : [];
+    pintarInv();
+    const r = contenedor.querySelector("#resumen-inventario");
+    if (r) r.textContent = invGuardados.length ? `Editan: ${invGuardados.join(", ")}` : "Solo el administrador edita";
+  });
+  contenedor.querySelector("#btn-guardar-inventario").addEventListener("click", async () => {
+    const err = contenedor.querySelector("#inv-error");
+    const ok = contenedor.querySelector("#inv-exito");
+    err.textContent = ""; ok.classList.add("oculto");
+    const editan = [...cajaInv.querySelectorAll(".inv-puesto:checked")].map(x => x.value);
+    try {
+      await setDoc(refInventario, { editanPuestos: editan, actualizadoEn: new Date().toISOString() }, { merge: true });
+      ok.textContent = "Guardado. Aplica la próxima vez que cada usuario abra Inventario.";
+      ok.classList.remove("oculto");
+    } catch (e) {
+      err.textContent = "No se pudo guardar: " + e.message;
+    }
+  });
 
   // Asistencia ruta corta (2026-10-20): configuracion/asistencia
   // { montoSemanaCorta, montoSemanaCircuito, horaCorte, reabrenPuestos[],

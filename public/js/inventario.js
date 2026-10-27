@@ -4,7 +4,7 @@
 // ##########################################################################
 import { db } from "./firebase-config.js";
 import {
-  collection, doc, getDocs, setDoc, writeBatch, query, where, limit, arrayUnion, serverTimestamp
+  collection, doc, getDoc, getDocs, setDoc, writeBatch, query, where, limit, arrayUnion, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { suscribirEspejo } from "./espejosOperadores.js";
 
@@ -164,7 +164,19 @@ function motivosRevisar(u, porId) {
 
 export function iniciarInventario(contenedor, datosUsuario, uid) {
   inyectarEstilos();
-  const esAdmin = datosUsuario && datosUsuario.rol === "admin";
+  // Quién edita (2026-10-27): admin, o los puestos marcados en Configuración →
+  // 2 · Utilidades → Inventario (configuracion/inventario.editanPuestos).
+  // Editar = cambiar estatus y actualizar el catálogo. Las reglas validan lo mismo.
+  const esAdminReal = datosUsuario && datosUsuario.rol === "admin";
+  let esAdmin = esAdminReal;
+  async function leerPermisoEdicion() {
+    if (esAdminReal) return;
+    try {
+      const s = await getDoc(doc(db, "configuracion", "inventario"));
+      const lista = s.exists() && Array.isArray(s.data().editanPuestos) ? s.data().editanPuestos : [];
+      esAdmin = !!(datosUsuario && datosUsuario.puesto && lista.includes(datosUsuario.puesto));
+    } catch (e) { esAdmin = false; }
+  }
   let tab = "tracto";
   let pagina = 1;
   let operadoresPorUnidad = null; // Map unidad -> operador de Alanis Operadores (o null si no hay acceso)
@@ -594,7 +606,7 @@ export function iniciarInventario(contenedor, datosUsuario, uid) {
   async function iniciar(forzar) {
     $("#in-error").textContent = "";
     try {
-      await cargarCatalogo(forzar);
+      await Promise.all([cargarCatalogo(forzar), leerPermisoEdicion()]);
       pintarMeta();
       if (!cache.unidades.length && esAdmin) tab = "importar";
       renderTabs();

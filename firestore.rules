@@ -796,17 +796,26 @@ service cloud.firestore {
     }
 
     // Inventario (2026-10-24): catálogo del Adrematasa oficial + estatus propio.
+    // 2026-10-27: editan el admin y los puestos de configuracion/inventario.editanPuestos.
+    function puedeEditarInventario() {
+      return esAdmin() || (
+        usuarioActivoValido() && tieneAccesoUtilidad('inventario')
+        && exists(/databases/$(database)/documents/configuracion/inventario)
+        && usuarioActual().get('puesto', '') in
+           get(/databases/$(database)/documents/configuracion/inventario).data.get('editanPuestos', [])
+      );
+    }
     match /inventario_catalogo/{id} {
       allow read: if usuarioActivoValido() && tieneAccesoUtilidad('inventario');
-      allow write: if esAdmin();
+      allow write: if puedeEditarInventario();
     }
     match /inventario_estatus/{id} {
       allow read: if usuarioActivoValido() && tieneAccesoUtilidad('inventario');
-      allow write: if esAdmin();
+      allow write: if puedeEditarInventario();
     }
     match /inventario_importaciones/{id} {
-      allow read: if esAdmin();
-      allow create: if esAdmin();
+      allow read: if puedeEditarInventario();
+      allow create: if puedeEditarInventario();
       allow update, delete: if false;
     }
 
