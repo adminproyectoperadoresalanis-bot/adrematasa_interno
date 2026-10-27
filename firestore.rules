@@ -819,6 +819,14 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Rentabilidad (2026-10-28): solo la cuenta de Ivan.
+    function esDuenoRentabilidad() {
+      return esAdmin() && request.auth.token.email == 'ilanda@alanis.com.mx';
+    }
+    match /rentabilidad_facturas/{id} {
+      allow read, write: if esDuenoRentabilidad();
+    }
+
     match /bitacora_acciones_operadores/{id} {
       allow read: if esAdmin();
       allow write: if false;

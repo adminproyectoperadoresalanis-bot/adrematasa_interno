@@ -35,6 +35,9 @@
 // del despacho (Turnos y Asignación, asignacion.js). Operadores se
 // queda con lo administrativo (Aceptación, OT, Registrados, Asistencia).
 // Turnos conserva su id de pantalla ("operadoresTurnos"), así auth.js no cambia.
+// 2026-10-28 (pedido de Ivan): "Rentabilidad" (rentabilidad.js), SOLO para su
+// cuenta. No va en OPCIONES_UTILIDADES (no sale en la tabla de accesos por
+// área); solo está en la lista del admin y se quita si el correo no es el suyo.
 
 // Catálogo de opciones de Utilidades — lo usa configuracion.js para armar las
 // columnas de la tabla de accesos. Al agregar una opción nueva basta con
@@ -61,6 +64,7 @@ const ICONOS = {
   rh: ICONO_PERSONAS,
   operadores: SVG(`<rect x="1" y="6" width="14" height="10" rx="1"/><path d="M15 9h4l3 3v4h-7"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/>`),
   inventario: SVG(`<path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>`),
+  rentabilidad: SVG(`<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-6"/><path d="M16 8h4v4"/>`),
   trafico: SVG(`<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>`),
   validacionQR: SVG(`<path d="M3 7V4a1 1 0 0 1 1-1h3"/><path d="M17 3h3a1 1 0 0 1 1 1v3"/><path d="M21 17v3a1 1 0 0 1-1 1h-3"/><path d="M7 21H4a1 1 0 0 1-1-1v-3"/><rect x="7" y="7" width="10" height="10" rx="1"/>`),
   // Renglones de la lista de RH
@@ -182,6 +186,16 @@ const OPCION_OPERADORES = {
   ]
 };
 
+// Rentabilidad (2026-10-28): solo la cuenta de Ivan (soloCorreo).
+const CORREO_RENTABILIDAD = "ilanda@alanis.com.mx";
+const OPCION_RENTABILIDAD = {
+  id: "rentabilidad",
+  etiqueta: "Rentabilidad",
+  descripcion: "Facturas · Clientes · Rutas",
+  pantalla: "rentabilidad",
+  soloCorreo: CORREO_RENTABILIDAD
+};
+
 // Tráfico (2026-10-27): despacho del día a día.
 const OPCION_TRAFICO = {
   id: "trafico",
@@ -213,7 +227,7 @@ const TABS_POR_ROL = {
   ],
   admin: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO] },
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_RENTABILIDAD] },
     { id: "configuracion", etiqueta: "Configuración" }
   ]
 };
@@ -290,12 +304,16 @@ function inyectarEstilosUtilidades() {
 // pestaña del rol, se usa la primera).
 // opcionesPermitidas: arreglo de ids de OPCIONES_UTILIDADES que puede ver este
 // usuario, o null para ver todas (admin, o mientras no exista configuración).
-export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermitidas = null) {
+// correo: el del usuario; las opciones con soloCorreo solo se muestran a ese correo.
+export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermitidas = null, correo = "") {
   const nav = document.getElementById("nav-inferior");
   const contenidoApp = document.getElementById("contenido-app");
+  const correoUsuario = String(correo || "").trim().toLowerCase();
   const tabs = (TABS_POR_ROL[rol] || []).map(t => {
-    if (!t.opciones || !Array.isArray(opcionesPermitidas)) return t;
-    return { ...t, opciones: t.opciones.filter(op => opcionesPermitidas.includes(op.id)) };
+    if (!t.opciones) return t;
+    let opciones = t.opciones.filter(op => !op.soloCorreo || op.soloCorreo === correoUsuario);
+    if (Array.isArray(opcionesPermitidas)) opciones = opciones.filter(op => opcionesPermitidas.includes(op.id));
+    return { ...t, opciones };
   });
 
   opcionesVisibles = new Set(tabs.flatMap(t => (t.opciones || []).map(op => op.id)));

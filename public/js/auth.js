@@ -35,6 +35,7 @@ import { iniciarAlertasRH, detenerAlertasRH } from "./alertasRH.js";
 import { iniciarAlertasQR, detenerAlertasQR } from "./alertasQR.js";
 import { iniciarTurnos } from "./turnos.js";
 import { iniciarAsignacion } from "./asignacion.js";
+import { iniciarRentabilidad } from "./rentabilidad.js";
 import { iniciarAsistencia } from "./asistencia.js";
 import { iniciarInventario } from "./inventario.js";
 
@@ -383,8 +384,9 @@ onAuthStateChanged(auth, async (user) => {
       catalogo: (c) => iniciarPanelAdmin(c, user.uid),
       organigrama: (c) => iniciarOrganigrama(c),
       reportes: (c) => iniciarReportesAdmin(c),
-      configuracion: (c) => iniciarConfiguracion(c)
-    }, "panel");
+      configuracion: (c) => iniciarConfiguracion(c),
+      rentabilidad: (c) => iniciarRentabilidad(c, datosUsuario, user.uid)
+    }, "panel", null, user.email);
     iniciarAlertasRH("admin", user.uid);
     iniciarAlertasQR(datosUsuario);
     iniciarAlertasOperadores();
