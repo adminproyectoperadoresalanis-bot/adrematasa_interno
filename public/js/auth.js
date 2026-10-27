@@ -34,6 +34,7 @@ import { iniciarSolicitudesOperadores, iniciarOrdenesTrabajo, iniciarOperadoresR
 import { iniciarAlertasRH, detenerAlertasRH } from "./alertasRH.js";
 import { iniciarAlertasQR, detenerAlertasQR } from "./alertasQR.js";
 import { iniciarTurnos } from "./turnos.js";
+import { iniciarAsignacion } from "./asignacion.js";
 import { iniciarAsistencia } from "./asistencia.js";
 import { iniciarInventario } from "./inventario.js";
 
@@ -364,6 +365,7 @@ onAuthStateChanged(auth, async (user) => {
       operadoresOrdenes: (c) => iniciarOrdenesTrabajo(c, datosUsuario.nombre),
       operadoresRegistrados: (c) => iniciarOperadoresRegistrados(c),
       operadoresTurnos: (c) => iniciarTurnos(c, datosUsuario, user.uid),
+      traficoAsignacion: (c) => iniciarAsignacion(c, datosUsuario),
       operadoresAsistencia: (c) => iniciarAsistencia(c),
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       panel: (c) => iniciarPanelResumenAdmin(c),
@@ -396,6 +398,7 @@ onAuthStateChanged(auth, async (user) => {
       operadoresOrdenes: (c) => iniciarOrdenesTrabajo(c, datosUsuario.nombre),
       operadoresRegistrados: (c) => iniciarOperadoresRegistrados(c),
       operadoresTurnos: (c) => iniciarTurnos(c, datosUsuario, user.uid),
+      traficoAsignacion: (c) => iniciarAsignacion(c, datosUsuario),
       operadoresAsistencia: (c) => iniciarAsistencia(c),
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       horasExtra: (c) => iniciarVistaEmpleado(c, datosUsuario, user.uid),
@@ -418,6 +421,7 @@ onAuthStateChanged(auth, async (user) => {
       operadoresOrdenes: (c) => iniciarOrdenesTrabajo(c, datosUsuario.nombre),
       operadoresRegistrados: (c) => iniciarOperadoresRegistrados(c),
       operadoresTurnos: (c) => iniciarTurnos(c, datosUsuario, user.uid),
+      traficoAsignacion: (c) => iniciarAsignacion(c, datosUsuario),
       operadoresAsistencia: (c) => iniciarAsistencia(c),
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       panel: (c) => iniciarPanelResumenSupervisor(c, user.uid),

@@ -32,7 +32,7 @@
 // functions/operadoresAlanis.js). Mismas pantallas para los 3 roles; quién la
 // ve lo decide solo el área (tabla de accesos).
 // 2026-10-27 (pedido de Ivan): nace la tarjeta "Tráfico" con lo del día a día
-// del despacho (Turnos y, en el siguiente paso, Asignación). Operadores se
+// del despacho (Turnos y Asignación, asignacion.js). Operadores se
 // queda con lo administrativo (Aceptación, OT, Registrados, Asistencia).
 // Turnos conserva su id de pantalla ("operadoresTurnos"), así auth.js no cambia.
 
@@ -186,9 +186,10 @@ const OPCION_OPERADORES = {
 const OPCION_TRAFICO = {
   id: "trafico",
   etiqueta: "Tráfico",
-  descripcion: "Turnos en patio",
+  descripcion: "Turnos · Asignación",
   subtabs: [
-    { id: "operadoresTurnos", etiqueta: "Turnos" }
+    { id: "operadoresTurnos", etiqueta: "Turnos" },
+    { id: "traficoAsignacion", etiqueta: "Asignación" }
   ]
 };
 

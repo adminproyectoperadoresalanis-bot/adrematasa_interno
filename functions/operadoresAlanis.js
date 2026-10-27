@@ -22,6 +22,8 @@
 // Quién puede usarlas: usuario activo de ADREMATASA y (admin, o su área tiene
 // "Operadores" marcada en configuracion/accesosUtilidades). Es el mismo
 // criterio que la tabla de Configuración, pero aplicado aquí en el servidor.
+// Tráfico (2026-10-27): las funciones de Asignación piden la opción "trafico"
+// (leerActor_(request, ["trafico"])); las demás siguen pidiendo "operadores".
 // ============================================================================
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
@@ -51,7 +53,8 @@ function leerTipoRuta_(valor, obligatorio) {
 }
 
 // ---- Permisos ---------------------------------------------------------------
-async function leerActor_(request) {
+async function leerActor_(request, opciones) {
+  const permitidas = Array.isArray(opciones) && opciones.length ? opciones : [ID_OPCION];
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
   }
@@ -68,8 +71,9 @@ async function leerActor_(request) {
     if (snapAccesos.exists) {
       const porArea = snapAccesos.data().porArea || {};
       const lista = porArea[u.area || ""];
-      if (!Array.isArray(lista) || !lista.includes(ID_OPCION)) {
-        throw new HttpsError("permission-denied", "Tu área no tiene acceso a Operadores.");
+      if (!Array.isArray(lista) || !permitidas.some((o) => lista.includes(o))) {
+        throw new HttpsError("permission-denied", permitidas.includes("trafico")
+          ? "Tu área no tiene acceso a Tráfico." : "Tu área no tiene acceso a Operadores.");
       }
     }
   }
@@ -1278,3 +1282,189 @@ exports.correoAsistenciaAutorizada = onDocumentWritten(
     }
   }
 );
+
+// ============================================================================
+// Tráfico → Asignación (2026-10-27, pedido de Ivan). Reemplaza la asignación de
+// admin2.js: crea asignaciones/{id} en Alanis Operadores con los MISMOS campos
+// que admin2.js más creadaDesde/asignadoPor. Al crearse, avisoAsignacion (en
+// alanis-operadores) le manda el aviso push al operador.
+//   - verificarAsignacionOperador({unidad}) → operador activo de esa unidad,
+//     OT abierta, avisos activos y otras asignaciones pendientes.
+//   - crearAsignacionOperador({unidad, operador_erp, remolque, linea, cliente,
+//     destino, cita}) → bloquea si no hay operador activo o si está en taller.
+//   - cancelarAsignacionOperador({id, motivo}) → solo admin o Coordinador, y
+//     solo si sigue pendiente.
+// ============================================================================
+const OPCIONES_TRAFICO = ["trafico"];
+
+function textoAsig_(v, max) {
+  return typeof v === "string" ? v.trim().slice(0, max || 120) : "";
+}
+
+async function operadorDeUnidad_(unidad) {
+  const snap = await dbAlanis.collection("usuarios")
+    .where("rol", "==", "operador")
+    .where("numero", "==", unidad)
+    .where("activo", "==", true)
+    .limit(2).get();
+  if (snap.empty) return null;
+  if (snap.size > 1) {
+    throw new HttpsError("failed-precondition", `La unidad ${unidad} está en dos operadores activos. Corrígelo en Operadores registrados.`);
+  }
+  const d = snap.docs[0].data();
+  return {
+    uid: snap.docs[0].id,
+    nombre: d.nombre || "",
+    nombreOficial: d.nombreOficial || "",
+    numero: d.numero || "",
+    tipoRuta: TIPOS_RUTA.includes(d.tipoRuta) ? d.tipoRuta : null,
+    lada: d.lada === "1" ? "1" : "52",
+    telefono: d.telefono || "",
+  };
+}
+
+async function otAbiertaDe_(uid) {
+  const snap = await dbAlanis.collection("ordenes_trabajo")
+    .where("uid", "==", uid).where("estado", "==", "abierta").limit(1).get();
+  return snap.empty ? null : { id: snap.docs[0].id, folio: snap.docs[0].data().folio || "" };
+}
+
+exports.verificarAsignacionOperador = onCall({ region: REGION }, async (request) => {
+  await leerActor_(request, OPCIONES_TRAFICO);
+  const unidad = textoAsig_((request.data || {}).unidad, 20);
+  if (!unidad) throw new HttpsError("invalid-argument", "Falta la unidad.");
+  try {
+    const op = await operadorDeUnidad_(unidad);
+    if (!op) return { operador: null };
+    const [ot, avisos, pend] = await Promise.all([
+      otAbiertaDe_(op.uid),
+      dbAlanis.collection("avisos_dispositivos").where("uid", "==", op.uid).get(),
+      dbAlanis.collection("asignaciones").where("uid_operador", "==", op.uid).where("estado", "==", "pendiente").get(),
+    ]);
+    return {
+      operador: op,
+      otAbierta: ot,
+      avisos: avisos.size,
+      plataformas: [...new Set(avisos.docs.map((d) => d.get("plataforma") || "otro"))],
+      pendientes: pend.docs.map((d) => ({
+        id: d.id, cliente: d.get("cliente") || "", destino: d.get("destino") || "",
+        timestampMs: aMillis_(d.get("timestamp")),
+      })),
+    };
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    logger.error(`[verificarAsignacionOperador] ${error.message}`);
+    throw new HttpsError("internal", "No se pudo verificar la unidad. Intenta de nuevo.");
+  }
+});
+
+exports.crearAsignacionOperador = onCall({ region: REGION }, async (request) => {
+  const actor = await leerActor_(request, OPCIONES_TRAFICO);
+  const e = request.data || {};
+  const datos = {
+    unidad: textoAsig_(e.unidad, 20),
+    operador_erp: textoAsig_(e.operador_erp, 120),
+    remolque: textoAsig_(e.remolque, 40),
+    linea: textoAsig_(e.linea, 60),
+    cliente: textoAsig_(e.cliente, 120),
+    destino: textoAsig_(e.destino, 160),
+    cita: textoAsig_(e.cita, 40),
+  };
+  if (!datos.unidad) throw new HttpsError("invalid-argument", "La asignación no tiene unidad.");
+  try {
+    const op = await operadorDeUnidad_(datos.unidad);
+    if (!op) throw new HttpsError("not-found", `No hay operador activo con la unidad ${datos.unidad}.`);
+    const ot = await otAbiertaDe_(op.uid);
+    if (ot) {
+      throw new HttpsError("failed-precondition",
+        `${op.nombreOficial || op.nombre} está en taller (OT ${ot.folio || ot.id}). No se puede asignar hasta que terminen su OT.`);
+    }
+    const ref = dbAlanis.collection("asignaciones").doc();
+    await ref.set({
+      uid_operador: op.uid,
+      operador_nombre: op.nombre,
+      unidad: datos.unidad,
+      operador_erp: datos.operador_erp,
+      remolque: datos.remolque,
+      linea: datos.linea,
+      cliente: datos.cliente,
+      destino: datos.destino,
+      cita: datos.cita,
+      estado: "pendiente",
+      fecha_creacion: fechaHoraLocal_().fecha,
+      timestamp: FieldValue.serverTimestamp(),
+      creadaDesde: "ADREMATASA",
+      asignadoPor: { uid: actor.uid, nombre: actor.nombre || "" },
+    });
+    const avisos = await dbAlanis.collection("avisos_dispositivos").where("uid", "==", op.uid).get();
+    await dbLocal.collection(COL_BITACORA).add({
+      tipo: "asignacion_creada",
+      asignacionId: ref.id,
+      operadorUid: op.uid,
+      operadorNombre: op.nombreOficial || op.nombre,
+      unidad: datos.unidad,
+      cliente: datos.cliente,
+      destino: datos.destino,
+      realizadoPor: actor,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+    logger.info(`[crearAsignacionOperador] ${ref.id} unidad ${datos.unidad} por ${actor.uid}`);
+    return {
+      id: ref.id,
+      operadorNombre: op.nombreOficial || op.nombre,
+      avisos: avisos.size,
+      lada: op.lada,
+      telefono: op.telefono,
+    };
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    logger.error(`[crearAsignacionOperador] ${error.message}`);
+    throw new HttpsError("internal", "No se pudo crear la asignación. Intenta de nuevo.");
+  }
+});
+
+exports.cancelarAsignacionOperador = onCall({ region: REGION }, async (request) => {
+  const actor = await leerActor_(request, OPCIONES_TRAFICO);
+  if (!puedeTerminarOT_(actor)) {
+    throw new HttpsError("permission-denied", "Solo un Coordinador o un administrador puede cancelar asignaciones.");
+  }
+  const e = request.data || {};
+  const id = textoAsig_(e.id, 60);
+  if (!id || id.includes("/")) throw new HttpsError("invalid-argument", "Asignación no válida.");
+  const motivo = textoAsig_(e.motivo, 200);
+  if (!motivo) throw new HttpsError("invalid-argument", "Escribe el motivo de la cancelación.");
+  const ref = dbAlanis.collection("asignaciones").doc(id);
+  try {
+    const a = await dbAlanis.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) throw new HttpsError("not-found", "La asignación ya no existe.");
+      const d = snap.data();
+      if (d.estado !== "pendiente") {
+        throw new HttpsError("failed-precondition", `No se puede cancelar: el operador ya la marcó como ${d.estado}.`);
+      }
+      tx.update(ref, {
+        estado: "cancelada",
+        canceladaEn: FieldValue.serverTimestamp(),
+        canceladaPor: { uid: actor.uid, nombre: actor.nombre || "" },
+        motivo_cancelacion: motivo,
+      });
+      return d;
+    });
+    await dbLocal.collection(COL_BITACORA).add({
+      tipo: "asignacion_cancelada",
+      asignacionId: id,
+      operadorUid: a.uid_operador || "",
+      operadorNombre: a.operador_nombre || "",
+      unidad: a.unidad || "",
+      motivo,
+      realizadoPor: actor,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+    logger.info(`[cancelarAsignacionOperador] ${id} por ${actor.uid}`);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    logger.error(`[cancelarAsignacionOperador] ${error.message}`);
+    throw new HttpsError("internal", "No se pudo cancelar la asignación. Intenta de nuevo.");
+  }
+});

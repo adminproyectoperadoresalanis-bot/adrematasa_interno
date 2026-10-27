@@ -5,6 +5,7 @@
 import { db } from "./firebase-config.js";
 import { doc, onSnapshot, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { suscribirEspejo, alSalirDePantalla } from "./espejosOperadores.js";
+import { prepararAsignacion } from "./asignacion.js";
 
 // ============================================================================
 // Operadores → Turnos (2026-10-16, fase 2 de rutas — parte 1: la fila).
@@ -23,6 +24,9 @@ import { suscribirEspejo, alSalirDePantalla } from "./espejosOperadores.js";
 //   - Ruta corta: "Disponible" vence a las N horas (4 por default).
 // Partes siguientes: Asignar viaje (WhatsApp), Perdieron turno / En taller,
 // Configuración.
+// 2026-10-27: Turnos vive en Tráfico. Botón "Asignar →" en los renglones
+// Disponibles: lleva a Tráfico → Asignación con la unidad elegida. Las
+// asignaciones canceladas no cuentan como viaje.
 // ============================================================================
 
 const DOC_PATIO = doc(db, "turnos_patio", "actual");
@@ -218,6 +222,7 @@ function inyectarEstilos() {
     .tu-as { background: #185FA5; color: #fff; } .tu-asp { background: #E6F1FB; color: #0C447C; }
     .tu-nc { background: #FCEBEB; color: #A32D2D; }
     .tu-ad { font-size: 11px; color: #6b5f52; }
+    .tu-asignar { display: inline-block; margin-top: 6px; font-size: 12px; padding: 4px 10px; }
     .tu-pegar { width: 100%; box-sizing: border-box; min-height: 140px; font-family: monospace; font-size: 11.5px; white-space: pre; }
   `;
   document.head.appendChild(s);
@@ -261,6 +266,7 @@ export function iniciarTurnos(contenedor, datosUsuario, uid) {
     const estatusPorUid = new Map((espejo.estatus || []).map(e => [e._id, e]));
     const viajePorUid = new Map();
     (espejo.asignaciones || []).forEach(a => {
+      if (a.estado === "cancelada") return; // 2026-10-27: no cuenta como viaje
       const previo = viajePorUid.get(a.uidOperador);
       if (!previo || (a.timestampMs || 0) > (previo.timestampMs || 0)) viajePorUid.set(a.uidOperador, a);
     });
@@ -348,10 +354,15 @@ export function iniciarTurnos(contenedor, datosUsuario, uid) {
             <td class="tu-num">${i + 1}</td>
             <td><span class="tu-unidad">${esc(op.numero)}</span>${ruta}<span class="tu-sub">${esc(nombre)}</span></td>
             <td>${fechaCorta(r.fechaPatioMs)}<span class="tu-sub">${horas} h</span></td>
-            <td>${estatusHtml}</td>
+            <td>${estatusHtml}${est && (est.clave === "disponible" || est.clave === "vencido") && !it.noCoincide ? `<button type="button" class="tu-asignar" data-unidad="${esc(op.numero)}">Asignar →</button>` : ""}</td>
             <td>${viajeHtml}</td>
           </tr>`;
         }).join("");
+    $("#tu-tbody").querySelectorAll(".tu-asignar").forEach(b => b.addEventListener("click", () => {
+      prepararAsignacion(b.dataset.unidad);
+      const pestana = document.querySelector('.subnav-boton[data-subtab="traficoAsignacion"]');
+      if (pestana) pestana.click();
+    }));
     $("#tu-fuera").textContent = patio && sinOperador
       ? `${sinOperador} unidades del reporte no tienen operador registrado en Alanis Operadores (VENTA, SIN OPERADOR, AGENCIA…) y no se muestran.`
       : "";

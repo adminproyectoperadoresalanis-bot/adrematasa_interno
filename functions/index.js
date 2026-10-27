@@ -783,3 +783,7 @@ exports.autorizarAsistenciaSemana = require("./operadoresAlanis").autorizarAsist
 exports.reabrirAsistenciaSemana = require("./operadoresAlanis").reabrirAsistenciaSemana;
 
 exports.correoAsistenciaAutorizada = require("./operadoresAlanis").correoAsistenciaAutorizada;
+
+exports.verificarAsignacionOperador = require("./operadoresAlanis").verificarAsignacionOperador;
+exports.crearAsignacionOperador = require("./operadoresAlanis").crearAsignacionOperador;
+exports.cancelarAsignacionOperador = require("./operadoresAlanis").cancelarAsignacionOperador;
