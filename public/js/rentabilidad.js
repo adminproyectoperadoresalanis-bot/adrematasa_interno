@@ -3,7 +3,7 @@
 // RUTA:     /workspaces/adrematasa_interno/public/js/rentabilidad.js
 // ##########################################################################
 import { db } from "./firebase-config.js";
-import { collection, doc, onSnapshot, setDoc, deleteDoc, updateDoc } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { collection, doc, onSnapshot, setDoc, deleteDoc, updateDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { leerFactura, paginasDePdf, calcular } from "./rentabilidadPdf.js";
 
 // ============================================================================
@@ -19,9 +19,17 @@ import { leerFactura, paginasDePdf, calcular } from "./rentabilidadPdf.js";
 // Ingreso por km (decisión de Ivan): principal = FLETE ÷ km; también subtotal
 // ÷ km. En USD se convierte a MXN con el tipo de cambio de la misma factura.
 // Ruta = municipio del remitente → municipio del destinatario.
+//
+// 2026-10-28: Salidas del Adrematasa oficial (rentabilidad_salidas/{TAIM}).
+// Se pega el reporte de salidas; cada salida se liga con su factura por el
+// folio de Carta Porte (columna Factura = TAIM-… = cartaPorteFolio del PDF) y
+// la columna Prog marca el tipo de tarifa: OFF = SECA, una temperatura (-10…)
+// = REFRIGERADA. El tipo se calcula al mostrar, así que no importa qué se
+// cargue primero.
 // ============================================================================
 
 const COL = "rentabilidad_facturas";
+const COL_SALIDAS = "rentabilidad_salidas";
 const URL_PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 const URL_PDFJS_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 const URL_SHEETJS = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
@@ -40,6 +48,60 @@ const nombreMes = (ym) => `${MESES[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)
 function claveCliente(f) {
   const c = f.cliente || {};
   return c.rfc && !RFC_GENERICOS.includes(c.rfc) ? c.rfc : "EXT:" + (c.nombre || "").toUpperCase();
+}
+
+// ---- Salidas del Adrematasa oficial ---------------------------------------------
+export const TIPO = {
+  seca: { txt: "SECA", clase: "re-seca" },
+  refrigerada: { txt: "REFRIGERADA", clase: "re-refri" },
+  sin: { txt: "SIN DATO", clase: "re-gris" },
+};
+export function tipoDeProg(prog) {
+  const p = String(prog || "").trim();
+  if (/^OFF$/i.test(p)) return "seca";
+  if (/^[-+]?\d+(\.\d+)?$/.test(p)) return "refrigerada";
+  return "sin";
+}
+const COLUMNAS_SALIDA = {
+  "id": "id", "factura": "factura", "fecha hora": "fechaHora", "factura otras empresas": "facturaOtrasEmpresas",
+  "remolque": "remolque", "linea": "linea", "cliente": "cliente", "producto": "producto", "destino": "destino",
+  "carro": "carro", "operador": "operador", "diesel": "diesel", "salida": "tempSalida", "prog": "prog",
+  "h.t 1": "ht1", "h.t 2": "ht2", "sello": "sello", "usuario": "usuario", "registro": "registro",
+  "intercambista_salida": "intercambistaSalida", "intercambio_salida": "intercambioSalida",
+};
+const normCol = (t) => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase().replace(/\s+/g, " ");
+// "08/10/2026 01:13:00 p. m." (DD/MM/AAAA) → ms
+export function msFechaAdrematasa(t) {
+  const m = String(t || "").match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap])?/i);
+  if (!m) return null;
+  let h = Number(m[4]);
+  if (m[7]) { const pm = m[7].toLowerCase() === "p"; if (pm && h < 12) h += 12; if (!pm && h === 12) h = 0; }
+  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), h, Number(m[5]), Number(m[6] || 0)).getTime();
+}
+// Reporte pegado (con la fila de títulos) → [{ factura: "TAIM-…", prog, tipo, … }]
+export function leerSalidas(texto) {
+  const lineas = String(texto || "").split(/\r?\n/).filter(l => l.trim());
+  const iTit = lineas.findIndex(l => { const c = l.split("\t").map(normCol); return c.includes("factura") && c.includes("prog"); });
+  if (iTit < 0) throw new Error("No encontré la fila de títulos (debe traer las columnas Factura y Prog).");
+  let tit = lineas[iTit].split("\t").map(normCol);
+  const datos = lineas.slice(iTit + 1).map(l => l.split("\t"));
+  // El Adrematasa a veces copia los títulos sin la columna vacía inicial que sí traen los renglones.
+  const masLargos = datos.filter(c => c.length === tit.length + 1 && c[0].trim() === "").length;
+  if (datos.length && masLargos > datos.length / 2) tit = [""].concat(tit);
+  const idx = {};
+  tit.forEach((t, i) => { if (COLUMNAS_SALIDA[t] && idx[COLUMNAS_SALIDA[t]] == null) idx[COLUMNAS_SALIDA[t]] = i; });
+  const salidas = [];
+  datos.forEach(c => {
+    const r = {};
+    Object.entries(idx).forEach(([k, i]) => { r[k] = (c[i] || "").trim(); });
+    r.factura = (r.factura || "").toUpperCase().replace(/\s+/g, "");
+    if (!/^[A-Z]+-\d+$/.test(r.factura)) return;
+    r.tipo = tipoDeProg(r.prog);
+    r.fechaMs = msFechaAdrematasa(r.fechaHora);
+    salidas.push(r);
+  });
+  if (!salidas.length) throw new Error("No encontré renglones con folio de Carta Porte (TAIM-…) en la columna Factura.");
+  return salidas;
 }
 
 function cargarScript(url, global) {
@@ -88,13 +150,16 @@ function inyectarEstilos() {
     .re-barra { height:7px; border-radius:4px; background:#E8E2D9; overflow:hidden; margin-top:4px; } .re-barra i { display:block; height:100%; background:#2c1e0f; }
     .re-errores { margin-top:8px; font-size:12.5px; color:#7a3e06; background:#FEF6E4; border-radius:8px; padding:8px 10px; }
     .re-km { display:inline-flex; gap:6px; align-items:center; } .re-km input { width:110px; }
+    .re-seca { background:#F3E9D7; color:#7a4a12; } .re-refri { background:#DDEEFB; color:#0C447C; }
+    .re-pegar { width:100%; box-sizing:border-box; min-height:120px; font-family:monospace; font-size:11.5px; white-space:pre; }
   `;
   document.head.appendChild(s);
 }
 
 // ---- Detalle de una factura (vista previa y modal) ----------------------------
-function htmlDetalle(f) {
+function htmlDetalle(f, salida) {
   const c = f.calculos || calcular(f);
+  const tipo = salida ? salida.tipo : "sin";
   const mon = f.moneda || "MXN";
   const usd = mon !== "MXN";
   const cp = f.cartaPorte || {};
@@ -102,6 +167,8 @@ function htmlDetalle(f) {
   const dom = (p) => [p.calle, p.numero, p.colonia, p.municipio, p.cp ? "CP " + p.cp : ""].filter(Boolean).map(esc).join(" · ");
   const cli = f.cliente || {}, fis = f.fiscal || {}, rem = f.remitente || {}, des = f.destinatario || {};
   return `
+    <div style="margin-top:10px;font-size:13px;"><span class="re-chip ${TIPO[tipo].clase}">${TIPO[tipo].txt}</span>
+      ${salida ? ` Adrematasa: Prog <b>${esc(salida.prog)}</b> · salida ${esc(salida.tempSalida || "—")} · remolque ${esc(salida.remolque || "—")} · carro ${esc(salida.carro || "—")} · ${esc(salida.fechaHora || "")}` : ` <span class="nota">Todavía no se pega la salida de ${esc(f.cartaPorteFolio || "esta factura")} del Adrematasa.</span>`}</div>
     <div class="re-kpis">
       <div class="re-kpi hero"><b>${c.fletePorKm != null ? dinero(c.fletePorKm) : "—"}</b><small>Flete por km${usd ? " (en MXN)" : ""}</small></div>
       <div class="re-kpi"><b>${c.subtotalPorKm != null ? dinero(c.subtotalPorKm) : "—"}</b><small>Subtotal por km${usd ? " (en MXN)" : ""}</small></div>
@@ -164,7 +231,12 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   let facturas = null;            // Map uuid -> factura guardada
   let cargadas = [];              // [{ nombre, f, estado, error }]
   let elegida = -1;
-  const filtro = { mes: "", cliente: "", ruta: "" };
+  const filtro = { mes: "", cliente: "", ruta: "", tipo: "" };
+  let salidas = null;             // Map TAIM -> salida del Adrematasa
+  let pegadas = null;             // salidas leídas del reporte pegado, sin guardar
+  let filtroSalidas = "todas";
+  const salidaDe = (f) => (salidas && f && f.cartaPorteFolio) ? salidas.get(String(f.cartaPorteFolio).toUpperCase()) || null : null;
+  const tipoDe = (f) => { const sa = salidaDe(f); return sa ? sa.tipo : "sin"; };
 
   function avisar(t) {
     $("#re-exito").textContent = t;
@@ -178,10 +250,14 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     cargadas.forEach(c => { if (c.estado !== "guardada" && c.f && c.f.uuid && facturas.has(c.f.uuid)) c.estado = c.estado === "lista" ? "duplicada" : c.estado; });
     render();
   }, (err) => { $("#re-error").textContent = "No se pudieron leer las facturas: " + err.message; });
-  const vigilar = setInterval(() => { if (!contenedor.isConnected) { clearInterval(vigilar); cancelar(); } }, 3000);
+  const cancelarSalidas = onSnapshot(collection(db, COL_SALIDAS), (snap) => {
+    salidas = new Map(snap.docs.map(d => [d.id, d.data()]));
+    if (tab !== "cargar") render(); else renderVista();
+  }, (err) => { $("#re-error").textContent = "No se pudieron leer las salidas: " + err.message; });
+  const vigilar = setInterval(() => { if (!contenedor.isConnected) { clearInterval(vigilar); cancelar(); cancelarSalidas(); } }, 3000);
 
   function renderTabs() {
-    $("#re-tabs").innerHTML = [["cargar", "Cargar"], ["facturas", "Facturas"], ["clientes", "Por cliente"], ["rutas", "Por ruta"]]
+    $("#re-tabs").innerHTML = [["cargar", "Cargar"], ["facturas", "Facturas"], ["clientes", "Por cliente"], ["rutas", "Por ruta"], ["salidas", "Salidas Adrematasa"]]
       .map(([k, t]) => `<button type="button" class="re-tab${tab === k ? " activo" : ""}" data-t="${k}">${t}</button>`).join("");
     $("#re-tabs").querySelectorAll(".re-tab").forEach(b => b.addEventListener("click", () => { tab = b.dataset.t; render(); }));
   }
@@ -192,6 +268,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     if (!facturas) { $("#re-cuerpo").innerHTML = `<p class="nota">Cargando…</p>`; return; }
     if (tab === "facturas") return renderFacturas();
     if (tab === "clientes") return renderClientes();
+    if (tab === "salidas") return renderSalidas();
     return renderRutas();
   }
 
@@ -240,6 +317,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
 
   function renderVista() {
     const caja = $("#re-vista");
+    if (!caja) return;
     const c = cargadas[elegida];
     if (!c) { caja.innerHTML = ""; return; }
     if (c.estado === "error") { caja.innerHTML = `<div class="re-errores">${esc(c.error)}</div>`; return; }
@@ -257,7 +335,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
         </div>
         ${f.errores.length ? `<div class="re-errores">${f.errores.map(esc).join("<br>")}</div>` : ""}
         ${c.estado === "duplicada" ? `<div class="re-errores">Esta factura (folio fiscal ${esc(f.uuid)}) ya está guardada. No se vuelve a guardar.</div>` : ""}
-        ${htmlDetalle(f)}
+        ${htmlDetalle(f, salidaDe(f))}
       </div>`;
     const ok = $("#re-km-ok");
     if (ok) ok.addEventListener("click", () => {
@@ -330,7 +408,8 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     return lista().filter(f =>
       (!filtro.mes || f.mes === filtro.mes) &&
       (sinFiltro === "cliente" || !filtro.cliente || f.clienteClave === filtro.cliente) &&
-      (sinFiltro === "ruta" || !filtro.ruta || f.ruta === filtro.ruta));
+      (sinFiltro === "ruta" || !filtro.ruta || f.ruta === filtro.ruta) &&
+      (!filtro.tipo || tipoDe(f) === filtro.tipo));
   }
   function htmlFiltros(conCliente, conRuta, conExcel) {
     const todas = lista();
@@ -341,12 +420,13 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       <select id="re-f-mes"><option value="">Todos los meses</option>${meses.map(m => `<option value="${m}"${filtro.mes === m ? " selected" : ""}>${nombreMes(m)}</option>`).join("")}</select>
       ${conCliente ? `<select id="re-f-cli"><option value="">Todos los clientes</option>${[...clientes.entries()].sort((a, b) => a[1].localeCompare(b[1], "es")).map(([k, n]) => `<option value="${esc(k)}"${filtro.cliente === k ? " selected" : ""}>${esc(n)}</option>`).join("")}</select>` : ""}
       ${conRuta ? `<select id="re-f-ruta"><option value="">Todas las rutas</option>${rutas.map(r => `<option value="${esc(r)}"${filtro.ruta === r ? " selected" : ""}>${esc(r)}</option>`).join("")}</select>` : ""}
+      <select id="re-f-tipo"><option value="">Seca y refrigerada</option><option value="seca"${filtro.tipo === "seca" ? " selected" : ""}>Solo secas</option><option value="refrigerada"${filtro.tipo === "refrigerada" ? " selected" : ""}>Solo refrigeradas</option><option value="sin"${filtro.tipo === "sin" ? " selected" : ""}>Sin dato de tipo</option></select>
       ${conExcel ? `<button type="button" class="secundario" id="re-excel">Descargar Excel</button>` : ""}
     </div>`;
   }
   function enlazarFiltros() {
     const e = (id, k) => { const el = $(id); if (el) el.addEventListener("change", () => { filtro[k] = el.value; render(); }); };
-    e("#re-f-mes", "mes"); e("#re-f-cli", "cliente"); e("#re-f-ruta", "ruta");
+    e("#re-f-mes", "mes"); e("#re-f-cli", "cliente"); e("#re-f-ruta", "ruta"); e("#re-f-tipo", "tipo");
     const x = $("#re-excel"); if (x) x.addEventListener("click", descargarExcel);
   }
   const vacio = () => `<p class="nota" style="text-align:center;padding:16px;">${facturas.size ? "No hay facturas con estos filtros." : "Todavía no hay facturas. Cárgalas en la pestaña Cargar."}</p>`;
@@ -356,9 +436,10 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     const fs = filtradas().sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || (b.factura || "").localeCompare(a.factura || ""));
     $("#re-cuerpo").innerHTML = htmlFiltros(true, true, true) + (fs.length ? `
       <div class="tabla-wrap"><table class="tabla re-tabla">
-        <thead><tr><th>Fecha</th><th>Factura</th><th>Cliente</th><th>Ruta</th><th>Unidad</th><th class="n">Km</th><th class="n">Flete MXN</th><th class="n">Flete/km</th><th class="n">Subtotal MXN</th><th class="n">Subtotal/km</th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Factura</th><th>Tipo</th><th>Cliente</th><th>Ruta</th><th>Unidad</th><th class="n">Km</th><th class="n">Flete MXN</th><th class="n">Flete/km</th><th class="n">Subtotal MXN</th><th class="n">Subtotal/km</th></tr></thead>
         <tbody>${fs.map(f => { const c = f.calculos || {}; return `<tr class="clic" data-u="${esc(f.uuid)}">
           <td>${fechaCorta(f.fecha)}</td><td>${esc(f.factura)}${f.moneda !== "MXN" ? ` <span class="re-chip re-azul">${esc(f.moneda)}</span>` : ""}</td>
+          <td><span class="re-chip ${TIPO[tipoDe(f)].clase}">${TIPO[tipoDe(f)].txt}</span></td>
           <td>${esc((f.cliente || {}).nombre)}</td><td>${esc(f.ruta)}</td><td>${esc(f.unidad)}</td>
           <td class="n">${miles(c.km)}${f.kmCapturado ? "*" : ""}</td><td class="n">${dinero(c.fleteMxn)}</td><td class="n"><b>${dinero(c.fletePorKm)}</b></td>
           <td class="n">${dinero(c.subtotalMxn)}</td><td class="n">${dinero(c.subtotalPorKm)}</td></tr>`; }).join("")}</tbody>
@@ -380,7 +461,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
             <div class="nota" style="margin:3px 0 0;">${fechaCorta(f.fecha)} ${esc(f.hora || "")} · Viaje ${esc(f.viaje)} · ${esc(f.ruta)}</div></div>
           <button type="button" class="secundario re-cerrar">✕</button>
         </div>
-        ${htmlDetalle(f)}
+        ${htmlDetalle(f, salidaDe(f))}
         <div class="re-errores" id="re-d-err" style="display:none;"></div>
         <div class="modal-acciones" style="flex-wrap:wrap;">
           <span class="re-km"><input type="number" min="1" step="1" id="re-d-km" value="${esc((f.cartaPorte || {}).distanciaKm || "")}"><button type="button" class="secundario" id="re-d-km-ok">Corregir km</button></span>
@@ -416,7 +497,10 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     fs.forEach(f => {
       const k = clave(f);
       const c = f.calculos || {};
-      const g = m.get(k) || { k, viajes: 0, km: 0, flete: 0, subtotal: 0, porKm: [], clientes: new Set(), nombre: "" };
+      const g = m.get(k) || { k, viajes: 0, km: 0, flete: 0, subtotal: 0, porKm: [], clientes: new Set(), nombre: "",
+        tipos: { seca: { n: 0, km: 0, flete: 0 }, refrigerada: { n: 0, km: 0, flete: 0 }, sin: { n: 0, km: 0, flete: 0 } } };
+      const t = g.tipos[tipoDe(f)];
+      t.n++; t.km += c.km || 0; t.flete += c.fleteMxn || 0;
       g.viajes++; g.km += c.km || 0; g.flete += c.fleteMxn || 0; g.subtotal += c.subtotalMxn || 0;
       if (c.fletePorKm != null) g.porKm.push(c.fletePorKm);
       g.clientes.add(f.clienteClave);
@@ -425,18 +509,22 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     });
     return [...m.values()].map(g => ({ ...g, fleteKm: g.km ? g.flete / g.km : null, subtotalKm: g.km ? g.subtotal / g.km : null }));
   }
+  // Celda "flete/km · viajes" de un tipo.
+  const celdaTipo = (t) => t.n ? `${dinero(t.km ? t.flete / t.km : null)} <small style="color:#8a7f73;">· ${t.n}</small>` : "—";
+  const TH_TIPOS = `<th class="n">Seca</th><th class="n">Refrigerada</th><th class="n">Sin dato</th>`;
+  const tdTipos = (g) => `<td class="n">${celdaTipo(g.tipos.seca)}</td><td class="n">${celdaTipo(g.tipos.refrigerada)}</td><td class="n">${celdaTipo(g.tipos.sin)}</td>`;
 
   function renderClientes() {
     const gs = agrupar(filtradas("cliente"), f => f.clienteClave).sort((a, b) => b.flete - a.flete);
     const max = Math.max(1, ...gs.map(g => g.flete));
     $("#re-cuerpo").innerHTML = htmlFiltros(false, true, false) + (gs.length ? `
       <div class="tabla-wrap"><table class="tabla re-tabla">
-        <thead><tr><th>Cliente</th><th class="n">Viajes</th><th class="n">Km</th><th class="n">Flete MXN</th><th class="n">Flete/km</th><th class="n">Subtotal MXN</th><th class="n">Subtotal/km</th></tr></thead>
+        <thead><tr><th>Cliente</th><th class="n">Viajes</th><th class="n">Km</th><th class="n">Flete MXN</th><th class="n">Flete/km</th>${TH_TIPOS}<th class="n">Subtotal/km</th></tr></thead>
         <tbody>${gs.map(g => `<tr class="clic" data-k="${esc(g.k)}"><td>${esc(g.nombre)}<div class="re-barra"><i style="width:${Math.round(g.flete / max * 100)}%"></i></div></td>
           <td class="n">${g.viajes}</td><td class="n">${miles(g.km)}</td><td class="n">${dinero(g.flete)}</td><td class="n"><b>${dinero(g.fleteKm)}</b></td>
-          <td class="n">${dinero(g.subtotal)}</td><td class="n">${dinero(g.subtotalKm)}</td></tr>`).join("")}</tbody>
+          ${tdTipos(g)}<td class="n">${dinero(g.subtotalKm)}</td></tr>`).join("")}</tbody>
       </table></div>
-      <p class="nota">$/km del cliente = ingreso total ÷ km totales (no el promedio de cada factura), para que un viaje corto no pese lo mismo que uno largo. Toca un cliente para ver sus facturas.</p>` : vacio());
+      <p class="nota">$/km del cliente = ingreso total ÷ km totales (no el promedio de cada factura), para que un viaje corto no pese lo mismo que uno largo. Seca / Refrigerada / Sin dato: flete/km · viajes. Toca un cliente para ver sus facturas.</p>` : vacio());
     enlazarFiltros();
     $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => { filtro.cliente = tr.dataset.k; tab = "facturas"; render(); }));
   }
@@ -445,15 +533,84 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     const gs = agrupar(filtradas("ruta"), f => f.ruta || "Sin ruta").sort((a, b) => b.viajes - a.viajes || b.flete - a.flete);
     $("#re-cuerpo").innerHTML = htmlFiltros(true, false, false) + (gs.length ? `
       <div class="tabla-wrap"><table class="tabla re-tabla">
-        <thead><tr><th>Ruta</th><th class="n">Viajes</th><th class="n">Clientes</th><th class="n">Km prom.</th><th class="n">Flete/km</th><th class="n">Mín – Máx</th><th class="n">Subtotal/km</th></tr></thead>
+        <thead><tr><th>Ruta</th><th class="n">Viajes</th><th class="n">Clientes</th><th class="n">Km prom.</th><th class="n">Flete/km</th>${TH_TIPOS}<th class="n">Mín – Máx</th><th class="n">Subtotal/km</th></tr></thead>
         <tbody>${gs.map(g => `<tr class="clic" data-k="${esc(g.k)}"><td>${esc(g.k)}</td><td class="n">${g.viajes}</td><td class="n">${g.clientes.size}</td>
           <td class="n">${miles(g.viajes ? g.km / g.viajes : null)}</td><td class="n"><b>${dinero(g.fleteKm)}</b></td>
-          <td class="n">${g.porKm.length ? dinero(Math.min(...g.porKm)) + (g.porKm.length > 1 ? " – " + dinero(Math.max(...g.porKm)) : "") : "—"}</td>
+          ${tdTipos(g)}<td class="n">${g.porKm.length ? dinero(Math.min(...g.porKm)) + (g.porKm.length > 1 ? " – " + dinero(Math.max(...g.porKm)) : "") : "—"}</td>
           <td class="n">${dinero(g.subtotalKm)}</td></tr>`).join("")}</tbody>
       </table></div>
-      <p class="nota">Mín – Máx muestra si a un mismo destino se le cobra distinto según el cliente. Toca una ruta para ver sus facturas.</p>` : vacio());
+      <p class="nota">Seca / Refrigerada / Sin dato: flete/km · viajes. Mín – Máx muestra si a un mismo destino se le cobra distinto según el cliente. Toca una ruta para ver sus facturas.</p>` : vacio());
     enlazarFiltros();
     $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => { filtro.ruta = tr.dataset.k; tab = "facturas"; render(); }));
+  }
+
+  // ---- Salidas Adrematasa ----
+  function renderSalidas() {
+    const guardadas = [...(salidas || new Map()).values()];
+    const porTaim = new Map(lista().filter(f => f.cartaPorteFolio).map(f => [String(f.cartaPorteFolio).toUpperCase(), f]));
+    const cuenta = (arr, t) => arr.filter(x => x.tipo === t).length;
+    const resumenPegadas = pegadas ? `
+      <div class="re-kpis">
+        <div class="re-kpi"><b>${pegadas.length}</b><small>Salidas leídas</small></div>
+        <div class="re-kpi"><b style="color:#0C447C;">${cuenta(pegadas, "refrigerada")}</b><small>Refrigeradas (Prog con temperatura)</small></div>
+        <div class="re-kpi"><b style="color:#7a4a12;">${cuenta(pegadas, "seca")}</b><small>Secas (Prog OFF)</small></div>
+        <div class="re-kpi"><b>${pegadas.filter(x => porTaim.has(x.factura)).length}</b><small>Ya ligadas a una factura guardada</small></div>
+      </div>
+      ${cuenta(pegadas, "sin") ? `<div class="re-errores">${cuenta(pegadas, "sin")} renglón(es) traen un Prog que no es OFF ni una temperatura; quedan "sin dato".</div>` : ""}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;"><button type="button" id="re-s-guardar">Guardar ${pegadas.length} salida${pegadas.length === 1 ? "" : "s"}</button>
+        <button type="button" class="secundario" id="re-s-cancelar">Cancelar</button></div>` : "";
+    const vista = guardadas.filter(x => filtroSalidas === "todas" || (filtroSalidas === "sinfactura" ? !porTaim.has(x.factura) : x.tipo === filtroSalidas))
+      .sort((a, b) => (b.fechaMs || 0) - (a.fechaMs || 0));
+    const filtros = [["todas", "Todas", guardadas.length], ["refrigerada", "Refrigeradas", cuenta(guardadas, "refrigerada")],
+      ["seca", "Secas", cuenta(guardadas, "seca")], ["sinfactura", "Sin factura cargada", guardadas.filter(x => !porTaim.has(x.factura)).length]];
+    const MAX = 300;
+    $("#re-cuerpo").innerHTML = `
+      <p class="nota" style="margin-top:0;">Copia del Adrematasa oficial el reporte de salidas <b>con la fila de títulos</b> y pégalo aquí. Se ligan con las facturas por el folio de Carta Porte (columna Factura, TAIM-…). <b>Prog OFF = SECA</b>; una temperatura = <b>REFRIGERADA</b>. Pegar otro reporte agrega las nuevas y actualiza las que ya estaban; no borra nada.</p>
+      <textarea class="re-pegar" id="re-s-texto" placeholder="Pega aquí el reporte de salidas…"></textarea>
+      <div style="margin-top:8px;"><button type="button" class="secundario" id="re-s-leer">Leer reporte</button></div>
+      ${resumenPegadas}
+      <div class="re-h3" style="margin-top:20px;">Salidas guardadas</div>
+      <div class="re-filtros">${filtros.map(([k, t, n]) => `<button type="button" class="re-tab${filtroSalidas === k ? " activo" : ""}" data-fs="${k}">${t} ${n}</button>`).join("")}</div>
+      ${vista.length ? `<div class="tabla-wrap"><table class="tabla re-tabla">
+        <thead><tr><th>Carta porte</th><th>Fecha</th><th>Cliente</th><th>Destino</th><th>Remolque</th><th>Carro</th><th>Salida</th><th>Prog</th><th>Tipo</th><th>Factura</th></tr></thead>
+        <tbody>${vista.slice(0, MAX).map(x => { const f = porTaim.get(x.factura); return `<tr${f ? ` class="clic" data-u="${esc(f.uuid)}"` : ""}>
+          <td>${esc(x.factura)}</td><td>${esc(x.fechaHora)}</td><td>${esc(x.cliente)}</td><td>${esc(x.destino)}</td>
+          <td>${esc(x.remolque)}</td><td>${esc(x.carro)}</td><td>${esc(x.tempSalida)}</td><td>${esc(x.prog)}</td>
+          <td><span class="re-chip ${TIPO[x.tipo].clase}">${TIPO[x.tipo].txt}</span></td>
+          <td>${f ? `<span class="re-chip re-verde">${esc(f.factura)}</span>` : `<span class="re-chip re-gris">sin factura cargada</span>`}</td></tr>`; }).join("")}</tbody>
+      </table></div>${vista.length > MAX ? `<p class="nota">Se muestran las ${MAX} más recientes de ${vista.length}.</p>` : ""}`
+        : `<p class="nota" style="text-align:center;padding:16px;">${guardadas.length ? "No hay salidas con este filtro." : "Todavía no hay salidas guardadas."}</p>`}`;
+    $("#re-s-leer").addEventListener("click", () => {
+      $("#re-error").textContent = "";
+      try { pegadas = leerSalidas($("#re-s-texto").value); renderSalidas(); }
+      catch (e) { pegadas = null; $("#re-error").textContent = e.message; }
+    });
+    const g = $("#re-s-guardar"); if (g) g.addEventListener("click", guardarSalidas);
+    const c = $("#re-s-cancelar"); if (c) c.addEventListener("click", () => { pegadas = null; renderSalidas(); });
+    $("#re-cuerpo").querySelectorAll("[data-fs]").forEach(b => b.addEventListener("click", () => { filtroSalidas = b.dataset.fs; renderSalidas(); }));
+    $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => abrirDetalle(tr.dataset.u)));
+  }
+
+  async function guardarSalidas() {
+    if (!pegadas || !pegadas.length) return;
+    const btn = $("#re-s-guardar"); if (btn) btn.disabled = true;
+    $("#re-error").textContent = "";
+    try {
+      const ahora = Date.now();
+      const unicas = [...new Map(pegadas.map(x => [x.factura, x])).values()]; // si se repite un TAIM, gana el último
+      for (let i = 0; i < unicas.length; i += 400) {
+        const lote = writeBatch(db);
+        unicas.slice(i, i + 400).forEach(x => lote.set(doc(db, COL_SALIDAS, x.factura),
+          { ...x, cargadaMs: ahora, cargadaPor: { uid, nombre: (datosUsuario && datosUsuario.nombre) || "" } }, { merge: true }));
+        await lote.commit();
+      }
+      avisar(`${unicas.length} salida${unicas.length === 1 ? "" : "s"} guardada${unicas.length === 1 ? "" : "s"}.`);
+      pegadas = null;
+      renderSalidas();
+    } catch (e) {
+      $("#re-error").textContent = "No se pudieron guardar las salidas: " + e.message;
+      if (btn) btn.disabled = false;
+    }
   }
 
   async function descargarExcel() {
@@ -465,7 +622,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
         const otros = {};
         (f.conceptos || []).forEach(k => { otros[k.servicio] = (otros[k.servicio] || 0) + (k.importe || 0); });
         return {
-          "Fecha": f.fecha, "Factura": f.factura, "Carta porte": f.cartaPorteFolio, "Viaje": f.viaje, "Folio fiscal": f.uuid,
+          "Fecha": f.fecha, "Factura": f.factura, "Tipo": TIPO[tipoDe(f)].txt, "Prog": (salidaDe(f) || {}).prog || "", "Temp. salida": (salidaDe(f) || {}).tempSalida || "", "Carta porte": f.cartaPorteFolio, "Viaje": f.viaje, "Folio fiscal": f.uuid,
           "Cliente": cli.nombre, "RFC cliente": cli.rfc, "Remitente": (f.remitente || {}).nombre, "Destinatario": (f.destinatario || {}).nombre,
           "Origen": f.origen, "Destino": f.destino, "Se entrega en": (f.destinatario || {}).seEntregaEn,
           "Moneda": f.moneda, "Tipo de cambio": f.tipoCambio, "Flete (moneda)": c.flete, "Subtotal (moneda)": f.subtotal, "Total (moneda)": f.total,

@@ -826,6 +826,9 @@ service cloud.firestore {
     match /rentabilidad_facturas/{id} {
       allow read, write: if esDuenoRentabilidad();
     }
+    match /rentabilidad_salidas/{id} {
+      allow read, write: if esDuenoRentabilidad();
+    }
 
     match /bitacora_acciones_operadores/{id} {
       allow read: if esAdmin();
