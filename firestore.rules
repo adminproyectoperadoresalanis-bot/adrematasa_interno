@@ -763,8 +763,8 @@ service cloud.firestore {
     // Operadores (igual que las funciones de operadoresAlanis.js), siempre a
     // su propio nombre.
     match /turnos_patio/{id} {
-      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('operadores');
-      allow write: if usuarioActivoValido() && tieneAccesoUtilidad('operadores')
+      allow read: if usuarioActivoValido() && (tieneAccesoUtilidad('operadores') || tieneAccesoUtilidad('trafico'));
+      allow write: if usuarioActivoValido() && (tieneAccesoUtilidad('operadores') || tieneAccesoUtilidad('trafico'))
         && request.resource.data.keys().hasOnly(['filas', 'importadoMs', 'importadoEn', 'importadoPor'])
         && request.resource.data.importadoPor.uid == request.auth.uid
         && request.resource.data.filas is list
@@ -775,23 +775,23 @@ service cloud.firestore {
     // Cloud Functions (espejosAdrematasa.js allá y poblarEspejosOperadores
     // aquí). Desde el navegador solo se leen.
     match /espejo_op_solicitudes/{id} {
-      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('operadores');
+      allow read: if usuarioActivoValido() && (tieneAccesoUtilidad('operadores') || tieneAccesoUtilidad('trafico'));
       allow write: if false;
     }
     match /espejo_op_operadores/{id} {
-      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('operadores');
+      allow read: if usuarioActivoValido() && (tieneAccesoUtilidad('operadores') || tieneAccesoUtilidad('trafico'));
       allow write: if false;
     }
     match /espejo_op_ordenes/{id} {
-      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('operadores');
+      allow read: if usuarioActivoValido() && (tieneAccesoUtilidad('operadores') || tieneAccesoUtilidad('trafico'));
       allow write: if false;
     }
     match /espejo_op_asignaciones/{id} {
-      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('operadores');
+      allow read: if usuarioActivoValido() && (tieneAccesoUtilidad('operadores') || tieneAccesoUtilidad('trafico'));
       allow write: if false;
     }
     match /espejo_op_estatus/{id} {
-      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('operadores');
+      allow read: if usuarioActivoValido() && (tieneAccesoUtilidad('operadores') || tieneAccesoUtilidad('trafico'));
       allow write: if false;
     }
 

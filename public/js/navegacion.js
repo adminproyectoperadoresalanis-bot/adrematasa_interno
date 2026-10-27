@@ -31,6 +31,10 @@
 // trabajo de Alanis Operadores (ver js/operadores.js y
 // functions/operadoresAlanis.js). Mismas pantallas para los 3 roles; quién la
 // ve lo decide solo el área (tabla de accesos).
+// 2026-10-27 (pedido de Ivan): nace la tarjeta "Tráfico" con lo del día a día
+// del despacho (Turnos y, en el siguiente paso, Asignación). Operadores se
+// queda con lo administrativo (Aceptación, OT, Registrados, Asistencia).
+// Turnos conserva su id de pantalla ("operadoresTurnos"), así auth.js no cambia.
 
 // Catálogo de opciones de Utilidades — lo usa configuracion.js para armar las
 // columnas de la tabla de accesos. Al agregar una opción nueva basta con
@@ -39,6 +43,7 @@ export const OPCIONES_UTILIDADES = [
   { id: "rh", etiqueta: "RH" },
   { id: "validacionQR", etiqueta: "Validación de QR" },
   { id: "operadores", etiqueta: "Operadores" },
+  { id: "trafico", etiqueta: "Tráfico" },
   { id: "inventario", etiqueta: "Inventario" }
 ];
 
@@ -56,6 +61,7 @@ const ICONOS = {
   rh: ICONO_PERSONAS,
   operadores: SVG(`<rect x="1" y="6" width="14" height="10" rx="1"/><path d="M15 9h4l3 3v4h-7"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/>`),
   inventario: SVG(`<path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>`),
+  trafico: SVG(`<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>`),
   validacionQR: SVG(`<path d="M3 7V4a1 1 0 0 1 1-1h3"/><path d="M17 3h3a1 1 0 0 1 1 1v3"/><path d="M21 17v3a1 1 0 0 1-1 1h-3"/><path d="M7 21H4a1 1 0 0 1-1-1v-3"/><rect x="7" y="7" width="10" height="10" rx="1"/>`),
   // Renglones de la lista de RH
   solicitudes: SVG(`<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/>`),
@@ -167,13 +173,22 @@ const OPCION_QR = {
 const OPCION_OPERADORES = {
   id: "operadores",
   etiqueta: "Operadores",
-  descripcion: "Aceptación · Órdenes de trabajo · Registrados · Turnos · Asistencia",
+  descripcion: "Aceptación · Órdenes de trabajo · Registrados · Asistencia",
   subtabs: [
     { id: "operadoresSolicitudes", etiqueta: "Aceptación de ingreso" },
     { id: "operadoresOrdenes", etiqueta: "Órdenes de trabajo" },
     { id: "operadoresRegistrados", etiqueta: "Operadores registrados" },
-    { id: "operadoresTurnos", etiqueta: "Turnos" },
     { id: "operadoresAsistencia", etiqueta: "Asistencia" }
+  ]
+};
+
+// Tráfico (2026-10-27): despacho del día a día.
+const OPCION_TRAFICO = {
+  id: "trafico",
+  etiqueta: "Tráfico",
+  descripcion: "Turnos en patio",
+  subtabs: [
+    { id: "operadoresTurnos", etiqueta: "Turnos" }
   ]
 };
 
@@ -189,15 +204,15 @@ const TABS_POR_ROL = {
   // El empleado solo tiene "Utilidades": con un solo botón el menú inferior
   // no aporta nada, así que se oculta y entra directo a las tarjetas.
   empleado: [
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR, OPCION_OPERADORES, OPCION_INVENTARIO] }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO] }
   ],
   supervisor: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES, CONSULTA_SUPERVISOR), OPCION_QR, OPCION_OPERADORES, OPCION_INVENTARIO] }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES, CONSULTA_SUPERVISOR), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO] }
   ],
   admin: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR, OPCION_OPERADORES, OPCION_INVENTARIO] },
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO] },
     { id: "configuracion", etiqueta: "Configuración" }
   ]
 };
