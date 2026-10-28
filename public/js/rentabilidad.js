@@ -257,7 +257,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   const vigilar = setInterval(() => { if (!contenedor.isConnected) { clearInterval(vigilar); cancelar(); cancelarSalidas(); } }, 3000);
 
   function renderTabs() {
-    $("#re-tabs").innerHTML = [["cargar", "Cargar"], ["facturas", "Facturas"], ["clientes", "Por cliente"], ["rutas", "Por ruta"], ["salidas", "Salidas Adrematasa"]]
+    $("#re-tabs").innerHTML = [["cargar", "Cargar"], ["facturas", "Facturas"], ["clientes", "Por cliente"], ["clirutas", "Cliente · ruta · tipo"], ["rutas", "Por ruta"], ["salidas", "Salidas Adrematasa"]]
       .map(([k, t]) => `<button type="button" class="re-tab${tab === k ? " activo" : ""}" data-t="${k}">${t}</button>`).join("");
     $("#re-tabs").querySelectorAll(".re-tab").forEach(b => b.addEventListener("click", () => { tab = b.dataset.t; render(); }));
   }
@@ -268,6 +268,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     if (!facturas) { $("#re-cuerpo").innerHTML = `<p class="nota">Cargando…</p>`; return; }
     if (tab === "facturas") return renderFacturas();
     if (tab === "clientes") return renderClientes();
+    if (tab === "clirutas") return renderClienteRutas();
     if (tab === "salidas") return renderSalidas();
     return renderRutas();
   }
@@ -524,9 +525,42 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
           <td class="n">${g.viajes}</td><td class="n">${miles(g.km)}</td><td class="n">${dinero(g.flete)}</td><td class="n"><b>${dinero(g.fleteKm)}</b></td>
           ${tdTipos(g)}<td class="n">${dinero(g.subtotalKm)}</td></tr>`).join("")}</tbody>
       </table></div>
-      <p class="nota">$/km del cliente = ingreso total ÷ km totales (no el promedio de cada factura), para que un viaje corto no pese lo mismo que uno largo. Seca / Refrigerada / Sin dato: flete/km · viajes. Toca un cliente para ver sus facturas.</p>` : vacio());
+      <p class="nota">$/km del cliente = ingreso total ÷ km totales (no el promedio de cada factura), para que un viaje corto no pese lo mismo que uno largo. Seca / Refrigerada / Sin dato: flete/km · viajes. Toca un cliente para ver su desglose por ruta y tipo.</p>` : vacio());
     enlazarFiltros();
-    $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => { filtro.cliente = tr.dataset.k; tab = "facturas"; render(); }));
+    $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => { filtro.cliente = tr.dataset.k; tab = "clirutas"; render(); }));
+  }
+
+  // ---- Cliente · ruta · tipo (2026-10-28): un renglón por cliente + tipo + ruta,
+  // con todas sus facturas unificadas (viajes, km, flete, flete/km, mín–máx).
+  function renderClienteRutas() {
+    const ORDEN_TIPO = { seca: 0, refrigerada: 1, sin: 2 };
+    const gs = agrupar(filtradas(), f => `${f.clienteClave}|${tipoDe(f)}|${f.ruta || "Sin ruta"}`).map(g => {
+      const [cli, tipo, ...r] = g.k.split("|");
+      return { ...g, cli, tipo, ruta: r.join("|") };
+    }).sort((a, b) => a.nombre.localeCompare(b.nombre, "es") || ORDEN_TIPO[a.tipo] - ORDEN_TIPO[b.tipo] || b.viajes - a.viajes);
+    let anterior = null;
+    const filas = gs.map(g => {
+      const encabezado = g.cli !== anterior
+        ? `<tr><td colspan="9" style="background:#f7f3ee;font-weight:800;padding-top:10px;">${esc(g.nombre)}</td></tr>` : "";
+      anterior = g.cli;
+      return encabezado + `<tr class="clic" data-cli="${esc(g.cli)}" data-tipo="${esc(g.tipo)}" data-ruta="${esc(g.ruta)}">
+        <td><span class="re-chip ${TIPO[g.tipo].clase}">${TIPO[g.tipo].txt}</span></td>
+        <td>${esc(g.ruta)}</td><td class="n">${g.viajes}</td><td class="n">${miles(g.viajes ? g.km / g.viajes : null)}</td>
+        <td class="n">${miles(g.km)}</td><td class="n">${dinero(g.flete)}</td><td class="n"><b>${dinero(g.fleteKm)}</b></td>
+        <td class="n">${g.porKm.length ? dinero(Math.min(...g.porKm)) + (g.porKm.length > 1 ? " – " + dinero(Math.max(...g.porKm)) : "") : "—"}</td>
+        <td class="n">${dinero(g.subtotalKm)}</td></tr>`;
+    }).join("");
+    $("#re-cuerpo").innerHTML = htmlFiltros(true, true, false) + (gs.length ? `
+      <div class="tabla-wrap"><table class="tabla re-tabla">
+        <thead><tr><th>Tipo</th><th>Ruta</th><th class="n">Viajes</th><th class="n">Km prom.</th><th class="n">Km total</th><th class="n">Flete MXN</th><th class="n">Flete/km</th><th class="n">Mín – Máx</th><th class="n">Subtotal/km</th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table></div>
+      <p class="nota">Un renglón por cliente, tipo (seca / refrigerada) y ruta, con todas sus facturas unificadas. Flete/km = flete total ÷ km totales. Toca un renglón para ver sus facturas.</p>` : vacio());
+    enlazarFiltros();
+    $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => {
+      filtro.cliente = tr.dataset.cli; filtro.ruta = tr.dataset.ruta === "Sin ruta" ? "" : tr.dataset.ruta; filtro.tipo = tr.dataset.tipo;
+      tab = "facturas"; render();
+    }));
   }
 
   function renderRutas() {
