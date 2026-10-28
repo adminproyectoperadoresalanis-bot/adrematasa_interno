@@ -34,6 +34,15 @@ const URL_PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.mi
 const URL_PDFJS_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 const URL_SHEETJS = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
 const RFC_GENERICOS = ["XEXX010101000", "XAXX010101000"];
+const MAX_CONCEPTOS = 6; // columnas de conceptos además de Flete (la última es "Otros" si hay más)
+// Junta variantes del mismo concepto: "CRUCE FRONTERA 16%" → "CRUCE FRONTERA"; "FSC REFRIG. 0%" → "FSC REFRIG.";
+// "Autopistas" → "AUTOPISTAS"; cualquier "FLETE …" → "FLETE".
+export function nombreConcepto(servicio) {
+  const t = String(servicio || "").replace(/\s*\d+(\.\d+)?\s*%\s*$/, "").replace(/\s+/g, " ").trim().toUpperCase();
+  if (!t) return "SIN NOMBRE";
+  if (/^FLETE\b/.test(t)) return "FLETE";
+  return t;
+}
 
 function esc(t) { const d = document.createElement("div"); d.textContent = t == null ? "" : String(t); return d.innerHTML; }
 const fmt = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", minimumFractionDigits: 2 });
@@ -150,6 +159,7 @@ function inyectarEstilos() {
     .re-barra { height:7px; border-radius:4px; background:#E8E2D9; overflow:hidden; margin-top:4px; } .re-barra i { display:block; height:100%; background:#2c1e0f; }
     .re-errores { margin-top:8px; font-size:12.5px; color:#7a3e06; background:#FEF6E4; border-radius:8px; padding:8px 10px; }
     .re-km { display:inline-flex; gap:6px; align-items:center; } .re-km input { width:110px; }
+    .re-col-flete { background:#EFE7DA; font-weight:700; } .re-col-con { background:#F7F3EE; }
     .re-seca { background:#F3E9D7; color:#7a4a12; } .re-refri { background:#DDEEFB; color:#0C447C; }
     .re-pegar { width:100%; box-sizing:border-box; min-height:120px; font-family:monospace; font-size:11.5px; white-space:pre; }
   `;
@@ -235,6 +245,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   let salidas = null;             // Map TAIM -> salida del Adrematasa
   let pegadas = null;             // salidas leídas del reporte pegado, sin guardar
   let filtroSalidas = "todas";
+  let metricaKm = "flete";   // Cliente · ruta · tipo: "flete" | "subtotal"
   const salidaDe = (f) => (salidas && f && f.cartaPorteFolio) ? salidas.get(String(f.cartaPorteFolio).toUpperCase()) || null : null;
   const tipoDe = (f) => { const sa = salidaDe(f); return sa ? sa.tipo : "sin"; };
 
@@ -531,32 +542,87 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   }
 
   // ---- Cliente · ruta · tipo (2026-10-28): un renglón por cliente + tipo + ruta,
-  // con todas sus facturas unificadas (viajes, km, flete, flete/km, mín–máx).
+  // con sus facturas unificadas. Columnas: km y cada concepto de la factura con
+  // el valor TAL COMO VIENE en la factura (si varía entre facturas se muestra el
+  // más común y, en chico, el rango). FLETE primero; si hay más de
+  // MAX_CONCEPTOS conceptos, los menos frecuentes se juntan en "Otros".
+  // Selector: ingreso por km por FLETE o por SUBTOTAL.
   function renderClienteRutas() {
     const ORDEN_TIPO = { seca: 0, refrigerada: 1, sin: 2 };
-    const gs = agrupar(filtradas(), f => `${f.clienteClave}|${tipoDe(f)}|${f.ruta || "Sin ruta"}`).map(g => {
-      const [cli, tipo, ...r] = g.k.split("|");
-      return { ...g, cli, tipo, ruta: r.join("|") };
-    }).sort((a, b) => a.nombre.localeCompare(b.nombre, "es") || ORDEN_TIPO[a.tipo] - ORDEN_TIPO[b.tipo] || b.viajes - a.viajes);
+    const fs = filtradas();
+    // Conceptos presentes en el periodo filtrado, por frecuencia (FLETE siempre primero).
+    const frecuencia = new Map();
+    fs.forEach(f => new Set((f.conceptos || []).map(k => nombreConcepto(k.servicio))).forEach(n => frecuencia.set(n, (frecuencia.get(n) || 0) + 1)));
+    const otrosNombres = [...frecuencia.keys()].filter(n => n !== "FLETE").sort((a, b) => frecuencia.get(b) - frecuencia.get(a) || a.localeCompare(b, "es"));
+    const visibles = otrosNombres.length > MAX_CONCEPTOS ? otrosNombres.slice(0, MAX_CONCEPTOS - 1) : otrosNombres;
+    const hayOtros = otrosNombres.length > visibles.length;
+    const columnas = ["FLETE", ...visibles, ...(hayOtros ? ["OTROS"] : [])];
+    const colDe = (n) => n === "FLETE" || visibles.includes(n) ? n : "OTROS";
+
+    // Grupos
+    const grupos = new Map();
+    fs.forEach(f => {
+      const k = `${f.clienteClave}|${tipoDe(f)}|${f.ruta || "Sin ruta"}`;
+      if (!grupos.has(k)) grupos.set(k, { cli: f.clienteClave, tipo: tipoDe(f), ruta: f.ruta || "Sin ruta", nombre: (f.cliente || {}).nombre || "", fs: [] });
+      grupos.get(k).fs.push(f);
+    });
+    const gs = [...grupos.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, "es") || ORDEN_TIPO[a.tipo] - ORDEN_TIPO[b.tipo] || b.fs.length - a.fs.length);
+
+    // Valor "como en la factura": el más común; si varía, el rango en chico.
+    function celdaValor(valores, total, formato) {
+      const v = valores.filter(x => x != null);
+      if (!v.length) return "—";
+      const cuenta = new Map();
+      v.forEach(x => { const r = Math.round(x * 100) / 100; cuenta.set(r, (cuenta.get(r) || 0) + 1); });
+      const comun = [...cuenta.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0][0];
+      const min = Math.min(...v), max = Math.max(...v);
+      let extra = "";
+      if (min !== max) extra += `<br><small>varía ${formato(min)} – ${formato(max)}</small>`;
+      if (v.length < total) extra += `<br><small>${v.length} de ${total}</small>`;
+      return formato(comun) + extra;
+    }
+
     let anterior = null;
     const filas = gs.map(g => {
-      const encabezado = g.cli !== anterior
-        ? `<tr><td colspan="9" style="background:#f7f3ee;font-weight:800;padding-top:10px;">${esc(g.nombre)}</td></tr>` : "";
+      const monedas = new Set(g.fs.map(f => f.moneda || "MXN"));
+      const enOriginal = monedas.size === 1;
+      const mon = enOriginal ? [...monedas][0] : "MXN";
+      const fmt = (n) => dinero(n, mon);
+      const mapas = g.fs.map(f => {
+        const m = new Map();
+        const tc = enOriginal ? 1 : (f.moneda === "MXN" ? 1 : (f.tipoCambio || 1));
+        (f.conceptos || []).forEach(k => { const c = colDe(nombreConcepto(k.servicio)); m.set(c, (m.get(c) || 0) + (k.importe || 0) * tc); });
+        return m;
+      });
+      const kmFlete = g.fs.reduce((s, f) => s + ((f.calculos || {}).km || 0), 0);
+      const sumFlete = g.fs.reduce((s, f) => s + ((f.calculos || {}).fleteMxn || 0), 0);
+      const sumSub = g.fs.reduce((s, f) => s + ((f.calculos || {}).subtotalMxn || 0), 0);
+      const ing = kmFlete ? (metricaKm === "flete" ? sumFlete : sumSub) / kmFlete : null;
+      const porKm = g.fs.map(f => (f.calculos || {})[metricaKm === "flete" ? "fletePorKm" : "subtotalPorKm"]).filter(x => x != null);
+      const rango = porKm.length > 1 && Math.min(...porKm) !== Math.max(...porKm) ? `<br><small>${dinero(Math.min(...porKm))} – ${dinero(Math.max(...porKm))}</small>` : "";
+      const encabezado = g.cli !== anterior ? `<tr><td colspan="${columnas.length + 5}" style="background:#f2ede6;font-weight:800;padding-top:10px;">${esc(g.nombre)}</td></tr>` : "";
       anterior = g.cli;
       return encabezado + `<tr class="clic" data-cli="${esc(g.cli)}" data-tipo="${esc(g.tipo)}" data-ruta="${esc(g.ruta)}">
         <td><span class="re-chip ${TIPO[g.tipo].clase}">${TIPO[g.tipo].txt}</span></td>
-        <td>${esc(g.ruta)}</td><td class="n">${g.viajes}</td><td class="n">${miles(g.viajes ? g.km / g.viajes : null)}</td>
-        <td class="n">${miles(g.km)}</td><td class="n">${dinero(g.flete)}</td><td class="n"><b>${dinero(g.fleteKm)}</b></td>
-        <td class="n">${g.porKm.length ? dinero(Math.min(...g.porKm)) + (g.porKm.length > 1 ? " – " + dinero(Math.max(...g.porKm)) : "") : "—"}</td>
-        <td class="n">${dinero(g.subtotalKm)}</td></tr>`;
+        <td>${esc(g.ruta)}<br><small class="nota">${g.fs.length} viaje${g.fs.length === 1 ? "" : "s"}${mon !== "MXN" ? " · " + esc(mon) : ""}</small></td>
+        <td class="n">${celdaValor(g.fs.map(f => (f.calculos || {}).km), g.fs.length, (n) => miles(n))}</td>
+        ${columnas.map(c => `<td class="n${c === "FLETE" ? " re-col-flete" : ""}">${celdaValor(mapas.map(m => m.has(c) ? m.get(c) : null), g.fs.length, fmt)}</td>`).join("")}
+        <td class="n">${celdaValor(g.fs.map(f => enOriginal ? f.subtotal : (f.calculos || {}).subtotalMxn), g.fs.length, fmt)}</td>
+        <td class="n"><b>${dinero(ing)}</b>${rango}</td></tr>`;
     }).join("");
-    $("#re-cuerpo").innerHTML = htmlFiltros(true, true, false) + (gs.length ? `
+
+    const selector = `<div class="re-filtros" style="margin-top:-2px;"><span class="nota" style="margin:0;">Ingreso por km:</span>
+      ${[["flete", "Ing. por km por FLETE"], ["subtotal", "Ing. por km SUBTOTAL"]].map(([k, t]) => `<button type="button" class="re-tab${metricaKm === k ? " activo" : ""}" data-m="${k}">${t}</button>`).join("")}</div>`;
+    $("#re-cuerpo").innerHTML = htmlFiltros(true, true, false) + selector + (gs.length ? `
       <div class="tabla-wrap"><table class="tabla re-tabla">
-        <thead><tr><th>Tipo</th><th>Ruta</th><th class="n">Viajes</th><th class="n">Km prom.</th><th class="n">Km total</th><th class="n">Flete MXN</th><th class="n">Flete/km</th><th class="n">Mín – Máx</th><th class="n">Subtotal/km</th></tr></thead>
+        <thead><tr><th>Tipo</th><th>Ruta</th><th class="n">Km</th>
+          ${columnas.map(c => `<th class="n${c === "FLETE" ? " re-col-flete" : " re-col-con"}">${esc(c)}</th>`).join("")}
+          <th class="n">Subtotal</th><th class="n">${metricaKm === "flete" ? "Ing./km flete" : "Ing./km subtotal"} (MXN)</th></tr></thead>
         <tbody>${filas}</tbody>
       </table></div>
-      <p class="nota">Un renglón por cliente, tipo (seca / refrigerada) y ruta, con todas sus facturas unificadas. Flete/km = flete total ÷ km totales. Toca un renglón para ver sus facturas.</p>` : vacio());
+      <p class="nota">Cada celda muestra el valor como viene en la factura. Si cambia entre facturas: el más común y, en chico, "varía" con el rango. "2 de 8" = solo 2 de los 8 viajes traen ese concepto. Ingreso por km = total ÷ km totales, en MXN (el rango chico es el más bajo y el más alto por factura).${hayOtros ? ` "OTROS" junta ${otrosNombres.length - visibles.length} concepto(s) poco frecuentes.` : ""} Toca un renglón para ver sus facturas.</p>` : vacio());
     enlazarFiltros();
+    $("#re-cuerpo").querySelectorAll("[data-m]").forEach(b => b.addEventListener("click", () => { metricaKm = b.dataset.m; renderClienteRutas(); }));
     $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => {
       filtro.cliente = tr.dataset.cli; filtro.ruta = tr.dataset.ruta === "Sin ruta" ? "" : tr.dataset.ruta; filtro.tipo = tr.dataset.tipo;
       tab = "facturas"; render();
@@ -651,16 +717,18 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     try {
       const XLSX = await cargarScript(URL_SHEETJS, "XLSX");
       const fs = filtradas().sort((a, b) => (a.fecha || "").localeCompare(b.fecha || ""));
+      const conceptosExcel = [...new Set(fs.flatMap(f => (f.conceptos || []).map(k => nombreConcepto(k.servicio))))]
+        .sort((a, b) => (a === "FLETE" ? -1 : b === "FLETE" ? 1 : a.localeCompare(b, "es")));
       const filas = fs.map(f => {
         const c = f.calculos || {}, cli = f.cliente || {}, cp = f.cartaPorte || {};
-        const otros = {};
-        (f.conceptos || []).forEach(k => { otros[k.servicio] = (otros[k.servicio] || 0) + (k.importe || 0); });
+        const porNombre = {};
+        (f.conceptos || []).forEach(k => { const n = nombreConcepto(k.servicio); porNombre[n] = Math.round(((porNombre[n] || 0) + (k.importe || 0)) * 100) / 100; });
         return {
           "Fecha": f.fecha, "Factura": f.factura, "Tipo": TIPO[tipoDe(f)].txt, "Prog": (salidaDe(f) || {}).prog || "", "Temp. salida": (salidaDe(f) || {}).tempSalida || "", "Carta porte": f.cartaPorteFolio, "Viaje": f.viaje, "Folio fiscal": f.uuid,
           "Cliente": cli.nombre, "RFC cliente": cli.rfc, "Remitente": (f.remitente || {}).nombre, "Destinatario": (f.destinatario || {}).nombre,
           "Origen": f.origen, "Destino": f.destino, "Se entrega en": (f.destinatario || {}).seEntregaEn,
           "Moneda": f.moneda, "Tipo de cambio": f.tipoCambio, "Flete (moneda)": c.flete, "Subtotal (moneda)": f.subtotal, "Total (moneda)": f.total,
-          "Conceptos": Object.entries(otros).map(([k, v]) => `${k}: ${v}`).join(" | "),
+          ...Object.fromEntries(conceptosExcel.map(n => [`${n} (moneda)`, porNombre[n] != null ? porNombre[n] : ""])),
           "Km": c.km, "Km capturados a mano": f.kmCapturado ? "Sí" : "",
           "Flete MXN": c.fleteMxn, "Flete/km MXN": c.fletePorKm, "Subtotal MXN": c.subtotalMxn, "Subtotal/km MXN": c.subtotalPorKm,
           "Unidad": f.unidad, "Remolque": f.remolque, "Operador": f.operador, "Configuración": cp.configuracion, "Observaciones": f.observaciones,
