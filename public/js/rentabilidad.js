@@ -159,6 +159,7 @@ function inyectarEstilos() {
     .re-barra { height:7px; border-radius:4px; background:#E8E2D9; overflow:hidden; margin-top:4px; } .re-barra i { display:block; height:100%; background:#2c1e0f; }
     .re-errores { margin-top:8px; font-size:12.5px; color:#7a3e06; background:#FEF6E4; border-radius:8px; padding:8px 10px; }
     .re-km { display:inline-flex; gap:6px; align-items:center; } .re-km input { width:110px; }
+    .re-pag { display:flex; gap:8px; align-items:center; justify-content:center; margin:12px 0 4px; flex-wrap:wrap; }
     .re-col-flete { background:#EFE7DA; font-weight:700; } .re-col-con { background:#F7F3EE; }
     .re-seca { background:#F3E9D7; color:#7a4a12; } .re-refri { background:#DDEEFB; color:#0C447C; }
     .re-pegar { width:100%; box-sizing:border-box; min-height:120px; font-family:monospace; font-size:11.5px; white-space:pre; }
@@ -252,6 +253,30 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   let pegadas = null;             // salidas leídas del reporte pegado, sin guardar
   let filtroSalidas = "todas";
   let metricaKm = "flete";   // Cliente · ruta · tipo: "flete" | "subtotal"
+  // Paginación (2026-10-28): las tablas largas se muestran de 25 en 25.
+  const POR_PAGINA = 25;
+  const paginas = {};
+  function paginar(clave, items, firma) {
+    const st = paginas[clave] || (paginas[clave] = { pag: 1, firma: "" });
+    if (st.firma !== firma) { st.pag = 1; st.firma = firma; } // cambió el filtro: regresa a la página 1
+    const total = Math.max(1, Math.ceil(items.length / POR_PAGINA));
+    if (st.pag > total) st.pag = total;
+    const ini = (st.pag - 1) * POR_PAGINA;
+    const html = items.length > POR_PAGINA ? `<div class="re-pag" data-pag="${clave}">
+      <button type="button" class="secundario" data-dir="-1"${st.pag <= 1 ? " disabled" : ""}>‹ Anterior</button>
+      <span class="nota" style="margin:0;">Página ${st.pag} de ${total} · ${items.length.toLocaleString("es-MX")} en total</span>
+      <button type="button" class="secundario" data-dir="1"${st.pag >= total ? " disabled" : ""}>Siguiente ›</button></div>` : "";
+    return { items: items.slice(ini, ini + POR_PAGINA), html };
+  }
+  function enlazarPaginas(redibujar) {
+    $("#re-cuerpo").querySelectorAll(".re-pag button").forEach(b => b.addEventListener("click", () => {
+      const clave = b.closest(".re-pag").dataset.pag;
+      paginas[clave].pag += Number(b.dataset.dir);
+      redibujar();
+      const t = $("#re-cuerpo").querySelector(".tabla-wrap");
+      if (t) t.scrollIntoView({ block: "start", behavior: "smooth" });
+    }));
+  }
   let grupoSalidas = null;   // { k, txt }: filtro de Salidas por cliente+destino+tipo (desde la agrupación)
   const fsg = { q: "", mes: "", faltan: true }; // filtros de Salidas · cliente · destino · tipo
   const normTxt = (t) => String(t || "").toUpperCase().replace(/\s+/g, " ").trim();
@@ -498,18 +523,20 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   // ---- Facturas ----
   function renderFacturas() {
     const fs = filtradas().sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || (b.factura || "").localeCompare(a.factura || ""));
+    const pg = paginar("facturas", fs, JSON.stringify(filtro) + fs.length);
     $("#re-cuerpo").innerHTML = htmlFiltros(true, true, true) + (fs.length ? `
       <div class="tabla-wrap"><table class="tabla re-tabla">
         <thead><tr><th>Fecha</th><th>Factura</th><th>Tipo</th><th>Cliente</th><th>Ruta</th><th>Unidad</th><th class="n">Km</th><th class="n">Flete MXN</th><th class="n">Flete/km</th><th class="n">Subtotal MXN</th><th class="n">Subtotal/km</th></tr></thead>
-        <tbody>${fs.map(f => { const c = f.calculos || {}; return `<tr class="clic" data-u="${esc(f.uuid)}">
+        <tbody>${pg.items.map(f => { const c = f.calculos || {}; return `<tr class="clic" data-u="${esc(f.uuid)}">
           <td>${fechaCorta(f.fecha)}</td><td>${esc(f.factura)}${f.moneda !== "MXN" ? ` <span class="re-chip re-azul">${esc(f.moneda)}</span>` : ""}</td>
           <td><span class="re-chip ${TIPO[tipoDe(f)].clase}">${TIPO[tipoDe(f)].txt}</span></td>
           <td>${esc((f.cliente || {}).nombre)}</td><td>${esc(f.ruta)}</td><td>${esc(f.unidad)}</td>
           <td class="n">${miles(c.km)}${f.kmCapturado ? "*" : ""}</td><td class="n">${dinero(c.fleteMxn)}</td><td class="n"><b>${dinero(c.fletePorKm)}</b></td>
           <td class="n">${dinero(c.subtotalMxn)}</td><td class="n">${dinero(c.subtotalPorKm)}</td></tr>`; }).join("")}</tbody>
-      </table></div>
+      </table></div>${pg.html}
       <p class="nota">* Km capturados a mano. Toca una factura para ver todo su detalle, corregir los km o borrarla.</p>` : vacio());
     enlazarFiltros();
+    enlazarPaginas(renderFacturas);
     $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => abrirDetalle(tr.dataset.u)));
   }
 
@@ -634,8 +661,9 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       return formato(comun) + extra;
     }
 
+    const pgC = paginar("clirutas", gs, JSON.stringify(filtro) + gs.length);
     let anterior = null;
-    const filas = gs.map(g => {
+    const filas = pgC.items.map(g => {
       const monedas = new Set(g.fs.map(f => f.moneda || "MXN"));
       const enOriginal = monedas.size === 1;
       const mon = enOriginal ? [...monedas][0] : "MXN";
@@ -671,10 +699,11 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
           ${columnas.map(c => `<th class="n${c === "FLETE" ? " re-col-flete" : " re-col-con"}">${esc(c)}</th>`).join("")}
           <th class="n">Subtotal</th><th class="n">${metricaKm === "flete" ? "Ing./km flete" : "Ing./km subtotal"} (MXN)</th></tr></thead>
         <tbody>${filas}</tbody>
-      </table></div>
+      </table></div>${pgC.html}
       <p class="nota">Cada celda muestra el valor como viene en la factura. Si cambia entre facturas: el más común y, en chico, "varía" con el rango. "2 de 8" = solo 2 de los 8 viajes traen ese concepto. Ingreso por km = total ÷ km totales, en MXN (el rango chico es el más bajo y el más alto por factura).${hayOtros ? ` "OTROS" junta ${otrosNombres.length - visibles.length} concepto(s) poco frecuentes.` : ""} Toca un renglón para ver sus facturas.</p>` : vacio());
     enlazarFiltros();
     $("#re-cuerpo").querySelectorAll("[data-m]").forEach(b => b.addEventListener("click", () => { metricaKm = b.dataset.m; renderClienteRutas(); }));
+    enlazarPaginas(renderClienteRutas);
     $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => {
       filtro.cliente = tr.dataset.cli; filtro.ruta = tr.dataset.ruta === "Sin ruta" ? "" : tr.dataset.ruta; filtro.tipo = tr.dataset.tipo;
       tab = "facturas"; render();
@@ -716,7 +745,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       .sort((a, b) => (b.fechaMs || 0) - (a.fechaMs || 0));
     const filtros = [["todas", "Todas", base.length], ["refrigerada", "Refrigeradas", cuenta(base, "refrigerada")],
       ["seca", "Secas", cuenta(base, "seca")], ["sinfactura", "Sin factura cargada", base.filter(x => !porTaim.has(x.factura)).length]];
-    const MAX = 300;
+    const pgS = paginar("salidas", vista, `${filtroSalidas}|${grupoSalidas ? grupoSalidas.k : ""}|${vista.length}`);
     $("#re-cuerpo").innerHTML = `
       <p class="nota" style="margin-top:0;">Copia del Adrematasa oficial el reporte de salidas <b>con la fila de títulos</b> y pégalo aquí. Se ligan con las facturas por el folio de Carta Porte (columna Factura, TAIM-…). <b>Prog OFF = SECA</b>; una temperatura = <b>REFRIGERADA</b>. Pegar otro reporte agrega las nuevas y actualiza las que ya estaban; no borra nada.</p>
       <textarea class="re-pegar" id="re-s-texto" placeholder="Pega aquí el reporte de salidas…"></textarea>
@@ -727,12 +756,12 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       <div class="re-filtros">${filtros.map(([k, t, n]) => `<button type="button" class="re-tab${filtroSalidas === k ? " activo" : ""}" data-fs="${k}">${t} ${n}</button>`).join("")}</div>
       ${vista.length ? `<div class="tabla-wrap"><table class="tabla re-tabla">
         <thead><tr><th>Carta porte</th><th>Fecha</th><th>Cliente</th><th>Destino</th><th>Remolque</th><th>Carro</th><th>Salida</th><th>Prog</th><th>Tipo</th><th>Factura</th></tr></thead>
-        <tbody>${vista.slice(0, MAX).map(x => { const f = porTaim.get(x.factura); return `<tr${f ? ` class="clic" data-u="${esc(f.uuid)}"` : ""}>
+        <tbody>${pgS.items.map(x => { const f = porTaim.get(x.factura); return `<tr${f ? ` class="clic" data-u="${esc(f.uuid)}"` : ""}>
           <td>${esc(x.factura)}</td><td>${esc(x.fechaHora)}</td><td>${esc(x.cliente)}</td><td>${esc(x.destino)}</td>
           <td>${esc(x.remolque)}</td><td>${esc(x.carro)}</td><td>${esc(x.tempSalida)}</td><td>${esc(x.prog)}</td>
           <td><span class="re-chip ${TIPO[x.tipo].clase}">${TIPO[x.tipo].txt}</span></td>
           <td>${f ? `<span class="re-chip re-verde">${esc(f.factura)}</span>` : `<span class="re-chip re-gris">sin factura cargada</span>`}</td></tr>`; }).join("")}</tbody>
-      </table></div>${vista.length > MAX ? `<p class="nota">Se muestran las ${MAX} más recientes de ${vista.length}.</p>` : ""}`
+      </table></div>${pgS.html}`
         : `<p class="nota" style="text-align:center;padding:16px;">${guardadas.length ? "No hay salidas con este filtro." : "Todavía no hay salidas guardadas."}</p>`}`;
     $("#re-s-leer").addEventListener("click", () => {
       $("#re-error").textContent = "";
@@ -743,6 +772,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     const c = $("#re-s-cancelar"); if (c) c.addEventListener("click", () => { pegadas = null; renderSalidas(); });
     $("#re-cuerpo").querySelectorAll("[data-fs]").forEach(b => b.addEventListener("click", () => { filtroSalidas = b.dataset.fs; renderSalidas(); }));
     const qg = $("#re-s-quitar-grupo"); if (qg) qg.addEventListener("click", () => { grupoSalidas = null; renderSalidas(); });
+    enlazarPaginas(renderSalidas);
     $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => abrirDetalle(tr.dataset.u)));
   }
 
@@ -771,8 +801,9 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       .filter(g => (!fsg.faltan || g.total > g.fs.length) && (!q || g.cliente.includes(q) || g.destino.includes(q)))
       .sort((a, b) => a.cliente.localeCompare(b.cliente, "es") || a.destino.localeCompare(b.destino, "es") || ORDEN_TIPO[a.tipo] - ORDEN_TIPO[b.tipo]);
     const totalFaltan = gs.reduce((s, g) => s + (g.total - g.fs.length), 0);
+    const pgG = paginar("salgrupos", gs, JSON.stringify(fsg) + gs.length);
     let anterior = null;
-    const filas = gs.map(g => {
+    const filas = pgG.items.map(g => {
       const km = g.fs.reduce((s, f) => s + ((f.calculos || {}).km || 0), 0);
       const flete = g.fs.reduce((s, f) => s + ((f.calculos || {}).fleteMxn || 0), 0);
       const sub = g.fs.reduce((s, f) => s + ((f.calculos || {}).subtotalMxn || 0), 0);
@@ -798,13 +829,14 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       </div>
       ${gs.length ? `<div class="tabla-wrap"><table class="tabla re-tabla">
         <thead><tr><th>Destino (Adrematasa)</th><th>Tipo</th><th class="n">Salidas</th><th class="n">Con factura</th><th class="n">Faltan</th><th class="n">Km (factura)</th><th class="n">Ing./km flete</th><th class="n">Ing./km subtotal</th><th>Última salida</th></tr></thead>
-        <tbody>${filas}</tbody></table></div>
+        <tbody>${filas}</tbody></table></div>${pgG.html}
         <p class="nota">Agrupado por cliente, destino y tipo tal como vienen en el reporte del Adrematasa. Debajo del destino sale la ruta de las facturas ya cargadas. El ingreso por km se calcula solo con las salidas que ya tienen factura (total ÷ km totales, en MXN). Toca un grupo para ver sus salidas sin factura.</p>`
         : `<p class="nota" style="text-align:center;padding:16px;">${todas.length ? "No hay grupos con estos filtros." : "Todavía no hay salidas guardadas."}</p>`}`;
     const qi = $("#re-g-q");
     qi.addEventListener("input", () => { fsg.q = qi.value; const pos = qi.selectionStart; renderSalidasGrupos(); const n = $("#re-g-q"); n.focus(); n.setSelectionRange(pos, pos); });
     $("#re-g-mes").addEventListener("change", (e) => { fsg.mes = e.target.value; renderSalidasGrupos(); });
     $("#re-g-faltan").addEventListener("change", (e) => { fsg.faltan = e.target.checked; renderSalidasGrupos(); });
+    enlazarPaginas(renderSalidasGrupos);
     $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => {
       grupoSalidas = { k: tr.dataset.k, txt: tr.dataset.txt };
       filtroSalidas = "sinfactura"; tab = "salidas"; render();
