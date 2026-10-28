@@ -3,7 +3,7 @@
 // RUTA:     /workspaces/adrematasa_interno/public/js/rentabilidad.js
 // ##########################################################################
 import { db } from "./firebase-config.js";
-import { collection, doc, onSnapshot, setDoc, deleteDoc, updateDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { collection, doc, onSnapshot, setDoc, deleteDoc, updateDoc, writeBatch, getDoc, query, where } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { leerFactura, paginasDePdf, calcular } from "./rentabilidadPdf.js";
 
 // ============================================================================
@@ -228,7 +228,13 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     <section class="panel">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
         <h2 style="margin:0;">Rentabilidad</h2>
-        <span class="nota" id="re-conteo" style="margin:0;"></span>
+        <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <span class="nota" id="re-conteo" style="margin:0;"></span>
+          <select id="re-periodo" style="width:auto;" title="Solo se leen las facturas y salidas de este periodo (ahorra lecturas)">
+            <option value="1">Este mes</option><option value="2">Este mes y el anterior</option><option value="3">Últimos 3 meses</option>
+            <option value="6">Últimos 6 meses</option><option value="12">Últimos 12 meses</option><option value="0">Todo (más lecturas)</option>
+          </select>
+        </span>
       </div>
       <p class="nota" style="margin:4px 0 12px;">Ingreso por km a partir de las facturas. Solo tú ves esta opción.</p>
       <div class="re-tabs" id="re-tabs"></div>
@@ -246,6 +252,10 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   let pegadas = null;             // salidas leídas del reporte pegado, sin guardar
   let filtroSalidas = "todas";
   let metricaKm = "flete";   // Cliente · ruta · tipo: "flete" | "subtotal"
+  let grupoSalidas = null;   // { k, txt }: filtro de Salidas por cliente+destino+tipo (desde la agrupación)
+  const fsg = { q: "", mes: "", faltan: true }; // filtros de Salidas · cliente · destino · tipo
+  const normTxt = (t) => String(t || "").toUpperCase().replace(/\s+/g, " ").trim();
+  const claveSalida = (x) => `${normTxt(x.cliente)}|${normTxt(x.destino)}|${x.tipo}`;
   const salidaDe = (f) => (salidas && f && f.cartaPorteFolio) ? salidas.get(String(f.cartaPorteFolio).toUpperCase()) || null : null;
   const tipoDe = (f) => { const sa = salidaDe(f); return sa ? sa.tipo : "sin"; };
 
@@ -255,20 +265,57 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     setTimeout(() => $("#re-exito").classList.add("oculto"), 6000);
   }
 
-  const cancelar = onSnapshot(collection(db, COL), (snap) => {
-    facturas = new Map(snap.docs.map(d => [d.id, d.data()]));
-    $("#re-conteo").textContent = `${facturas.size} factura${facturas.size === 1 ? "" : "s"} guardada${facturas.size === 1 ? "" : "s"}`;
-    cargadas.forEach(c => { if (c.estado !== "guardada" && c.f && c.f.uuid && facturas.has(c.f.uuid)) c.estado = c.estado === "lista" ? "duplicada" : c.estado; });
+  // Periodo (2026-10-28, para ahorrar lecturas): solo se escuchan las facturas
+  // (por fecha) y las salidas (por fechaMs, con 15 días de margen antes, para
+  // que una factura del inicio del periodo encuentre su salida) del periodo.
+  // Se recuerda en este navegador.
+  let periodoMeses = 2;
+  try { const g = localStorage.getItem("rentabilidad_periodo"); if (g != null && ["0", "1", "2", "3", "6", "12"].includes(g)) periodoMeses = Number(g); } catch (e) { /* sin almacenamiento */ }
+  $("#re-periodo").value = String(periodoMeses);
+  function inicioPeriodo() {
+    if (!periodoMeses) return null;
+    const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0); d.setMonth(d.getMonth() - (periodoMeses - 1));
+    return d;
+  }
+  function pintarConteo() {
+    if (!facturas) return;
+    const nf = facturas.size, ns = salidas ? salidas.size : null;
+    $("#re-conteo").textContent = `${nf} factura${nf === 1 ? "" : "s"}${ns != null ? ` · ${ns.toLocaleString("es-MX")} salida${ns === 1 ? "" : "s"}` : ""} en el periodo`;
+  }
+  let cancelar = () => {}, cancelarSalidas = () => {};
+  function suscribir() {
+    cancelar(); cancelarSalidas();
+    facturas = null; salidas = null;
     render();
-  }, (err) => { $("#re-error").textContent = "No se pudieron leer las facturas: " + err.message; });
-  const cancelarSalidas = onSnapshot(collection(db, COL_SALIDAS), (snap) => {
-    salidas = new Map(snap.docs.map(d => [d.id, d.data()]));
-    if (tab !== "cargar") render(); else renderVista();
-  }, (err) => { $("#re-error").textContent = "No se pudieron leer las salidas: " + err.message; });
+    const ini = inicioPeriodo();
+    const qFacturas = ini
+      ? query(collection(db, COL), where("fecha", ">=", `${ini.getFullYear()}-${String(ini.getMonth() + 1).padStart(2, "0")}-01`))
+      : collection(db, COL);
+    const qSalidas = ini
+      ? query(collection(db, COL_SALIDAS), where("fechaMs", ">=", ini.getTime() - 15 * 864e5))
+      : collection(db, COL_SALIDAS);
+    cancelar = onSnapshot(qFacturas, (snap) => {
+      facturas = new Map(snap.docs.map(d => [d.id, d.data()]));
+      pintarConteo();
+      cargadas.forEach(c => { if (c.estado !== "guardada" && c.f && c.f.uuid && facturas.has(c.f.uuid)) c.estado = c.estado === "lista" ? "duplicada" : c.estado; });
+      render();
+    }, (err) => { $("#re-error").textContent = "No se pudieron leer las facturas: " + err.message; });
+    cancelarSalidas = onSnapshot(qSalidas, (snap) => {
+      salidas = new Map(snap.docs.map(d => [d.id, d.data()]));
+      pintarConteo();
+      if (tab !== "cargar") render(); else renderVista();
+    }, (err) => { $("#re-error").textContent = "No se pudieron leer las salidas: " + err.message; });
+  }
+  $("#re-periodo").addEventListener("change", (e) => {
+    periodoMeses = Number(e.target.value);
+    try { localStorage.setItem("rentabilidad_periodo", String(periodoMeses)); } catch (err) { /* nada */ }
+    filtro.mes = "";
+    suscribir();
+  });
   const vigilar = setInterval(() => { if (!contenedor.isConnected) { clearInterval(vigilar); cancelar(); cancelarSalidas(); } }, 3000);
 
   function renderTabs() {
-    $("#re-tabs").innerHTML = [["cargar", "Cargar"], ["facturas", "Facturas"], ["clientes", "Por cliente"], ["clirutas", "Cliente · ruta · tipo"], ["rutas", "Por ruta"], ["salidas", "Salidas Adrematasa"]]
+    $("#re-tabs").innerHTML = [["cargar", "Cargar"], ["facturas", "Facturas"], ["clientes", "Por cliente"], ["clirutas", "Cliente · ruta · tipo"], ["rutas", "Por ruta"], ["salidas", "Salidas Adrematasa"], ["salgrupos", "Salidas · cliente · destino · tipo"]]
       .map(([k, t]) => `<button type="button" class="re-tab${tab === k ? " activo" : ""}" data-t="${k}">${t}</button>`).join("");
     $("#re-tabs").querySelectorAll(".re-tab").forEach(b => b.addEventListener("click", () => { tab = b.dataset.t; render(); }));
   }
@@ -281,6 +328,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     if (tab === "clientes") return renderClientes();
     if (tab === "clirutas") return renderClienteRutas();
     if (tab === "salidas") return renderSalidas();
+    if (tab === "salgrupos") return renderSalidasGrupos();
     return renderRutas();
   }
 
@@ -378,6 +426,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
         c.f = leerFactura(paginas);
         if (!c.f.uuid) { c.estado = "error"; c.error = "No es una factura con el formato esperado (no encontré el Folio Fiscal)."; }
         else if ((facturas && facturas.has(c.f.uuid)) || cargadas.some(o => o !== c && o.f && o.f.uuid === c.f.uuid && o.estado !== "error")) c.estado = "duplicada";
+        else if (await yaGuardada(c.f.uuid)) c.estado = "duplicada"; // guardada antes del periodo que se está viendo
         else c.estado = "lista";
       } catch (e) {
         c.estado = "error"; c.error = "No se pudo leer el PDF: " + (e.message || e);
@@ -387,6 +436,9 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     }
   }
 
+  async function yaGuardada(uuid) {
+    try { return (await getDoc(doc(db, COL, uuid))).exists(); } catch (e) { return false; }
+  }
   function registro(f) {
     const limpio = JSON.parse(JSON.stringify(f));
     delete limpio.errores;
@@ -659,10 +711,11 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       ${cuenta(pegadas, "sin") ? `<div class="re-errores">${cuenta(pegadas, "sin")} renglón(es) traen un Prog que no es OFF ni una temperatura; quedan "sin dato".</div>` : ""}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;"><button type="button" id="re-s-guardar">Guardar ${pegadas.length} salida${pegadas.length === 1 ? "" : "s"}</button>
         <button type="button" class="secundario" id="re-s-cancelar">Cancelar</button></div>` : "";
-    const vista = guardadas.filter(x => filtroSalidas === "todas" || (filtroSalidas === "sinfactura" ? !porTaim.has(x.factura) : x.tipo === filtroSalidas))
+    const base = grupoSalidas ? guardadas.filter(x => claveSalida(x) === grupoSalidas.k) : guardadas;
+    const vista = base.filter(x => (filtroSalidas === "todas" || (filtroSalidas === "sinfactura" ? !porTaim.has(x.factura) : x.tipo === filtroSalidas)))
       .sort((a, b) => (b.fechaMs || 0) - (a.fechaMs || 0));
-    const filtros = [["todas", "Todas", guardadas.length], ["refrigerada", "Refrigeradas", cuenta(guardadas, "refrigerada")],
-      ["seca", "Secas", cuenta(guardadas, "seca")], ["sinfactura", "Sin factura cargada", guardadas.filter(x => !porTaim.has(x.factura)).length]];
+    const filtros = [["todas", "Todas", base.length], ["refrigerada", "Refrigeradas", cuenta(base, "refrigerada")],
+      ["seca", "Secas", cuenta(base, "seca")], ["sinfactura", "Sin factura cargada", base.filter(x => !porTaim.has(x.factura)).length]];
     const MAX = 300;
     $("#re-cuerpo").innerHTML = `
       <p class="nota" style="margin-top:0;">Copia del Adrematasa oficial el reporte de salidas <b>con la fila de títulos</b> y pégalo aquí. Se ligan con las facturas por el folio de Carta Porte (columna Factura, TAIM-…). <b>Prog OFF = SECA</b>; una temperatura = <b>REFRIGERADA</b>. Pegar otro reporte agrega las nuevas y actualiza las que ya estaban; no borra nada.</p>
@@ -670,6 +723,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       <div style="margin-top:8px;"><button type="button" class="secundario" id="re-s-leer">Leer reporte</button></div>
       ${resumenPegadas}
       <div class="re-h3" style="margin-top:20px;">Salidas guardadas</div>
+      ${grupoSalidas ? `<div class="re-filtros"><span class="re-chip re-azul" style="font-size:12px;">${esc(grupoSalidas.txt)}</span><button type="button" class="secundario" id="re-s-quitar-grupo" style="padding:4px 10px;font-size:12px;">Quitar filtro ✕</button></div>` : ""}
       <div class="re-filtros">${filtros.map(([k, t, n]) => `<button type="button" class="re-tab${filtroSalidas === k ? " activo" : ""}" data-fs="${k}">${t} ${n}</button>`).join("")}</div>
       ${vista.length ? `<div class="tabla-wrap"><table class="tabla re-tabla">
         <thead><tr><th>Carta porte</th><th>Fecha</th><th>Cliente</th><th>Destino</th><th>Remolque</th><th>Carro</th><th>Salida</th><th>Prog</th><th>Tipo</th><th>Factura</th></tr></thead>
@@ -688,7 +742,73 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     const g = $("#re-s-guardar"); if (g) g.addEventListener("click", guardarSalidas);
     const c = $("#re-s-cancelar"); if (c) c.addEventListener("click", () => { pegadas = null; renderSalidas(); });
     $("#re-cuerpo").querySelectorAll("[data-fs]").forEach(b => b.addEventListener("click", () => { filtroSalidas = b.dataset.fs; renderSalidas(); }));
+    const qg = $("#re-s-quitar-grupo"); if (qg) qg.addEventListener("click", () => { grupoSalidas = null; renderSalidas(); });
     $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => abrirDetalle(tr.dataset.u)));
+  }
+
+  // ---- Salidas · cliente · destino · tipo (2026-10-28) ----
+  // Agrupa las salidas del Adrematasa por cliente + destino + tipo (como vienen
+  // en el reporte) para ver cuántas ya tienen factura y cuántas faltan. Con las
+  // que sí tienen factura calcula el ingreso por km de ese grupo.
+  function renderSalidasGrupos() {
+    const todas = [...(salidas || new Map()).values()];
+    const porTaim = new Map(lista().filter(f => f.cartaPorteFolio).map(f => [String(f.cartaPorteFolio).toUpperCase(), f]));
+    const mesDe = (x) => { if (!x.fechaMs) return ""; const d = new Date(x.fechaMs); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
+    const meses = [...new Set(todas.map(mesDe).filter(Boolean))].sort().reverse();
+    const q = normTxt(fsg.q);
+    const grupos = new Map();
+    todas.filter(x => !fsg.mes || mesDe(x) === fsg.mes).forEach(x => {
+      const k = claveSalida(x);
+      if (!grupos.has(k)) grupos.set(k, { k, cliente: normTxt(x.cliente), destino: normTxt(x.destino), tipo: x.tipo, total: 0, fs: [], rutas: new Set(), ultimaMs: 0 });
+      const g = grupos.get(k);
+      g.total++;
+      g.ultimaMs = Math.max(g.ultimaMs, x.fechaMs || 0);
+      const f = porTaim.get(x.factura);
+      if (f) { g.fs.push(f); if (f.ruta) g.rutas.add(f.ruta); }
+    });
+    const ORDEN_TIPO = { seca: 0, refrigerada: 1, sin: 2 };
+    const gs = [...grupos.values()]
+      .filter(g => (!fsg.faltan || g.total > g.fs.length) && (!q || g.cliente.includes(q) || g.destino.includes(q)))
+      .sort((a, b) => a.cliente.localeCompare(b.cliente, "es") || a.destino.localeCompare(b.destino, "es") || ORDEN_TIPO[a.tipo] - ORDEN_TIPO[b.tipo]);
+    const totalFaltan = gs.reduce((s, g) => s + (g.total - g.fs.length), 0);
+    let anterior = null;
+    const filas = gs.map(g => {
+      const km = g.fs.reduce((s, f) => s + ((f.calculos || {}).km || 0), 0);
+      const flete = g.fs.reduce((s, f) => s + ((f.calculos || {}).fleteMxn || 0), 0);
+      const sub = g.fs.reduce((s, f) => s + ((f.calculos || {}).subtotalMxn || 0), 0);
+      const kms = [...new Set(g.fs.map(f => (f.calculos || {}).km).filter(Boolean))];
+      const faltan = g.total - g.fs.length;
+      const encabezado = g.cliente !== anterior ? `<tr><td colspan="9" style="background:#f2ede6;font-weight:800;padding-top:10px;">${esc(g.cliente || "SIN CLIENTE")}</td></tr>` : "";
+      anterior = g.cliente;
+      return encabezado + `<tr class="clic" data-k="${esc(g.k)}" data-txt="${esc(`${g.cliente} · ${g.destino} · ${TIPO[g.tipo].txt}`)}">
+        <td>${esc(g.destino || "—")}${g.rutas.size ? `<br><small class="nota">${esc([...g.rutas].join(" / "))}</small>` : ""}</td>
+        <td><span class="re-chip ${TIPO[g.tipo].clase}">${TIPO[g.tipo].txt}</span></td>
+        <td class="n">${g.total}</td><td class="n">${g.fs.length}</td>
+        <td class="n">${faltan ? `<b style="color:#A32D2D;">${faltan}</b>` : `<span class="re-chip re-verde">0</span>`}</td>
+        <td class="n">${kms.length ? kms.map(miles).join(" / ") : "—"}</td>
+        <td class="n"><b>${km ? dinero(flete / km) : "—"}</b></td><td class="n">${km ? dinero(sub / km) : "—"}</td>
+        <td>${g.ultimaMs ? fechaCorta(new Date(g.ultimaMs).toISOString().slice(0, 10)) : "—"}</td></tr>`;
+    }).join("");
+    $("#re-cuerpo").innerHTML = `
+      <div class="re-filtros">
+        <input type="text" id="re-g-q" placeholder="Buscar cliente o destino" value="${esc(fsg.q)}" style="width:auto;min-width:200px;">
+        <select id="re-g-mes"><option value="">Todos los meses</option>${meses.map(m => `<option value="${m}"${fsg.mes === m ? " selected" : ""}>${nombreMes(m)}</option>`).join("")}</select>
+        <label style="display:inline-flex;gap:6px;align-items:center;margin:0;font-size:13px;color:#2c1e0f;"><input type="checkbox" id="re-g-faltan" style="width:auto;"${fsg.faltan ? " checked" : ""}> Solo grupos con facturas faltantes</label>
+        <span class="nota" style="margin:0;">${gs.length} grupo${gs.length === 1 ? "" : "s"} · ${totalFaltan} salida${totalFaltan === 1 ? "" : "s"} sin factura</span>
+      </div>
+      ${gs.length ? `<div class="tabla-wrap"><table class="tabla re-tabla">
+        <thead><tr><th>Destino (Adrematasa)</th><th>Tipo</th><th class="n">Salidas</th><th class="n">Con factura</th><th class="n">Faltan</th><th class="n">Km (factura)</th><th class="n">Ing./km flete</th><th class="n">Ing./km subtotal</th><th>Última salida</th></tr></thead>
+        <tbody>${filas}</tbody></table></div>
+        <p class="nota">Agrupado por cliente, destino y tipo tal como vienen en el reporte del Adrematasa. Debajo del destino sale la ruta de las facturas ya cargadas. El ingreso por km se calcula solo con las salidas que ya tienen factura (total ÷ km totales, en MXN). Toca un grupo para ver sus salidas sin factura.</p>`
+        : `<p class="nota" style="text-align:center;padding:16px;">${todas.length ? "No hay grupos con estos filtros." : "Todavía no hay salidas guardadas."}</p>`}`;
+    const qi = $("#re-g-q");
+    qi.addEventListener("input", () => { fsg.q = qi.value; const pos = qi.selectionStart; renderSalidasGrupos(); const n = $("#re-g-q"); n.focus(); n.setSelectionRange(pos, pos); });
+    $("#re-g-mes").addEventListener("change", (e) => { fsg.mes = e.target.value; renderSalidasGrupos(); });
+    $("#re-g-faltan").addEventListener("change", (e) => { fsg.faltan = e.target.checked; renderSalidasGrupos(); });
+    $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => {
+      grupoSalidas = { k: tr.dataset.k, txt: tr.dataset.txt };
+      filtroSalidas = "sinfactura"; tab = "salidas"; render();
+    }));
   }
 
   async function guardarSalidas() {
@@ -742,5 +862,5 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     }
   }
 
-  render();
+  suscribir();
 }
