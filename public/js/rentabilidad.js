@@ -30,6 +30,7 @@ import { leerFactura, paginasDePdf, calcular } from "./rentabilidadPdf.js";
 
 const COL = "rentabilidad_facturas";
 const COL_SALIDAS = "rentabilidad_salidas";
+const COL_CONFIG = "rentabilidad_config"; // zonas y equivalencias de clientes (2026-10-28)
 const URL_PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 const URL_PDFJS_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 const URL_SHEETJS = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
@@ -159,6 +160,17 @@ function inyectarEstilos() {
     .re-barra { height:7px; border-radius:4px; background:#E8E2D9; overflow:hidden; margin-top:4px; } .re-barra i { display:block; height:100%; background:#2c1e0f; }
     .re-errores { margin-top:8px; font-size:12.5px; color:#7a3e06; background:#FEF6E4; border-radius:8px; padding:8px 10px; }
     .re-km { display:inline-flex; gap:6px; align-items:center; } .re-km input { width:110px; }
+    .re-seg { display:inline-flex; border:1px solid #e2ddd5; border-radius:9px; overflow:hidden; }
+    .re-seg button { background:#fff; border:0; border-left:1px solid #e2ddd5; padding:6px 11px; font:inherit; font-size:12.5px; color:#6b5f52; cursor:pointer; }
+    .re-seg button:first-child { border-left:0; } .re-seg button.activo { background:#2c1e0f; color:#fff; font-weight:700; }
+    .re-link { background:none; border:0; padding:0; font:inherit; font-weight:700; color:#185FA5; text-decoration:underline; cursor:pointer; }
+    .re-link.re-falta { color:#A32D2D; }
+    .re-lista { border:1px solid #e2ddd5; border-radius:10px; overflow:hidden; background:#fff; max-height:520px; overflow-y:auto; }
+    .re-dest { display:flex; gap:8px; align-items:flex-start; padding:8px 10px; border-top:1px solid #f0ece6; font-size:13px; cursor:pointer; margin:0; color:#2c1e0f; }
+    .re-dest:first-child { border-top:0; }
+    .re-zona { border:1px solid #e2ddd5; border-radius:10px; padding:10px 12px; margin-bottom:8px; background:#fff; }
+    .re-mini { padding:3px 8px; font-size:11.5px; }
+    .re-x { background:none; border:0; padding:0 0 0 4px; cursor:pointer; color:#A32D2D; font-weight:800; }
     .re-pag { display:flex; gap:8px; align-items:center; justify-content:center; margin:12px 0 4px; flex-wrap:wrap; }
     .re-col-flete { background:#EFE7DA; font-weight:700; } .re-col-con { background:#F7F3EE; }
     .re-seca { background:#F3E9D7; color:#7a4a12; } .re-refri { background:#DDEEFB; color:#0C447C; }
@@ -244,7 +256,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       <div id="re-cuerpo"></div>
     </section>`;
   const $ = (s) => contenedor.querySelector(s);
-  let tab = "cargar";
+  let tab = "tarifas";
   let facturas = null;            // Map uuid -> factura guardada
   let cargadas = [];              // [{ nombre, f, estado, error }]
   let elegida = -1;
@@ -277,10 +289,9 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       if (t) t.scrollIntoView({ block: "start", behavior: "smooth" });
     }));
   }
-  let grupoSalidas = null;   // { k, txt }: filtro de Salidas por cliente+destino+tipo (desde la agrupación)
-  const fsg = { q: "", mes: "", faltan: true }; // filtros de Salidas · cliente · destino · tipo
+  let grupoSalidas = null;   // { taims:Set, txt }: salidas sin factura de un renglón de Tarifas
+  let grupoFacturas = null;  // { uuids:Set, txt }: facturas de un renglón de Tarifas
   const normTxt = (t) => String(t || "").toUpperCase().replace(/\s+/g, " ").trim();
-  const claveSalida = (x) => `${normTxt(x.cliente)}|${normTxt(x.destino)}|${x.tipo}`;
   const salidaDe = (f) => (salidas && f && f.cartaPorteFolio) ? salidas.get(String(f.cartaPorteFolio).toUpperCase()) || null : null;
   const tipoDe = (f) => { const sa = salidaDe(f); return sa ? sa.tipo : "sin"; };
 
@@ -309,6 +320,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   }
   let cancelar = () => {}, cancelarSalidas = () => {};
   function suscribir() {
+    suscribirConfig();
     cancelar(); cancelarSalidas();
     facturas = null; salidas = null;
     render();
@@ -337,10 +349,10 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     filtro.mes = "";
     suscribir();
   });
-  const vigilar = setInterval(() => { if (!contenedor.isConnected) { clearInterval(vigilar); cancelar(); cancelarSalidas(); } }, 3000);
+  const vigilar = setInterval(() => { if (!contenedor.isConnected) { clearInterval(vigilar); cancelar(); cancelarSalidas(); if (cancelarConfig) cancelarConfig(); } }, 3000);
 
   function renderTabs() {
-    $("#re-tabs").innerHTML = [["cargar", "Cargar"], ["facturas", "Facturas"], ["clientes", "Por cliente"], ["clirutas", "Cliente · ruta · tipo"], ["rutas", "Por ruta"], ["salidas", "Salidas Adrematasa"], ["salgrupos", "Salidas · cliente · destino · tipo"]]
+    $("#re-tabs").innerHTML = [["tarifas", "Tarifas por cliente"], ["cargar", "Cargar facturas"], ["cargarSalidas", "Cargar salidas"], ["zonas", "Zonas y equivalencias"], ["facturas", "Facturas"], ["salidas", "Salidas"]]
       .map(([k, t]) => `<button type="button" class="re-tab${tab === k ? " activo" : ""}" data-t="${k}">${t}</button>`).join("");
     $("#re-tabs").querySelectorAll(".re-tab").forEach(b => b.addEventListener("click", () => { tab = b.dataset.t; render(); }));
   }
@@ -350,11 +362,9 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     if (tab === "cargar") return renderCargar();
     if (!facturas) { $("#re-cuerpo").innerHTML = `<p class="nota">Cargando…</p>`; return; }
     if (tab === "facturas") return renderFacturas();
-    if (tab === "clientes") return renderClientes();
-    if (tab === "clirutas") return renderClienteRutas();
-    if (tab === "salidas") return renderSalidas();
-    if (tab === "salgrupos") return renderSalidasGrupos();
-    return renderRutas();
+    if (tab === "salidas" || tab === "cargarSalidas") return renderSalidas();
+    if (tab === "zonas") return renderZonas();
+    return renderTarifas();
   }
 
   // ---- Cargar ----
@@ -522,9 +532,11 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
 
   // ---- Facturas ----
   function renderFacturas() {
-    const fs = filtradas().sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || (b.factura || "").localeCompare(a.factura || ""));
-    const pg = paginar("facturas", fs, JSON.stringify(filtro) + fs.length);
-    $("#re-cuerpo").innerHTML = htmlFiltros(true, true, true) + (fs.length ? `
+    const fs = filtradas().filter(f => !grupoFacturas || grupoFacturas.uuids.has(f.uuid))
+      .sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || (b.factura || "").localeCompare(a.factura || ""));
+    const pg = paginar("facturas", fs, JSON.stringify(filtro) + (grupoFacturas ? grupoFacturas.txt : "") + fs.length);
+    $("#re-cuerpo").innerHTML = htmlFiltros(true, true, true) +
+      (grupoFacturas ? `<div class="re-filtros"><span class="re-chip re-azul" style="font-size:12px;">${esc(grupoFacturas.txt)}</span><button type="button" class="secundario" id="re-f-quitar-grupo" style="padding:4px 10px;font-size:12px;">Quitar filtro ✕</button></div>` : "") + (fs.length ? `
       <div class="tabla-wrap"><table class="tabla re-tabla">
         <thead><tr><th>Fecha</th><th>Factura</th><th>Tipo</th><th>Cliente</th><th>Ruta</th><th>Unidad</th><th class="n">Km</th><th class="n">Flete MXN</th><th class="n">Flete/km</th><th class="n">Subtotal MXN</th><th class="n">Subtotal/km</th></tr></thead>
         <tbody>${pg.items.map(f => { const c = f.calculos || {}; return `<tr class="clic" data-u="${esc(f.uuid)}">
@@ -537,6 +549,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       <p class="nota">* Km capturados a mano. Toca una factura para ver todo su detalle, corregir los km o borrarla.</p>` : vacio());
     enlazarFiltros();
     enlazarPaginas(renderFacturas);
+    const qf = $("#re-f-quitar-grupo"); if (qf) qf.addEventListener("click", () => { grupoFacturas = null; renderFacturas(); });
     $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => abrirDetalle(tr.dataset.u)));
   }
 
@@ -582,91 +595,132 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     });
   }
 
-  // ---- Agregados ----
-  function agrupar(fs, clave) {
-    const m = new Map();
-    fs.forEach(f => {
-      const k = clave(f);
-      const c = f.calculos || {};
-      const g = m.get(k) || { k, viajes: 0, km: 0, flete: 0, subtotal: 0, porKm: [], clientes: new Set(), nombre: "",
-        tipos: { seca: { n: 0, km: 0, flete: 0 }, refrigerada: { n: 0, km: 0, flete: 0 }, sin: { n: 0, km: 0, flete: 0 } } };
-      const t = g.tipos[tipoDe(f)];
-      t.n++; t.km += c.km || 0; t.flete += c.fleteMxn || 0;
-      g.viajes++; g.km += c.km || 0; g.flete += c.fleteMxn || 0; g.subtotal += c.subtotalMxn || 0;
-      if (c.fletePorKm != null) g.porKm.push(c.fletePorKm);
-      g.clientes.add(f.clienteClave);
-      g.nombre = g.nombre || (f.cliente || {}).nombre || "";
-      m.set(k, g);
+  // ============================================================================
+  // Tarifas por cliente (2026-10-28, replanteo con Ivan).
+  // Un renglón por CLIENTE (de la factura) × ZONA de destino × CARGA (seca /
+  // refrigerada, de la salida del Adrematasa) × RUTA (corta < 350 km ≤ larga, por
+  // los km del PDF). Valores como vienen en la factura; ingreso por km en MXN.
+  // "Sin factura": salidas del Adrematasa del mismo cliente, zona y carga que aún
+  // no tienen PDF. Para ubicarlas se APRENDEN equivalencias de las salidas que sí
+  // tienen factura (cliente y destino del Adrematasa → los de la factura); el
+  // cliente se puede corregir a mano en "Zonas y equivalencias".
+  // ============================================================================
+  const KM_RUTA_LARGA = 350; // < 350 = corta; 350 o más = larga
+  const tipoRuta = (km) => km == null || !isFinite(km) ? "sin" : (km < KM_RUTA_LARGA ? "corta" : "larga");
+  const RUTA = { corta: { txt: "CORTA", clase: "re-verde" }, larga: { txt: "LARGA", clase: "re-azul" }, sin: { txt: "SIN KM", clase: "re-gris" } };
+  const ft = { cliente: "", zona: "", carga: "", ruta: "", q: "" }; // filtros de Tarifas
+  let config = { zonas: [], clientes: {} }; // rentabilidad_config/zonas y /equivalencias
+  let cancelarConfig = null;
+  function suscribirConfig() {
+    if (cancelarConfig) return;
+    const c1 = onSnapshot(doc(db, COL_CONFIG, "zonas"), (s) => {
+      config.zonas = s.exists() && Array.isArray(s.data().lista) ? s.data().lista : [];
+      if (tab === "tarifas" || tab === "zonas") render();
+    }, (err) => { $("#re-error").textContent = "No se pudieron leer las zonas: " + err.message; });
+    const c2 = onSnapshot(doc(db, COL_CONFIG, "equivalencias"), (s) => {
+      config.clientes = s.exists() && s.data().clientes ? s.data().clientes : {};
+      if (tab === "tarifas" || tab === "zonas") render();
+    }, () => {});
+    cancelarConfig = () => { c1(); c2(); };
+  }
+  const zonaDe = (clave) => config.zonas.find(z => (z.destinos || []).includes(clave)) || null;
+  const adrDestino = (x) => "ADR:" + normTxt(x.destino);
+  const etiquetaDestino = (clave) => clave.startsWith("ADR:") ? clave.slice(4) : clave;
+  const moda = (mapa) => { let mejor = null, n = 0; mapa.forEach((v, k) => { if (v > n) { mejor = k; n = v; } }); return mejor; };
+
+  // Equivalencias aprendidas de las salidas que sí tienen factura.
+  function aprender() {
+    const porTaim = new Map(lista().filter(f => f.cartaPorteFolio).map(f => [String(f.cartaPorteFolio).toUpperCase(), f]));
+    const cli = new Map(), des = new Map(), kmDes = new Map(), nombres = new Map();
+    lista().forEach(f => {
+      nombres.set(f.clienteClave, (f.cliente || {}).nombre || f.clienteClave);
+      const km = (f.calculos || {}).km;
+      if (f.destino && km) { const m = kmDes.get(f.destino) || new Map(); m.set(km, (m.get(km) || 0) + 1); kmDes.set(f.destino, m); }
     });
-    return [...m.values()].map(g => ({ ...g, fleteKm: g.km ? g.flete / g.km : null, subtotalKm: g.km ? g.subtotal / g.km : null }));
-  }
-  // Celda "flete/km · viajes" de un tipo.
-  const celdaTipo = (t) => t.n ? `${dinero(t.km ? t.flete / t.km : null)} <small style="color:#8a7f73;">· ${t.n}</small>` : "—";
-  const TH_TIPOS = `<th class="n">Seca</th><th class="n">Refrigerada</th><th class="n">Sin dato</th>`;
-  const tdTipos = (g) => `<td class="n">${celdaTipo(g.tipos.seca)}</td><td class="n">${celdaTipo(g.tipos.refrigerada)}</td><td class="n">${celdaTipo(g.tipos.sin)}</td>`;
-
-  function renderClientes() {
-    const gs = agrupar(filtradas("cliente"), f => f.clienteClave).sort((a, b) => b.flete - a.flete);
-    const max = Math.max(1, ...gs.map(g => g.flete));
-    $("#re-cuerpo").innerHTML = htmlFiltros(false, true, false) + (gs.length ? `
-      <div class="tabla-wrap"><table class="tabla re-tabla">
-        <thead><tr><th>Cliente</th><th class="n">Viajes</th><th class="n">Km</th><th class="n">Flete MXN</th><th class="n">Flete/km</th>${TH_TIPOS}<th class="n">Subtotal/km</th></tr></thead>
-        <tbody>${gs.map(g => `<tr class="clic" data-k="${esc(g.k)}"><td>${esc(g.nombre)}<div class="re-barra"><i style="width:${Math.round(g.flete / max * 100)}%"></i></div></td>
-          <td class="n">${g.viajes}</td><td class="n">${miles(g.km)}</td><td class="n">${dinero(g.flete)}</td><td class="n"><b>${dinero(g.fleteKm)}</b></td>
-          ${tdTipos(g)}<td class="n">${dinero(g.subtotalKm)}</td></tr>`).join("")}</tbody>
-      </table></div>
-      <p class="nota">$/km del cliente = ingreso total ÷ km totales (no el promedio de cada factura), para que un viaje corto no pese lo mismo que uno largo. Seca / Refrigerada / Sin dato: flete/km · viajes. Toca un cliente para ver su desglose por ruta y tipo.</p>` : vacio());
-    enlazarFiltros();
-    $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => { filtro.cliente = tr.dataset.k; tab = "clirutas"; render(); }));
+    (salidas ? [...salidas.values()] : []).forEach(x => {
+      const f = porTaim.get(x.factura);
+      if (!f) return;
+      const c = normTxt(x.cliente), d = normTxt(x.destino);
+      if (c) { const m = cli.get(c) || new Map(); m.set(f.clienteClave, (m.get(f.clienteClave) || 0) + 1); cli.set(c, m); }
+      if (d && f.destino) { const m = des.get(d) || new Map(); m.set(f.destino, (m.get(f.destino) || 0) + 1); des.set(d, m); }
+    });
+    const clienteDe = (adr) => {
+      const manual = config.clientes[adr];
+      if (manual && manual.clave) return { clave: manual.clave, nombre: manual.nombre || nombres.get(manual.clave) || manual.clave, manual: true };
+      const m = cli.get(adr);
+      if (!m) return null;
+      const clave = moda(m);
+      return { clave, nombre: nombres.get(clave) || clave, n: m.get(clave) };
+    };
+    const destinoDe = (adr) => { const m = des.get(adr); return m ? moda(m) : null; };
+    const kmDe = (destino) => { const m = kmDes.get(destino); return m ? moda(m) : null; };
+    return { porTaim, cli, des, nombres, clienteDe, destinoDe, kmDe };
   }
 
-  // ---- Cliente · ruta · tipo (2026-10-28): un renglón por cliente + tipo + ruta,
-  // con sus facturas unificadas. Columnas: km y cada concepto de la factura con
-  // el valor TAL COMO VIENE en la factura (si varía entre facturas se muestra el
-  // más común y, en chico, el rango). FLETE primero; si hay más de
-  // MAX_CONCEPTOS conceptos, los menos frecuentes se juntan en "Otros".
-  // Selector: ingreso por km por FLETE o por SUBTOTAL.
-  function renderClienteRutas() {
-    const ORDEN_TIPO = { seca: 0, refrigerada: 1, sin: 2 };
-    const fs = filtradas();
-    // Conceptos presentes en el periodo filtrado, por frecuencia (FLETE siempre primero).
+  function celdaValor(valores, total, formato) {
+    const v = valores.filter(x => x != null);
+    if (!v.length) return "—";
+    const cuenta = new Map();
+    v.forEach(x => { const r = Math.round(x * 100) / 100; cuenta.set(r, (cuenta.get(r) || 0) + 1); });
+    const comun = [...cuenta.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0][0];
+    const min = Math.min(...v), max = Math.max(...v);
+    let extra = "";
+    if (min !== max) extra += `<br><small>varía ${formato(min)} – ${formato(max)}</small>`;
+    if (v.length < total) extra += `<br><small>${v.length} de ${total}</small>`;
+    return formato(comun) + extra;
+  }
+
+  function renderTarifas() {
+    const ap = aprender();
+    const ORDEN_C = { seca: 0, refrigerada: 1, sin: 2 }, ORDEN_R = { corta: 0, larga: 1, sin: 2 };
+    const grupos = new Map();
+    const grupo = (cli, cliNombre, destClave, carga, ruta) => {
+      const z = zonaDe(destClave);
+      const zona = z ? z.nombre : etiquetaDestino(destClave);
+      const k = `${cli}|${zona}|${carga}|${ruta}`;
+      if (!grupos.has(k)) grupos.set(k, { k, cli, cliNombre, zona, conZona: !!z, destinos: new Set(), carga, ruta, fs: [], pendientes: [] });
+      const g = grupos.get(k);
+      g.destinos.add(etiquetaDestino(destClave));
+      return g;
+    };
+    lista().forEach(f => {
+      const km = (f.calculos || {}).km;
+      grupo(f.clienteClave, (f.cliente || {}).nombre || f.clienteClave, f.destino || "Sin destino", tipoDe(f), tipoRuta(km)).fs.push(f);
+    });
+    (salidas ? [...salidas.values()] : []).forEach(x => {
+      if (ap.porTaim.has(x.factura)) return;
+      const adrCli = normTxt(x.cliente);
+      const c = ap.clienteDe(adrCli);
+      const destPdf = ap.destinoDe(normTxt(x.destino));
+      const destClave = destPdf || adrDestino(x);
+      const ruta = destPdf ? tipoRuta(ap.kmDe(destPdf)) : "sin";
+      grupo(c ? c.clave : "ADR:" + adrCli, c ? c.nombre : `${adrCli || "SIN CLIENTE"} (Adrematasa, sin facturas)`, destClave, x.tipo, ruta).pendientes.push(x);
+    });
+    const todos = [...grupos.values()];
+    const clientesOpc = new Map(); todos.forEach(g => clientesOpc.set(g.cli, g.cliNombre));
+    const zonasOpc = [...new Set(todos.map(g => g.zona))].sort((a, b) => a.localeCompare(b, "es"));
+    const q = normTxt(ft.q);
+    const gs = todos.filter(g => (!ft.cliente || g.cli === ft.cliente) && (!ft.zona || g.zona === ft.zona) &&
+      (!ft.carga || g.carga === ft.carga) && (!ft.ruta || g.ruta === ft.ruta) &&
+      (!q || normTxt(g.cliNombre).includes(q) || normTxt(g.zona).includes(q)))
+      .sort((a, b) => a.cliNombre.localeCompare(b.cliNombre, "es") || a.zona.localeCompare(b.zona, "es") || ORDEN_C[a.carga] - ORDEN_C[b.carga] || ORDEN_R[a.ruta] - ORDEN_R[b.ruta]);
+
+    // Columnas de conceptos (FLETE + los más frecuentes; el resto en OTROS)
+    const fsVis = gs.flatMap(g => g.fs);
     const frecuencia = new Map();
-    fs.forEach(f => new Set((f.conceptos || []).map(k => nombreConcepto(k.servicio))).forEach(n => frecuencia.set(n, (frecuencia.get(n) || 0) + 1)));
+    fsVis.forEach(f => new Set((f.conceptos || []).map(k => nombreConcepto(k.servicio))).forEach(n => frecuencia.set(n, (frecuencia.get(n) || 0) + 1)));
     const otrosNombres = [...frecuencia.keys()].filter(n => n !== "FLETE").sort((a, b) => frecuencia.get(b) - frecuencia.get(a) || a.localeCompare(b, "es"));
     const visibles = otrosNombres.length > MAX_CONCEPTOS ? otrosNombres.slice(0, MAX_CONCEPTOS - 1) : otrosNombres;
     const hayOtros = otrosNombres.length > visibles.length;
     const columnas = ["FLETE", ...visibles, ...(hayOtros ? ["OTROS"] : [])];
     const colDe = (n) => n === "FLETE" || visibles.includes(n) ? n : "OTROS";
 
-    // Grupos
-    const grupos = new Map();
-    fs.forEach(f => {
-      const k = `${f.clienteClave}|${tipoDe(f)}|${f.ruta || "Sin ruta"}`;
-      if (!grupos.has(k)) grupos.set(k, { cli: f.clienteClave, tipo: tipoDe(f), ruta: f.ruta || "Sin ruta", nombre: (f.cliente || {}).nombre || "", fs: [] });
-      grupos.get(k).fs.push(f);
-    });
-    const gs = [...grupos.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, "es") || ORDEN_TIPO[a.tipo] - ORDEN_TIPO[b.tipo] || b.fs.length - a.fs.length);
-
-    // Valor "como en la factura": el más común; si varía, el rango en chico.
-    function celdaValor(valores, total, formato) {
-      const v = valores.filter(x => x != null);
-      if (!v.length) return "—";
-      const cuenta = new Map();
-      v.forEach(x => { const r = Math.round(x * 100) / 100; cuenta.set(r, (cuenta.get(r) || 0) + 1); });
-      const comun = [...cuenta.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0][0];
-      const min = Math.min(...v), max = Math.max(...v);
-      let extra = "";
-      if (min !== max) extra += `<br><small>varía ${formato(min)} – ${formato(max)}</small>`;
-      if (v.length < total) extra += `<br><small>${v.length} de ${total}</small>`;
-      return formato(comun) + extra;
-    }
-
-    const pgC = paginar("clirutas", gs, JSON.stringify(filtro) + gs.length);
+    const pg = paginar("tarifas", gs, JSON.stringify(ft) + gs.length);
     let anterior = null;
-    const filas = pgC.items.map(g => {
+    const filas = pg.items.map(g => {
       const monedas = new Set(g.fs.map(f => f.moneda || "MXN"));
-      const enOriginal = monedas.size === 1;
-      const mon = enOriginal ? [...monedas][0] : "MXN";
+      const enOriginal = monedas.size <= 1;
+      const mon = enOriginal ? ([...monedas][0] || "MXN") : "MXN";
       const fmt = (n) => dinero(n, mon);
       const mapas = g.fs.map(f => {
         const m = new Map();
@@ -674,55 +728,186 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
         (f.conceptos || []).forEach(k => { const c = colDe(nombreConcepto(k.servicio)); m.set(c, (m.get(c) || 0) + (k.importe || 0) * tc); });
         return m;
       });
-      const kmFlete = g.fs.reduce((s, f) => s + ((f.calculos || {}).km || 0), 0);
-      const sumFlete = g.fs.reduce((s, f) => s + ((f.calculos || {}).fleteMxn || 0), 0);
-      const sumSub = g.fs.reduce((s, f) => s + ((f.calculos || {}).subtotalMxn || 0), 0);
-      const ing = kmFlete ? (metricaKm === "flete" ? sumFlete : sumSub) / kmFlete : null;
+      const km = g.fs.reduce((s, f) => s + ((f.calculos || {}).km || 0), 0);
+      const tot = g.fs.reduce((s, f) => s + ((f.calculos || {})[metricaKm === "flete" ? "fleteMxn" : "subtotalMxn"] || 0), 0);
       const porKm = g.fs.map(f => (f.calculos || {})[metricaKm === "flete" ? "fletePorKm" : "subtotalPorKm"]).filter(x => x != null);
       const rango = porKm.length > 1 && Math.min(...porKm) !== Math.max(...porKm) ? `<br><small>${dinero(Math.min(...porKm))} – ${dinero(Math.max(...porKm))}</small>` : "";
-      const encabezado = g.cli !== anterior ? `<tr><td colspan="${columnas.length + 5}" style="background:#f2ede6;font-weight:800;padding-top:10px;">${esc(g.nombre)}</td></tr>` : "";
+      const encabezado = g.cli !== anterior ? `<tr><td colspan="${columnas.length + 7}" style="background:#f2ede6;font-weight:800;padding-top:10px;">${esc(g.cliNombre)}</td></tr>` : "";
       anterior = g.cli;
-      return encabezado + `<tr class="clic" data-cli="${esc(g.cli)}" data-tipo="${esc(g.tipo)}" data-ruta="${esc(g.ruta)}">
-        <td><span class="re-chip ${TIPO[g.tipo].clase}">${TIPO[g.tipo].txt}</span></td>
-        <td>${esc(g.ruta)}<br><small class="nota">${g.fs.length} viaje${g.fs.length === 1 ? "" : "s"}${mon !== "MXN" ? " · " + esc(mon) : ""}</small></td>
-        <td class="n">${celdaValor(g.fs.map(f => (f.calculos || {}).km), g.fs.length, (n) => miles(n))}</td>
-        ${columnas.map(c => `<td class="n${c === "FLETE" ? " re-col-flete" : ""}">${celdaValor(mapas.map(m => m.has(c) ? m.get(c) : null), g.fs.length, fmt)}</td>`).join("")}
-        <td class="n">${celdaValor(g.fs.map(f => enOriginal ? f.subtotal : (f.calculos || {}).subtotalMxn), g.fs.length, fmt)}</td>
-        <td class="n"><b>${dinero(ing)}</b>${rango}</td></tr>`;
+      const destinosTxt = g.conZona || g.destinos.size > 1 ? `<br><small class="nota">${esc([...g.destinos].join(" · "))}</small>` : "";
+      return encabezado + `<tr>
+        <td>${esc(g.zona)}${g.conZona ? "" : ` <small class="nota">(sin zona)</small>`}${destinosTxt}</td>
+        <td><span class="re-chip ${TIPO[g.carga].clase}">${TIPO[g.carga].txt}</span></td>
+        <td><span class="re-chip ${RUTA[g.ruta].clase}">${RUTA[g.ruta].txt}</span></td>
+        <td class="n">${g.fs.length ? celdaValor(g.fs.map(f => (f.calculos || {}).km), g.fs.length, (n) => miles(n)) : "—"}</td>
+        ${columnas.map(c => `<td class="n${c === "FLETE" ? " re-col-flete" : ""}">${g.fs.length ? celdaValor(mapas.map(m => m.has(c) ? m.get(c) : null), g.fs.length, fmt) : "—"}</td>`).join("")}
+        <td class="n"><b>${km ? dinero(tot / km) : "—"}</b>${rango}</td>
+        <td class="n">${g.fs.length ? `<button type="button" class="re-link" data-ver="f" data-k="${esc(g.k)}">${g.fs.length}</button>` : "0"}</td>
+        <td class="n">${g.pendientes.length ? `<button type="button" class="re-link re-falta" data-ver="s" data-k="${esc(g.k)}">${g.pendientes.length}</button>` : "—"}</td></tr>`;
     }).join("");
 
-    const selector = `<div class="re-filtros" style="margin-top:-2px;"><span class="nota" style="margin:0;">Ingreso por km:</span>
-      ${[["flete", "Ing. por km por FLETE"], ["subtotal", "Ing. por km SUBTOTAL"]].map(([k, t]) => `<button type="button" class="re-tab${metricaKm === k ? " activo" : ""}" data-m="${k}">${t}</button>`).join("")}</div>`;
-    $("#re-cuerpo").innerHTML = htmlFiltros(true, true, false) + selector + (gs.length ? `
-      <div class="tabla-wrap"><table class="tabla re-tabla">
-        <thead><tr><th>Tipo</th><th>Ruta</th><th class="n">Km</th>
+    const seg = (clave, opciones) => `<span class="re-seg">${opciones.map(([v, t]) => `<button type="button" class="${ft[clave] === v ? "activo" : ""}" data-ft="${clave}" data-v="${v}">${t}</button>`).join("")}</span>`;
+    $("#re-cuerpo").innerHTML = `
+      <div class="re-filtros">
+        <input type="text" id="re-t-q" placeholder="Buscar cliente o zona" value="${esc(ft.q)}" style="width:auto;min-width:180px;">
+        <select id="re-t-cli"><option value="">Todos los clientes</option>${[...clientesOpc.entries()].sort((a, b) => a[1].localeCompare(b[1], "es")).map(([k, n]) => `<option value="${esc(k)}"${ft.cliente === k ? " selected" : ""}>${esc(n)}</option>`).join("")}</select>
+        <select id="re-t-zona"><option value="">Todas las zonas</option>${zonasOpc.map(z => `<option value="${esc(z)}"${ft.zona === z ? " selected" : ""}>${esc(z)}</option>`).join("")}</select>
+      </div>
+      <div class="re-filtros">
+        ${seg("carga", [["", "Seca y refri"], ["seca", "Seca"], ["refrigerada", "Refrigerada"], ["sin", "Sin dato"]])}
+        ${seg("ruta", [["", "Corta y larga"], ["corta", "Corta"], ["larga", "Larga"]])}
+        <span class="re-seg" style="margin-left:auto;">${[["flete", "Ing./km FLETE"], ["subtotal", "Ing./km SUBTOTAL"]].map(([v, t]) => `<button type="button" class="${metricaKm === v ? "activo" : ""}" data-m="${v}">${t}</button>`).join("")}</span>
+      </div>
+      ${gs.length ? `<div class="tabla-wrap"><table class="tabla re-tabla">
+        <thead><tr><th>Zona destino</th><th>Carga</th><th>Ruta</th><th class="n">Km</th>
           ${columnas.map(c => `<th class="n${c === "FLETE" ? " re-col-flete" : " re-col-con"}">${esc(c)}</th>`).join("")}
-          <th class="n">Subtotal</th><th class="n">${metricaKm === "flete" ? "Ing./km flete" : "Ing./km subtotal"} (MXN)</th></tr></thead>
-        <tbody>${filas}</tbody>
-      </table></div>${pgC.html}
-      <p class="nota">Cada celda muestra el valor como viene en la factura. Si cambia entre facturas: el más común y, en chico, "varía" con el rango. "2 de 8" = solo 2 de los 8 viajes traen ese concepto. Ingreso por km = total ÷ km totales, en MXN (el rango chico es el más bajo y el más alto por factura).${hayOtros ? ` "OTROS" junta ${otrosNombres.length - visibles.length} concepto(s) poco frecuentes.` : ""} Toca un renglón para ver sus facturas.</p>` : vacio());
-    enlazarFiltros();
-    $("#re-cuerpo").querySelectorAll("[data-m]").forEach(b => b.addEventListener("click", () => { metricaKm = b.dataset.m; renderClienteRutas(); }));
-    enlazarPaginas(renderClienteRutas);
-    $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => {
-      filtro.cliente = tr.dataset.cli; filtro.ruta = tr.dataset.ruta === "Sin ruta" ? "" : tr.dataset.ruta; filtro.tipo = tr.dataset.tipo;
-      tab = "facturas"; render();
+          <th class="n">Ing./km ${metricaKm === "flete" ? "flete" : "subtotal"} (MXN)</th><th class="n">Facturas</th><th class="n">Sin factura</th></tr></thead>
+        <tbody>${filas}</tbody></table></div>${pg.html}
+        <p class="nota">Ruta: CORTA si la factura tiene menos de ${KM_RUTA_LARGA} km; LARGA si tiene ${KM_RUTA_LARGA} o más. Valores como vienen en la factura; si cambian, el más común y en chico "varía". "Sin factura" = salidas del Adrematasa de ese cliente, zona y carga que todavía no tienen PDF cargado (toca el número para ver cuáles). Carga "SIN DATO" = la factura no encontró su salida.${hayOtros ? ` "OTROS" junta ${otrosNombres.length - visibles.length} concepto(s) poco frecuentes.` : ""}</p>`
+        : `<p class="nota" style="text-align:center;padding:16px;">${todos.length ? "No hay renglones con estos filtros." : "Todavía no hay facturas ni salidas en el periodo."}</p>`}`;
+    const qi = $("#re-t-q");
+    qi.addEventListener("input", () => { ft.q = qi.value; const pos = qi.selectionStart; renderTarifas(); const n = $("#re-t-q"); n.focus(); n.setSelectionRange(pos, pos); });
+    $("#re-t-cli").addEventListener("change", (e) => { ft.cliente = e.target.value; renderTarifas(); });
+    $("#re-t-zona").addEventListener("change", (e) => { ft.zona = e.target.value; renderTarifas(); });
+    $("#re-cuerpo").querySelectorAll("[data-ft]").forEach(b => b.addEventListener("click", () => { ft[b.dataset.ft] = b.dataset.v; renderTarifas(); }));
+    $("#re-cuerpo").querySelectorAll("[data-m]").forEach(b => b.addEventListener("click", () => { metricaKm = b.dataset.m; renderTarifas(); }));
+    $("#re-cuerpo").querySelectorAll("[data-ver]").forEach(b => b.addEventListener("click", () => {
+      const g = grupos.get(b.dataset.k);
+      if (!g) return;
+      const txt = `${g.cliNombre} · ${g.zona} · ${TIPO[g.carga].txt} · ${RUTA[g.ruta].txt}`;
+      if (b.dataset.ver === "s") {
+        grupoSalidas = { taims: new Set(g.pendientes.map(x => x.factura)), txt };
+        filtroSalidas = "sinfactura"; tab = "salidas";
+      } else {
+        grupoFacturas = { uuids: new Set(g.fs.map(f => f.uuid)), txt };
+        tab = "facturas";
+      }
+      render();
     }));
+    enlazarPaginas(renderTarifas);
   }
 
-  function renderRutas() {
-    const gs = agrupar(filtradas("ruta"), f => f.ruta || "Sin ruta").sort((a, b) => b.viajes - a.viajes || b.flete - a.flete);
-    $("#re-cuerpo").innerHTML = htmlFiltros(true, false, false) + (gs.length ? `
-      <div class="tabla-wrap"><table class="tabla re-tabla">
-        <thead><tr><th>Ruta</th><th class="n">Viajes</th><th class="n">Clientes</th><th class="n">Km prom.</th><th class="n">Flete/km</th>${TH_TIPOS}<th class="n">Mín – Máx</th><th class="n">Subtotal/km</th></tr></thead>
-        <tbody>${gs.map(g => `<tr class="clic" data-k="${esc(g.k)}"><td>${esc(g.k)}</td><td class="n">${g.viajes}</td><td class="n">${g.clientes.size}</td>
-          <td class="n">${miles(g.viajes ? g.km / g.viajes : null)}</td><td class="n"><b>${dinero(g.fleteKm)}</b></td>
-          ${tdTipos(g)}<td class="n">${g.porKm.length ? dinero(Math.min(...g.porKm)) + (g.porKm.length > 1 ? " – " + dinero(Math.max(...g.porKm)) : "") : "—"}</td>
-          <td class="n">${dinero(g.subtotalKm)}</td></tr>`).join("")}</tbody>
-      </table></div>
-      <p class="nota">Seca / Refrigerada / Sin dato: flete/km · viajes. Mín – Máx muestra si a un mismo destino se le cobra distinto según el cliente. Toca una ruta para ver sus facturas.</p>` : vacio());
-    enlazarFiltros();
-    $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => { filtro.ruta = tr.dataset.k; tab = "facturas"; render(); }));
+  // ---- Zonas y equivalencias ----
+  const selZonas = new Set();
+  const fz = { q: "", soloSinZona: true };
+  async function guardarZonas(lista2) {
+    try { await setDoc(doc(db, COL_CONFIG, "zonas"), { lista: lista2, actualizadoEn: new Date().toISOString() }); }
+    catch (e) { $("#re-error").textContent = "No se pudieron guardar las zonas: " + e.message; }
+  }
+  async function guardarCliente(adr, valor) {
+    const clientes = { ...config.clientes };
+    if (valor) clientes[adr] = valor; else delete clientes[adr];
+    try { await setDoc(doc(db, COL_CONFIG, "equivalencias"), { clientes, actualizadoEn: new Date().toISOString() }); }
+    catch (e) { $("#re-error").textContent = "No se pudo guardar la equivalencia: " + e.message; }
+  }
+  function renderZonas() {
+    const ap = aprender();
+    // Destinos: los de las facturas (con sus nombres del Adrematasa) + los del Adrematasa que no se ligan a ninguno.
+    const destinos = new Map(); // clave -> { clave, viajes, alias:Set, soloAdr }
+    lista().forEach(f => {
+      const k = f.destino || "Sin destino";
+      const d = destinos.get(k) || { clave: k, viajes: 0, alias: new Set(), soloAdr: false };
+      d.viajes++; destinos.set(k, d);
+    });
+    ap.des.forEach((m, adr) => { const k = moda(m); const d = destinos.get(k); if (d) d.alias.add(adr); });
+    (salidas ? [...salidas.values()] : []).forEach(x => {
+      if (ap.porTaim.has(x.factura) || ap.destinoDe(normTxt(x.destino))) return;
+      const k = adrDestino(x);
+      const d = destinos.get(k) || { clave: k, viajes: 0, alias: new Set(), soloAdr: true };
+      d.viajes++; destinos.set(k, d);
+    });
+    config.zonas.forEach(z => (z.destinos || []).forEach(k => { if (!destinos.has(k)) destinos.set(k, { clave: k, viajes: 0, alias: new Set(), soloAdr: k.startsWith("ADR:") }); }));
+    const q = normTxt(fz.q);
+    const listaD = [...destinos.values()]
+      .filter(d => (!fz.soloSinZona || !zonaDe(d.clave)) && (!q || normTxt(d.clave).includes(q) || [...d.alias].some(a => a.includes(q))))
+      .sort((a, b) => (a.soloAdr - b.soloAdr) || b.viajes - a.viajes || a.clave.localeCompare(b.clave, "es"));
+    [...selZonas].forEach(k => { if (!destinos.has(k)) selZonas.delete(k); });
+
+    // Clientes del Adrematasa
+    const adrClientes = new Map();
+    (salidas ? [...salidas.values()] : []).forEach(x => { const c = normTxt(x.cliente); if (c) adrClientes.set(c, (adrClientes.get(c) || 0) + 1); });
+    const clientesPdf = [...ap.nombres.entries()].sort((a, b) => a[1].localeCompare(b[1], "es"));
+
+    $("#re-cuerpo").innerHTML = `
+      <div class="re-grid3" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr));">
+        <div>
+          <div class="re-h3" style="margin-top:0;">Destinos</div>
+          <div class="re-filtros">
+            <input type="text" id="re-z-q" placeholder="Buscar destino" value="${esc(fz.q)}" style="width:auto;min-width:160px;">
+            <label style="display:inline-flex;gap:6px;align-items:center;margin:0;font-size:13px;color:#2c1e0f;"><input type="checkbox" id="re-z-sin" style="width:auto;"${fz.soloSinZona ? " checked" : ""}> Solo sin zona</label>
+          </div>
+          <div class="re-lista">${listaD.length ? listaD.map(d => { const z = zonaDe(d.clave); return `
+            <label class="re-dest"><input type="checkbox" data-d="${esc(d.clave)}"${selZonas.has(d.clave) ? " checked" : ""} style="width:auto;">
+              <span><b>${esc(etiquetaDestino(d.clave))}</b>${d.soloAdr ? ` <small class="nota">(solo Adrematasa, sin factura)</small>` : ""}${z ? ` <span class="re-chip re-azul">${esc(z.nombre)}</span>` : ""}
+              ${d.alias.size ? `<br><small class="nota">Adrematasa: ${esc([...d.alias].join(" · "))}</small>` : ""}</span>
+              <small class="nota" style="margin-left:auto;white-space:nowrap;">${d.viajes} ${d.soloAdr ? "salida" : "viaje"}${d.viajes === 1 ? "" : "s"}</small></label>`; }).join("")
+            : `<p class="nota" style="padding:10px;">${destinos.size ? "Todos los destinos ya tienen zona." : "Todavía no hay destinos en el periodo."}</p>`}</div>
+          <div class="re-filtros" style="margin-top:10px;">
+            <span class="nota" style="margin:0;">${selZonas.size} seleccionado${selZonas.size === 1 ? "" : "s"} →</span>
+            <input type="text" id="re-z-nombre" list="re-z-nombres" placeholder="Nombre de la zona (nueva o existente)" style="width:auto;min-width:230px;">
+            <datalist id="re-z-nombres">${config.zonas.map(z => `<option value="${esc(z.nombre)}">`).join("")}</datalist>
+            <button type="button" id="re-z-agrupar"${selZonas.size ? "" : " disabled"}>Agrupar en zona</button>
+          </div>
+          <p class="nota">Marca destinos y mándalos a una zona nueva o a una que ya existe (si estaban en otra, se mueven). Los nombres del Adrematasa se ligan solos con el destino de la factura por la carta porte.</p>
+        </div>
+        <div>
+          <div class="re-h3" style="margin-top:0;">Zonas</div>
+          ${config.zonas.length ? config.zonas.map(z => `
+            <div class="re-zona"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+              <b>${esc(z.nombre)}</b><span style="display:flex;gap:6px;">
+              <button type="button" class="secundario re-mini" data-ren="${esc(z.id)}">Renombrar</button>
+              <button type="button" class="secundario re-mini" data-del="${esc(z.id)}">Borrar</button></span></div>
+              <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">${(z.destinos || []).map(k => `<span class="re-chip re-gris" style="font-size:11.5px;">${esc(etiquetaDestino(k))} <button type="button" class="re-x" data-z="${esc(z.id)}" data-quitar="${esc(k)}" title="Quitar de la zona">✕</button></span>`).join("") || `<small class="nota">Sin destinos</small>`}</div>
+            </div>`).join("") : `<p class="nota">Todavía no hay zonas. Marca destinos a la izquierda y agrúpalos.</p>`}
+          <div class="re-h3">Clientes: Adrematasa → factura</div>
+          <div class="re-lista">${[...adrClientes.entries()].sort((a, b) => b[1] - a[1]).map(([adr, n]) => {
+            const auto = ap.cli.get(adr); const autoClave = auto ? moda(auto) : null;
+            const manual = config.clientes[adr];
+            return `<div class="re-dest" style="cursor:default;"><span><b>${esc(adr)}</b> <small class="nota">${n} salida${n === 1 ? "" : "s"}</small></span>
+              <select data-cli="${esc(adr)}" style="width:auto;max-width:60%;margin-left:auto;">
+                <option value="">${autoClave ? `Automático: ${esc(ap.nombres.get(autoClave) || autoClave)} (${auto.get(autoClave)})` : "Sin factura todavía"}</option>
+                ${clientesPdf.map(([k, nom]) => `<option value="${esc(k)}"${manual && manual.clave === k ? " selected" : ""}>${esc(nom)}</option>`).join("")}
+              </select></div>`; }).join("") || `<p class="nota" style="padding:10px;">Todavía no hay salidas en el periodo.</p>`}</div>
+          <p class="nota">Se aprenden solas por la carta porte. Elige un cliente solo para corregir o para los que todavía no tienen ninguna factura.</p>
+        </div>
+      </div>`;
+    const qi = $("#re-z-q");
+    qi.addEventListener("input", () => { fz.q = qi.value; const pos = qi.selectionStart; renderZonas(); const n = $("#re-z-q"); n.focus(); n.setSelectionRange(pos, pos); });
+    $("#re-z-sin").addEventListener("change", (e) => { fz.soloSinZona = e.target.checked; renderZonas(); });
+    $("#re-cuerpo").querySelectorAll("[data-d]").forEach(c => c.addEventListener("change", () => {
+      if (c.checked) selZonas.add(c.dataset.d); else selZonas.delete(c.dataset.d);
+      const nombre = $("#re-z-nombre").value; renderZonas(); $("#re-z-nombre").value = nombre;
+    }));
+    $("#re-z-agrupar").addEventListener("click", async () => {
+      const nombre = $("#re-z-nombre").value.trim();
+      if (!nombre) { $("#re-error").textContent = "Escribe el nombre de la zona."; return; }
+      $("#re-error").textContent = "";
+      const elegidos = [...selZonas];
+      let zonas = config.zonas.map(z => ({ ...z, destinos: (z.destinos || []).filter(k => !elegidos.includes(k)) }));
+      let z = zonas.find(x => x.nombre.toLowerCase() === nombre.toLowerCase());
+      if (!z) { z = { id: "z" + Date.now().toString(36), nombre, destinos: [] }; zonas.push(z); }
+      z.destinos = [...new Set([...z.destinos, ...elegidos])];
+      zonas = zonas.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+      selZonas.clear();
+      await guardarZonas(zonas);
+      avisar(`${elegidos.length} destino(s) en la zona "${z.nombre}".`);
+    });
+    $("#re-cuerpo").querySelectorAll("[data-quitar]").forEach(b => b.addEventListener("click", () => {
+      guardarZonas(config.zonas.map(z => z.id === b.dataset.z ? { ...z, destinos: (z.destinos || []).filter(k => k !== b.dataset.quitar) } : z));
+    }));
+    $("#re-cuerpo").querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => {
+      const z = config.zonas.find(x => x.id === b.dataset.del);
+      if (z && confirm(`¿Borrar la zona "${z.nombre}"? Sus destinos quedan sin zona.`)) guardarZonas(config.zonas.filter(x => x.id !== z.id));
+    }));
+    $("#re-cuerpo").querySelectorAll("[data-ren]").forEach(b => b.addEventListener("click", () => {
+      const z = config.zonas.find(x => x.id === b.dataset.ren);
+      const nuevo = z ? (prompt("Nuevo nombre de la zona:", z.nombre) || "").trim() : "";
+      if (z && nuevo && nuevo !== z.nombre) guardarZonas(config.zonas.map(x => x.id === z.id ? { ...x, nombre: nuevo } : x));
+    }));
+    $("#re-cuerpo").querySelectorAll("[data-cli]").forEach(s => s.addEventListener("change", () => {
+      const clave = s.value;
+      guardarCliente(s.dataset.cli, clave ? { clave, nombre: ap.nombres.get(clave) || clave } : null);
+    }));
   }
 
   // ---- Salidas Adrematasa ----
@@ -740,18 +925,19 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       ${cuenta(pegadas, "sin") ? `<div class="re-errores">${cuenta(pegadas, "sin")} renglón(es) traen un Prog que no es OFF ni una temperatura; quedan "sin dato".</div>` : ""}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;"><button type="button" id="re-s-guardar">Guardar ${pegadas.length} salida${pegadas.length === 1 ? "" : "s"}</button>
         <button type="button" class="secundario" id="re-s-cancelar">Cancelar</button></div>` : "";
-    const base = grupoSalidas ? guardadas.filter(x => claveSalida(x) === grupoSalidas.k) : guardadas;
+    const base = grupoSalidas ? guardadas.filter(x => grupoSalidas.taims.has(x.factura)) : guardadas;
     const vista = base.filter(x => (filtroSalidas === "todas" || (filtroSalidas === "sinfactura" ? !porTaim.has(x.factura) : x.tipo === filtroSalidas)))
       .sort((a, b) => (b.fechaMs || 0) - (a.fechaMs || 0));
     const filtros = [["todas", "Todas", base.length], ["refrigerada", "Refrigeradas", cuenta(base, "refrigerada")],
       ["seca", "Secas", cuenta(base, "seca")], ["sinfactura", "Sin factura cargada", base.filter(x => !porTaim.has(x.factura)).length]];
-    const pgS = paginar("salidas", vista, `${filtroSalidas}|${grupoSalidas ? grupoSalidas.k : ""}|${vista.length}`);
-    $("#re-cuerpo").innerHTML = `
+    const pgS = paginar("salidas", vista, `${filtroSalidas}|${grupoSalidas ? grupoSalidas.txt : ""}|${vista.length}`);
+    const modo = tab === "cargarSalidas" ? "cargar" : "lista";
+    $("#re-cuerpo").innerHTML = modo === "cargar" ? `
       <p class="nota" style="margin-top:0;">Copia del Adrematasa oficial el reporte de salidas <b>con la fila de títulos</b> y pégalo aquí. Se ligan con las facturas por el folio de Carta Porte (columna Factura, TAIM-…). <b>Prog OFF = SECA</b>; una temperatura = <b>REFRIGERADA</b>. Pegar otro reporte agrega las nuevas y actualiza las que ya estaban; no borra nada.</p>
       <textarea class="re-pegar" id="re-s-texto" placeholder="Pega aquí el reporte de salidas…"></textarea>
       <div style="margin-top:8px;"><button type="button" class="secundario" id="re-s-leer">Leer reporte</button></div>
       ${resumenPegadas}
-      <div class="re-h3" style="margin-top:20px;">Salidas guardadas</div>
+      <p class="nota">${guardadas.length.toLocaleString("es-MX")} salidas guardadas en el periodo. Para verlas, abre la pestaña Salidas.</p>` : `
       ${grupoSalidas ? `<div class="re-filtros"><span class="re-chip re-azul" style="font-size:12px;">${esc(grupoSalidas.txt)}</span><button type="button" class="secundario" id="re-s-quitar-grupo" style="padding:4px 10px;font-size:12px;">Quitar filtro ✕</button></div>` : ""}
       <div class="re-filtros">${filtros.map(([k, t, n]) => `<button type="button" class="re-tab${filtroSalidas === k ? " activo" : ""}" data-fs="${k}">${t} ${n}</button>`).join("")}</div>
       ${vista.length ? `<div class="tabla-wrap"><table class="tabla re-tabla">
@@ -763,7 +949,8 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
           <td>${f ? `<span class="re-chip re-verde">${esc(f.factura)}</span>` : `<span class="re-chip re-gris">sin factura cargada</span>`}</td></tr>`; }).join("")}</tbody>
       </table></div>${pgS.html}`
         : `<p class="nota" style="text-align:center;padding:16px;">${guardadas.length ? "No hay salidas con este filtro." : "Todavía no hay salidas guardadas."}</p>`}`;
-    $("#re-s-leer").addEventListener("click", () => {
+    const leer = $("#re-s-leer");
+    if (leer) leer.addEventListener("click", () => {
       $("#re-error").textContent = "";
       try { pegadas = leerSalidas($("#re-s-texto").value); renderSalidas(); }
       catch (e) { pegadas = null; $("#re-error").textContent = e.message; }
@@ -774,73 +961,6 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     const qg = $("#re-s-quitar-grupo"); if (qg) qg.addEventListener("click", () => { grupoSalidas = null; renderSalidas(); });
     enlazarPaginas(renderSalidas);
     $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => abrirDetalle(tr.dataset.u)));
-  }
-
-  // ---- Salidas · cliente · destino · tipo (2026-10-28) ----
-  // Agrupa las salidas del Adrematasa por cliente + destino + tipo (como vienen
-  // en el reporte) para ver cuántas ya tienen factura y cuántas faltan. Con las
-  // que sí tienen factura calcula el ingreso por km de ese grupo.
-  function renderSalidasGrupos() {
-    const todas = [...(salidas || new Map()).values()];
-    const porTaim = new Map(lista().filter(f => f.cartaPorteFolio).map(f => [String(f.cartaPorteFolio).toUpperCase(), f]));
-    const mesDe = (x) => { if (!x.fechaMs) return ""; const d = new Date(x.fechaMs); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
-    const meses = [...new Set(todas.map(mesDe).filter(Boolean))].sort().reverse();
-    const q = normTxt(fsg.q);
-    const grupos = new Map();
-    todas.filter(x => !fsg.mes || mesDe(x) === fsg.mes).forEach(x => {
-      const k = claveSalida(x);
-      if (!grupos.has(k)) grupos.set(k, { k, cliente: normTxt(x.cliente), destino: normTxt(x.destino), tipo: x.tipo, total: 0, fs: [], rutas: new Set(), ultimaMs: 0 });
-      const g = grupos.get(k);
-      g.total++;
-      g.ultimaMs = Math.max(g.ultimaMs, x.fechaMs || 0);
-      const f = porTaim.get(x.factura);
-      if (f) { g.fs.push(f); if (f.ruta) g.rutas.add(f.ruta); }
-    });
-    const ORDEN_TIPO = { seca: 0, refrigerada: 1, sin: 2 };
-    const gs = [...grupos.values()]
-      .filter(g => (!fsg.faltan || g.total > g.fs.length) && (!q || g.cliente.includes(q) || g.destino.includes(q)))
-      .sort((a, b) => a.cliente.localeCompare(b.cliente, "es") || a.destino.localeCompare(b.destino, "es") || ORDEN_TIPO[a.tipo] - ORDEN_TIPO[b.tipo]);
-    const totalFaltan = gs.reduce((s, g) => s + (g.total - g.fs.length), 0);
-    const pgG = paginar("salgrupos", gs, JSON.stringify(fsg) + gs.length);
-    let anterior = null;
-    const filas = pgG.items.map(g => {
-      const km = g.fs.reduce((s, f) => s + ((f.calculos || {}).km || 0), 0);
-      const flete = g.fs.reduce((s, f) => s + ((f.calculos || {}).fleteMxn || 0), 0);
-      const sub = g.fs.reduce((s, f) => s + ((f.calculos || {}).subtotalMxn || 0), 0);
-      const kms = [...new Set(g.fs.map(f => (f.calculos || {}).km).filter(Boolean))];
-      const faltan = g.total - g.fs.length;
-      const encabezado = g.cliente !== anterior ? `<tr><td colspan="9" style="background:#f2ede6;font-weight:800;padding-top:10px;">${esc(g.cliente || "SIN CLIENTE")}</td></tr>` : "";
-      anterior = g.cliente;
-      return encabezado + `<tr class="clic" data-k="${esc(g.k)}" data-txt="${esc(`${g.cliente} · ${g.destino} · ${TIPO[g.tipo].txt}`)}">
-        <td>${esc(g.destino || "—")}${g.rutas.size ? `<br><small class="nota">${esc([...g.rutas].join(" / "))}</small>` : ""}</td>
-        <td><span class="re-chip ${TIPO[g.tipo].clase}">${TIPO[g.tipo].txt}</span></td>
-        <td class="n">${g.total}</td><td class="n">${g.fs.length}</td>
-        <td class="n">${faltan ? `<b style="color:#A32D2D;">${faltan}</b>` : `<span class="re-chip re-verde">0</span>`}</td>
-        <td class="n">${kms.length ? kms.map(miles).join(" / ") : "—"}</td>
-        <td class="n"><b>${km ? dinero(flete / km) : "—"}</b></td><td class="n">${km ? dinero(sub / km) : "—"}</td>
-        <td>${g.ultimaMs ? fechaCorta(new Date(g.ultimaMs).toISOString().slice(0, 10)) : "—"}</td></tr>`;
-    }).join("");
-    $("#re-cuerpo").innerHTML = `
-      <div class="re-filtros">
-        <input type="text" id="re-g-q" placeholder="Buscar cliente o destino" value="${esc(fsg.q)}" style="width:auto;min-width:200px;">
-        <select id="re-g-mes"><option value="">Todos los meses</option>${meses.map(m => `<option value="${m}"${fsg.mes === m ? " selected" : ""}>${nombreMes(m)}</option>`).join("")}</select>
-        <label style="display:inline-flex;gap:6px;align-items:center;margin:0;font-size:13px;color:#2c1e0f;"><input type="checkbox" id="re-g-faltan" style="width:auto;"${fsg.faltan ? " checked" : ""}> Solo grupos con facturas faltantes</label>
-        <span class="nota" style="margin:0;">${gs.length} grupo${gs.length === 1 ? "" : "s"} · ${totalFaltan} salida${totalFaltan === 1 ? "" : "s"} sin factura</span>
-      </div>
-      ${gs.length ? `<div class="tabla-wrap"><table class="tabla re-tabla">
-        <thead><tr><th>Destino (Adrematasa)</th><th>Tipo</th><th class="n">Salidas</th><th class="n">Con factura</th><th class="n">Faltan</th><th class="n">Km (factura)</th><th class="n">Ing./km flete</th><th class="n">Ing./km subtotal</th><th>Última salida</th></tr></thead>
-        <tbody>${filas}</tbody></table></div>${pgG.html}
-        <p class="nota">Agrupado por cliente, destino y tipo tal como vienen en el reporte del Adrematasa. Debajo del destino sale la ruta de las facturas ya cargadas. El ingreso por km se calcula solo con las salidas que ya tienen factura (total ÷ km totales, en MXN). Toca un grupo para ver sus salidas sin factura.</p>`
-        : `<p class="nota" style="text-align:center;padding:16px;">${todas.length ? "No hay grupos con estos filtros." : "Todavía no hay salidas guardadas."}</p>`}`;
-    const qi = $("#re-g-q");
-    qi.addEventListener("input", () => { fsg.q = qi.value; const pos = qi.selectionStart; renderSalidasGrupos(); const n = $("#re-g-q"); n.focus(); n.setSelectionRange(pos, pos); });
-    $("#re-g-mes").addEventListener("change", (e) => { fsg.mes = e.target.value; renderSalidasGrupos(); });
-    $("#re-g-faltan").addEventListener("change", (e) => { fsg.faltan = e.target.checked; renderSalidasGrupos(); });
-    enlazarPaginas(renderSalidasGrupos);
-    $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => {
-      grupoSalidas = { k: tr.dataset.k, txt: tr.dataset.txt };
-      filtroSalidas = "sinfactura"; tab = "salidas"; render();
-    }));
   }
 
   async function guardarSalidas() {
@@ -876,7 +996,8 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
         const porNombre = {};
         (f.conceptos || []).forEach(k => { const n = nombreConcepto(k.servicio); porNombre[n] = Math.round(((porNombre[n] || 0) + (k.importe || 0)) * 100) / 100; });
         return {
-          "Fecha": f.fecha, "Factura": f.factura, "Tipo": TIPO[tipoDe(f)].txt, "Prog": (salidaDe(f) || {}).prog || "", "Temp. salida": (salidaDe(f) || {}).tempSalida || "", "Carta porte": f.cartaPorteFolio, "Viaje": f.viaje, "Folio fiscal": f.uuid,
+          "Fecha": f.fecha, "Factura": f.factura, "Tipo": TIPO[tipoDe(f)].txt, "Ruta (corta/larga)": RUTA[tipoRuta((f.calculos || {}).km)].txt,
+          "Zona": (zonaDe(f.destino || "") || {}).nombre || "", "Prog": (salidaDe(f) || {}).prog || "", "Temp. salida": (salidaDe(f) || {}).tempSalida || "", "Carta porte": f.cartaPorteFolio, "Viaje": f.viaje, "Folio fiscal": f.uuid,
           "Cliente": cli.nombre, "RFC cliente": cli.rfc, "Remitente": (f.remitente || {}).nombre, "Destinatario": (f.destinatario || {}).nombre,
           "Origen": f.origen, "Destino": f.destino, "Se entrega en": (f.destinatario || {}).seEntregaEn,
           "Moneda": f.moneda, "Tipo de cambio": f.tipoCambio, "Flete (moneda)": c.flete, "Subtotal (moneda)": f.subtotal, "Total (moneda)": f.total,

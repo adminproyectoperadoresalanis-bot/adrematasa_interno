@@ -829,6 +829,9 @@ service cloud.firestore {
     match /rentabilidad_salidas/{id} {
       allow read, write: if esDuenoRentabilidad();
     }
+    match /rentabilidad_config/{id} {
+      allow read, write: if esDuenoRentabilidad();
+    }
 
     // Mantenimiento (2026-10-28): solicitudes de remolques y lugares.
     match /mantenimiento_solicitudes/{id} {
