@@ -3,6 +3,8 @@
 # índices de Firestore), en un solo paso.
 # Uso: ./publicar.sh
 set -e
+# Versión de esta publicación (la usa public/js/actualizacion.js)
+printf '{"version":"%s"}\n' "$(date +%Y%m%d%H%M%S)" > public/version.json
 echo "Guardando cambios..."
 git add .
 if git diff --cached --quiet; then

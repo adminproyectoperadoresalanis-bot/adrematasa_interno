@@ -37,6 +37,7 @@ import { iniciarTurnos } from "./turnos.js";
 import { iniciarAsignacion } from "./asignacion.js";
 import { iniciarRentabilidad } from "./rentabilidad.js";
 import { iniciarMantenimiento } from "./mantenimiento.js";
+import "./actualizacion.js"; // 2026-10-28: cinta "Hay una versión nueva"
 import { iniciarAsistencia } from "./asistencia.js";
 import { iniciarInventario } from "./inventario.js";
 

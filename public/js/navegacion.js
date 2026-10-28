@@ -278,11 +278,16 @@ function inyectarEstilosUtilidades() {
     .rh-item.activo .rh-flecha { transform: rotate(180deg); color: #fff; }
     .rh-panel { grid-column: 1 / -1; background: #f5f3f0; border-bottom: 1px solid #efebe5;
       border-top: 3px solid #2c1e0f; padding: 12px; min-width: 0; }
+    /* 2026-10-28: con muchas opciones la fila se desplaza DENTRO de su recuadro
+       (deslizando con el dedo) en vez de ensanchar toda la página. */
     .utilidades-toggle { display: inline-flex; gap: 4px; padding: 4px; margin: 0 0 14px;
-      background: #fff; border: 1px solid #e2ddd5; border-radius: 12px; max-width: 100%; }
+      background: #fff; border: 1px solid #e2ddd5; border-radius: 12px; max-width: 100%;
+      min-width: 0; box-sizing: border-box; overflow-x: auto; overscroll-behavior-x: contain;
+      -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .utilidades-toggle::-webkit-scrollbar { display: none; }
     .utilidades-toggle-boton { display: flex; align-items: center; justify-content: center; gap: 8px;
       background: none; border: none; border-radius: 9px; padding: 10px 16px; cursor: pointer;
-      font: inherit; font-size: 15px; color: #6b5f52; white-space: nowrap; }
+      font: inherit; font-size: 15px; color: #6b5f52; white-space: nowrap; flex: 0 0 auto; }
     .utilidades-toggle-boton:hover { background: #f5f3f0; color: #2c1e0f; }
     .utilidades-toggle-boton.activo { background: #2c1e0f; color: #fff; font-weight: 600; }
     .utilidades-toggle-boton svg { width: 20px; height: 20px; flex-shrink: 0; }
@@ -301,7 +306,7 @@ function inyectarEstilosUtilidades() {
     .utilidad-nombre { display: inline-flex; align-items: center; gap: 8px; }
     @media (max-width: 600px) {
       .utilidades-toggle { display: flex; width: 100%; }
-      .utilidades-toggle-boton { flex: 1; padding: 10px 8px; }
+      .utilidades-toggle-boton { flex: 0 0 auto; padding: 10px 12px; }
       .utilidades-toggle-boton .larga { display: none; }
       .utilidades-toggle-boton .corta { display: inline; }
     }
@@ -400,6 +405,12 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
     });
     if (regreso) {
       contenidoApp.querySelector(".utilidades-regresar").addEventListener("click", regreso.alVolver);
+    }
+    // Que la opción abierta quede a la vista dentro de la fila (si no cabe toda).
+    const fila = contenidoApp.querySelector(".utilidades-toggle");
+    const activa = fila && fila.querySelector(".utilidades-toggle-boton.activo");
+    if (fila && activa && fila.scrollWidth > fila.clientWidth) {
+      fila.scrollLeft = Math.max(0, activa.offsetLeft - (fila.clientWidth - activa.offsetWidth) / 2);
     }
     refrescarAlertas();
     return contenidoApp.querySelector(".utilidades-contenido");
