@@ -290,6 +290,54 @@ function traducirError(err) {
   return mensajes[codigo] || `Ocurrió un error (${codigo}). Intenta de nuevo.`;
 }
 
+// 2026-10-28 (caso de Litzy): si alguien tiene cuenta pero no ficha en
+// usuarios (el guardado falló al registrarse), en vez de dejarlo atorado en
+// "No se encontró tu perfil" se le pide su nombre y se crea la ficha como
+// pendiente, igual que el registro normal. Así le aparece al admin en
+// Registros pendientes.
+function mostrarCompletarRegistro(user) {
+  const correo = String(user.email || "");
+  contenidoApp.innerHTML = `
+    <div class="panel" style="max-width:520px;margin:0 auto;">
+      <h2 style="margin-top:0;">Completa tu registro</h2>
+      <p class="nota">Tu cuenta se creó, pero falta tu ficha de empleado. Escribe tu nombre completo y envíala; el administrador la revisará para darte acceso.</p>
+      <p class="nota" id="completar-correo"></p>
+      <label for="completar-nombre">Nombre completo</label>
+      <input type="text" id="completar-nombre" maxlength="120" autocomplete="name">
+      <div class="error" id="completar-error"></div>
+      <div class="acciones-form" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" id="btn-completar">Enviar registro</button>
+        <button type="button" class="secundario" id="btn-completar-salir">Cerrar sesión</button>
+      </div>
+    </div>`;
+  contenidoApp.querySelector("#completar-correo").textContent = "Cuenta: " + correo;
+  const previo = document.getElementById("registro-nombre");
+  if (previo && previo.value.trim()) contenidoApp.querySelector("#completar-nombre").value = previo.value.trim();
+  contenidoApp.querySelector("#btn-completar-salir").addEventListener("click", () => signOut(auth));
+  contenidoApp.querySelector("#btn-completar").addEventListener("click", async (ev) => {
+    const err = contenidoApp.querySelector("#completar-error");
+    err.textContent = "";
+    const nombre = contenidoApp.querySelector("#completar-nombre").value.trim();
+    if (nombre.length < 3) { err.textContent = "Escribe tu nombre completo."; return; }
+    if (!correo.toLowerCase().endsWith(DOMINIO_ALANIS)) { err.textContent = `Esta cuenta no es un correo Alanis (${DOMINIO_ALANIS}). Contacta al administrador.`; return; }
+    ev.target.disabled = true;
+    try {
+      await setDoc(doc(db, "usuarios", user.uid), {
+        nombre,
+        email: correo,
+        rol: "empleado",
+        supervisorId: null,
+        estatus: "pendiente",
+        creadoEn: new Date().toISOString()
+      });
+      window.location.reload();
+    } catch (e) {
+      err.textContent = "No se pudo enviar: " + (e.message || e);
+      ev.target.disabled = false;
+    }
+  });
+}
+
 onAuthStateChanged(auth, async (user) => {
   detenerAlertasRH();
   detenerAlertasQR();
@@ -304,12 +352,18 @@ onAuthStateChanged(auth, async (user) => {
   mostrarVista(vistaCargando);
 
   const refUsuario = doc(db, "usuarios", user.uid);
-  const snap = await getDoc(refUsuario);
+  let snap = await getDoc(refUsuario);
+  // 2026-10-28: justo al registrarse, la cuenta existe un instante antes que su
+  // ficha (usuarios/{uid}). Se reintenta unos segundos antes de darla por faltante.
+  for (let i = 0; i < 3 && !snap.exists(); i++) {
+    await new Promise(r => setTimeout(r, 1200));
+    snap = await getDoc(refUsuario);
+  }
 
   if (!snap.exists()) {
     detenerCentroNotificaciones();
     notificacionesWrap?.classList.add("oculto");
-    contenidoApp.innerHTML = `<p>No se encontró tu perfil. Contacta al administrador.</p>`;
+    mostrarCompletarRegistro(user);
     mostrarVista(vistaApp);
     return;
   }
