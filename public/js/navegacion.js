@@ -47,7 +47,8 @@ export const OPCIONES_UTILIDADES = [
   { id: "validacionQR", etiqueta: "Validación de QR" },
   { id: "operadores", etiqueta: "Operadores" },
   { id: "trafico", etiqueta: "Tráfico" },
-  { id: "inventario", etiqueta: "Inventario" }
+  { id: "inventario", etiqueta: "Inventario" },
+  { id: "mantenimiento", etiqueta: "Mantenimiento" }
 ];
 
 const SVG = (contenido) =>
@@ -64,6 +65,7 @@ const ICONOS = {
   rh: ICONO_PERSONAS,
   operadores: SVG(`<rect x="1" y="6" width="14" height="10" rx="1"/><path d="M15 9h4l3 3v4h-7"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/>`),
   inventario: SVG(`<path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>`),
+  mantenimiento: SVG(`<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/>`),
   rentabilidad: SVG(`<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-6"/><path d="M16 8h4v4"/>`),
   trafico: SVG(`<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>`),
   validacionQR: SVG(`<path d="M3 7V4a1 1 0 0 1 1-1h3"/><path d="M17 3h3a1 1 0 0 1 1 1v3"/><path d="M21 17v3a1 1 0 0 1-1 1h-3"/><path d="M7 21H4a1 1 0 0 1-1-1v-3"/><rect x="7" y="7" width="10" height="10" rx="1"/>`),
@@ -186,6 +188,14 @@ const OPCION_OPERADORES = {
   ]
 };
 
+// Mantenimiento (2026-10-28): solicitudes de mantenimiento de remolques (mantenimiento.js).
+const OPCION_MANTENIMIENTO = {
+  id: "mantenimiento",
+  etiqueta: "Mantenimiento",
+  descripcion: "Solicitudes de remolques",
+  pantalla: "mantenimiento"
+};
+
 // Rentabilidad (2026-10-28): solo la cuenta de Ivan (soloCorreo).
 const CORREO_RENTABILIDAD = "ilanda@alanis.com.mx";
 const OPCION_RENTABILIDAD = {
@@ -219,15 +229,15 @@ const TABS_POR_ROL = {
   // El empleado solo tiene "Utilidades": con un solo botón el menú inferior
   // no aporta nada, así que se oculta y entra directo a las tarjetas.
   empleado: [
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO] }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO] }
   ],
   supervisor: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES, CONSULTA_SUPERVISOR), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO] }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES, CONSULTA_SUPERVISOR), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO] }
   ],
   admin: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_RENTABILIDAD] },
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO, OPCION_RENTABILIDAD] },
     { id: "configuracion", etiqueta: "Configuración" }
   ]
 };

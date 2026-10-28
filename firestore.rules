@@ -806,11 +806,11 @@ service cloud.firestore {
       );
     }
     match /inventario_catalogo/{id} {
-      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('inventario');
+      allow read: if usuarioActivoValido() && (tieneAccesoUtilidad('inventario') || tieneAccesoUtilidad('mantenimiento'));
       allow write: if puedeEditarInventario();
     }
     match /inventario_estatus/{id} {
-      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('inventario');
+      allow read: if usuarioActivoValido() && (tieneAccesoUtilidad('inventario') || tieneAccesoUtilidad('mantenimiento'));
       allow write: if puedeEditarInventario();
     }
     match /inventario_importaciones/{id} {
@@ -828,6 +828,25 @@ service cloud.firestore {
     }
     match /rentabilidad_salidas/{id} {
       allow read, write: if esDuenoRentabilidad();
+    }
+
+    // Mantenimiento (2026-10-28): solicitudes de remolques y lugares.
+    match /mantenimiento_solicitudes/{id} {
+      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('mantenimiento');
+      allow create, delete: if false;
+      allow update: if usuarioActivoValido() && tieneAccesoUtilidad('mantenimiento')
+                    && resource.data.estado == 'abierta'
+                    && request.resource.data.estado == 'terminada'
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['estado', 'terminadaMs', 'terminadaPor', 'comentarioCierre']);
+    }
+    match /mantenimiento_lugares/{id} {
+      allow read: if usuarioActivoValido() && tieneAccesoUtilidad('mantenimiento');
+      allow create: if usuarioActivoValido() && tieneAccesoUtilidad('mantenimiento')
+                    && request.resource.data.nombre is string
+                    && request.resource.data.nombre.size() > 0
+                    && request.resource.data.nombre.size() <= 120;
+      allow update, delete: if esAdmin();
     }
 
     match /bitacora_acciones_operadores/{id} {

@@ -36,6 +36,7 @@ import { iniciarAlertasQR, detenerAlertasQR } from "./alertasQR.js";
 import { iniciarTurnos } from "./turnos.js";
 import { iniciarAsignacion } from "./asignacion.js";
 import { iniciarRentabilidad } from "./rentabilidad.js";
+import { iniciarMantenimiento } from "./mantenimiento.js";
 import { iniciarAsistencia } from "./asistencia.js";
 import { iniciarInventario } from "./inventario.js";
 
@@ -423,6 +424,7 @@ onAuthStateChanged(auth, async (user) => {
       traficoAsignacion: (c) => iniciarAsignacion(c, datosUsuario),
       operadoresAsistencia: (c) => iniciarAsistencia(c),
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
+      mantenimiento: (c) => iniciarMantenimiento(c, datosUsuario, user.uid),
       panel: (c) => iniciarPanelResumenAdmin(c),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarGestionSolicitudes(d, user.uid, datosUsuario.nombre),
@@ -457,6 +459,7 @@ onAuthStateChanged(auth, async (user) => {
       traficoAsignacion: (c) => iniciarAsignacion(c, datosUsuario),
       operadoresAsistencia: (c) => iniciarAsistencia(c),
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
+      mantenimiento: (c) => iniciarMantenimiento(c, datosUsuario, user.uid),
       horasExtra: (c) => iniciarVistaEmpleado(c, datosUsuario, user.uid),
       vacaciones: (c) => iniciarVistaVacacionesEmpleado(c, datosUsuario, user.uid),
       faltas: (c) => iniciarVistaEmpleadoFaltas(c, datosUsuario, user.uid)
@@ -480,6 +483,7 @@ onAuthStateChanged(auth, async (user) => {
       traficoAsignacion: (c) => iniciarAsignacion(c, datosUsuario),
       operadoresAsistencia: (c) => iniciarAsistencia(c),
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
+      mantenimiento: (c) => iniciarMantenimiento(c, datosUsuario, user.uid),
       panel: (c) => iniciarPanelResumenSupervisor(c, user.uid),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarVistaSupervisor(d, user.uid, datosUsuario.nombre),
