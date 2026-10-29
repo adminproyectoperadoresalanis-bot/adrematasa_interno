@@ -4,6 +4,8 @@
 // ##########################################################################
 // Lector de facturas de Autotransportes Alanis (PDF del CFDI 4.0 con Carta
 // Porte 3.1, el formato de siempre: FAIM-…/TAIM-…). 2026-10-28.
+// 2026-10-29: lee la sección "Repartos/Recolecciones" de la Carta Porte
+// (tramos origen → destino) y cuenta los repartos.
 //
 // Módulo puro: no toca Firebase ni el DOM. Recibe las palabras de cada página
 // (texto + posición x/y, como las entrega pdf.js) y regresa un objeto con todos
@@ -244,7 +246,48 @@ function leerCartaPorte(items) {
     const h = cerca.find(i => /^\d{2}:\d{2}:\d{2}$/.test(i.s));
     cp[n === "Origen:" ? "fechaSalida" : "fechaLlegada"] = f ? `${f.s}${h ? " " + h.s.slice(0, 5) : ""}` : "";
   });
+  cp.tramos = leerTramos(items);
   return cp;
+}
+
+// Sección "Repartos/Recolecciones": un renglón "Origen/Destino:" por tramo,
+// con 4 columnas: nombre origen · domicilio origen · nombre destino · domicilio
+// destino. El domicilio termina en ",<clave>-<Municipio>" o ",<MUNICIPIO>".
+function leerTramos(items) {
+  const titulo = items.find(i => /^Repartos\/Recolecciones$/i.test(i.s));
+  if (!titulo) return [];
+  const etiquetas = items.filter(i => i.s === "Origen/Destino:" && i.y < titulo.y).sort((a, b) => b.y - a.y);
+  if (!etiquetas.length) return [];
+  // Fin de la sección: el siguiente título debajo del último tramo.
+  const ultimo = etiquetas[etiquetas.length - 1];
+  const fin = items.filter(i => i.y < ultimo.y - 14 && /^Tipo Figura/i.test(i.s)).sort((a, b) => b.y - a.y)[0];
+  const piso = fin ? fin.y + 2 : ultimo.y - 14;
+  const cuerpo = items.filter(i => i.y < titulo.y - 2 && i.y > piso && i !== titulo && i.s !== "Origen/Destino:");
+  // Columnas: los 4 inicios de x más usados (de izquierda a derecha).
+  const xs = new Map();
+  cuerpo.forEach(i => { const k = Math.round(i.x); xs.set(k, (xs.get(k) || 0) + 1); });
+  const inicios = [];
+  [...xs.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]).forEach(([x]) => {
+    if (inicios.length < 4 && inicios.every(y => Math.abs(y - x) > 20)) inicios.push(x);
+  });
+  inicios.sort((a, b) => a - b);
+  if (inicios.length < 4) return [];
+  const col = (it) => { let k = 0; inicios.forEach((x, n) => { if (x - 6 <= it.x) k = n; }); return k; };
+  // Cada palabra va al tramo cuya etiqueta tiene la y más cercana.
+  const tramos = etiquetas.map(() => [[], [], [], []]);
+  cuerpo.forEach(i => {
+    let k = 0, mejor = Infinity;
+    etiquetas.forEach((e, n) => { const d = Math.abs(e.y - i.y); if (d < mejor) { mejor = d; k = n; } });
+    tramos[k][col(i)].push(i);
+  });
+  return tramos.map(c => {
+    const [on, od, dn, dd] = c.map(unir);
+    return { origen: on, origenDomicilio: od, origenLugar: municipioDeDomicilio(od), destino: dn, destinoDomicilio: dd, destinoLugar: municipioDeDomicilio(dd) };
+  });
+}
+function municipioDeDomicilio(d) {
+  const partes = String(d || "").split(",");
+  return partes.length > 1 ? tituloCase(municipioLimpio(partes[partes.length - 1])) : "";
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +324,23 @@ export function calcular(f) {
   };
 }
 
+// Repartos de la factura. Fuente 1: tramos de la Carta Porte (tramos − 1).
+// Fuente 2 (SOLO facturas guardadas antes de leer tramos, que no traen el
+// campo): "Se entrega en" con guion, "MTY-TOLUCA" = 2 paradas = 1 reparto. En
+// las nuevas manda la Carta Porte (si no hay tramos, es directo). Cobro:
+// conceptos REPARTO / RECOLECCION.
+export function repartosDeFactura(f) {
+  const leidos = Array.isArray((f.cartaPorte || {}).tramos);
+  const tramos = leidos ? f.cartaPorte.tramos : [];
+  const entrega = String((f.destinatario || {}).seEntregaEn || "");
+  const paradasEntrega = entrega.includes("-") ? entrega.split("-").map(x => x.trim()).filter(Boolean) : [];
+  let paradas = [], fuente = "";
+  if (tramos.length > 1) { paradas = tramos.map(t => t.destinoLugar || t.destino); fuente = "carta porte"; }
+  else if (!leidos && paradasEntrega.length > 1) { paradas = paradasEntrega; fuente = "se entrega en"; }
+  const cobro = r2((f.conceptos || []).filter(c => /REPARTO|RECOLEC/i.test(c.servicio || "")).reduce((s, c) => s + (c.importe || 0), 0));
+  return { numero: paradas.length > 1 ? paradas.length - 1 : 0, paradas, fuente, cobro };
+}
+
 // paginas: [[{s, x, y}], …]
 export function leerFactura(paginas) {
   const p1 = paginas[0] || [];
@@ -298,6 +358,7 @@ export function leerFactura(paginas) {
   f.destino = lugar(f.destinatario);
   f.ruta = f.origen && f.destino ? `${f.origen} → ${f.destino}` : "";
   f.calculos = calcular(f);
+  f.repartos = repartosDeFactura(f);
   return f;
 }
 
