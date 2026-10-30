@@ -27,6 +27,12 @@ import { LOGO_ALANIS } from "./comercialLogo.js";
 // Una cotización lleva varias rutas; dentro de su vigencia se le pueden agregar
 // rutas nuevas (quedan marcadas con su fecha). VENCIDA se calcula por fecha.
 // El PDF (jsPDF) lo firma quien hizo la cotización: nombre, puesto y correo.
+//
+// 2026-10-30: km con OpenRouteService (lo mismo que tenía el CRM publicado):
+// autocompletado de ciudades (MX y EUA), ruta con perfil de CAMIÓN
+// (driving-hgv), mapa (Leaflet + OpenStreetMap), puntos vía y "Guardar en
+// catálogo". La clave de ORS va en Ajustes (com_config/ajustes.orsKey), no en
+// el código. Si la ruta ya está en el catálogo, mandan los km del catálogo.
 // ============================================================================
 
 const COL_CLI = "com_clientes";
@@ -35,9 +41,13 @@ const COL_RUT = "com_rutas";
 const COL_CFG = "com_config";
 const COL_CONT = "com_contadores";
 const URL_JSPDF = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+const URL_LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+const URL_LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+const ORS = "https://api.openrouteservice.org";
+const KM_RUTA_LARGA = 350; // igual que Rentabilidad: < 350 corta, 350 o más larga
 
 const AJUSTES_BASE = {
-  verde: 80, ambar: 60, tipoCambio: 18.5, vigenciaDias: 30,
+  verde: 80, ambar: 60, tipoCambio: 18.5, vigenciaDias: 30, orsKey: "",
   condiciones: "Precios más IVA, menos retención del 4%.\nTarifa por viaje sencillo.\nNo incluye maniobras, estadías ni seguro de la mercancía.",
 };
 const ESTADOS = {
@@ -82,6 +92,31 @@ function cargarScript(url, global) {
   });
 }
 
+// ---- OpenRouteService -----------------------------------------------------------
+async function orsBuscar(texto, clave) {
+  const url = `${ORS}/geocode/search?api_key=${encodeURIComponent(clave)}&text=${encodeURIComponent(texto)}&boundary.country=MX,US&size=6&lang=es`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(r.status === 403 || r.status === 401 ? "La clave de ORS no es válida (revisa Ajustes)." : `ORS respondió ${r.status}.`);
+  const d = await r.json();
+  return (d.features || []).map(f => ({ label: (f.properties && f.properties.label) || "", lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }));
+}
+// puntos: [{lng, lat}] (origen, vías…, destino) → { km, linea: [[lat, lng]] }
+async function orsRuta(puntos, clave) {
+  const r = await fetch(`${ORS}/v2/directions/driving-hgv/geojson`, {
+    method: "POST", headers: { "Authorization": clave, "Content-Type": "application/json" },
+    body: JSON.stringify({ coordinates: puntos.map(p => [p.lng, p.lat]) }),
+  });
+  if (!r.ok) throw new Error(r.status === 403 || r.status === 401 ? "La clave de ORS no es válida (revisa Ajustes)." : r.status === 429 ? "Se acabó la cuota de ORS de hoy." : `ORS respondió ${r.status}.`);
+  const d = await r.json();
+  const f = d.features && d.features[0];
+  if (!f) throw new Error("ORS no encontró ruta.");
+  return { km: Math.round(f.properties.summary.distance / 1000), linea: f.geometry.coordinates.map(([lng, lat]) => [lat, lng]) };
+}
+function cargarCss(url) {
+  if (document.querySelector(`link[href="${url}"]`)) return;
+  const l = document.createElement("link"); l.rel = "stylesheet"; l.href = url; document.head.appendChild(l);
+}
+
 function inyectarEstilos() {
   if (document.getElementById("co-estilos")) return;
   const s = document.createElement("style");
@@ -117,6 +152,12 @@ function inyectarEstilos() {
     .co-mini { padding:4px 10px; font-size:12px; }
     .co-link { background:none; border:0; padding:0; font:inherit; color:#185FA5; text-decoration:underline; cursor:pointer; font-weight:600; }
     .co-indicador { border:1px solid #e2ddd5; border-radius:12px; padding:12px 14px; background:#fbfaf8; font-size:13px; }
+    .co-ac { position:relative; }
+    .co-ac-lista { position:absolute; left:0; right:0; top:100%; z-index:30; background:#fff; border:1px solid #e2ddd5; border-radius:0 0 10px 10px; box-shadow:0 8px 20px rgba(44,30,15,.12); max-height:240px; overflow:auto; }
+    .co-ac-lista div { padding:8px 10px; font-size:13px; cursor:pointer; border-top:1px solid #f0ece6; }
+    .co-ac-lista div:first-child { border-top:0; } .co-ac-lista div:hover, .co-ac-lista div.activo { background:#f2ede6; }
+    .co-mapa { height:340px; border-radius:10px; overflow:hidden; border:1px solid #e2ddd5; }
+    .co-via { display:inline-flex; align-items:center; gap:4px; background:#f2ede6; border-radius:8px; padding:2px 8px; font-size:12px; margin:2px 4px 2px 0; }
     .co-contacto { display:grid; grid-template-columns:1.2fr 1fr 1fr 1.3fr auto; gap:6px; margin-bottom:6px; }
     @media (max-width:700px) { .co-contacto { grid-template-columns:1fr 1fr; } .co-campos { grid-template-columns:1fr; } }
   `;
@@ -498,7 +539,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     Object.assign(editor, {
       contacto: c.contacto || null, moneda: c.moneda, tipoCambio: c.moneda === "USD" ? ajustes.tipoCambio : c.tipoCambio,
       vigenciaDias: c.vigenciaDias, tipoCarga: c.tipoCarga, tipoServicio: c.tipoServicio, notas: c.notas || "",
-      rutas: (c.rutas || []).map(r => ({ origen: r.origen, destino: r.destino, km: r.km, importe: r.importe })),
+      rutas: (c.rutas || []).map(r => ({ origen: r.origen, destino: r.destino, km: r.km, importe: r.importe, origenCoord: r.origenCoord || undefined, destinoCoord: r.destinoCoord || undefined, vias: r.vias || undefined, kmOrs: r.kmOrs || undefined })),
     });
     avisar(`Copia de ${c.folio}: revisa y guarda para darle folio nuevo.`);
     render();
@@ -536,7 +577,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
         <div><label>Servicio</label>${seg("tipoServicio", Object.entries(SERVICIOS), bloqueada)}</div>
       </div>
       <div class="co-h3">Rutas</div>
-      <datalist id="co-lugares">${lugares.map(l => `<option value="${esc(l)}">`).join("")}</datalist>
+      ${ajustes.orsKey ? "" : `<datalist id="co-lugares">${lugares.map(l => `<option value="${esc(l)}">`).join("")}</datalist>`}
       <div class="tabla-wrap"><table class="tabla co-tabla co-rutas">
         <thead><tr><th style="min-width:170px;">Origen</th><th style="min-width:170px;">Destino</th><th class="n" style="width:90px;">Km</th><th class="n" style="width:130px;">Importe (${esc(e.moneda)})</th><th class="n">Ing./km MXN</th><th></th></tr></thead>
         <tbody>${e.rutas.map((r, i) => {
@@ -545,11 +586,13 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
           const v = ingresoKm(r, e.moneda, e.tipoCambio);
           const cat = r.origen && r.destino ? rutaDelCatalogo(r.origen, r.destino) : null;
           return `<tr data-i="${i}">
-            <td><input type="text" list="co-lugares" data-r="origen" value="${esc(r.origen)}"${dis} placeholder="Ciudad, estado"></td>
-            <td><input type="text" list="co-lugares" data-r="destino" value="${esc(r.destino)}"${dis} placeholder="Ciudad, estado">
-              ${fija ? "" : `<br><small class="nota" data-hint="${i}">${r.origen && r.destino ? (cat ? "del catálogo" : "ruta nueva · se agrega al catálogo") : ""}</small>`}
+            <td><div class="co-ac"><input type="text" list="co-lugares" data-r="origen" value="${esc(r.origen)}"${dis} placeholder="${ajustes.orsKey ? "Escribe la ciudad…" : "Ciudad, estado"}" autocomplete="off"></div>
+              ${(r.vias || []).length ? `<small class="nota">vía ${esc(r.vias.map(v => v.label.split(",")[0]).join(", "))}</small>` : ""}</td>
+            <td><div class="co-ac"><input type="text" list="co-lugares" data-r="destino" value="${esc(r.destino)}"${dis} placeholder="${ajustes.orsKey ? "Escribe la ciudad…" : "Ciudad, estado"}" autocomplete="off"></div>
+              ${fija ? "" : `<small class="nota" data-hint="${i}">${r.origen && r.destino ? (cat ? "del catálogo" : "ruta nueva · se agrega al catálogo") : ""}</small>`}
+              <button type="button" class="co-link" data-mapa="${i}" style="font-size:12px;${r.origenCoord && r.destinoCoord ? "" : "display:none;"}">Ver ruta</button>
               ${fija && r.agregadaMs - (original.emisionMs || 0) > DIA / 2 ? `<br><small class="nota">agregada ${fecha(r.agregadaMs)}</small>` : ""}</td>
-            <td class="n"><input type="number" min="1" data-r="km" value="${esc(r.km)}"${dis}></td>
+            <td class="n"><input type="number" min="1" data-r="km" value="${esc(r.km)}"${dis}><br><small class="nota" data-tipo="${i}">${num(r.km) ? (num(r.km) < KM_RUTA_LARGA ? "corta" : "larga") : ""}</small></td>
             <td class="n"><input type="number" min="0" step="0.01" data-r="importe" value="${esc(r.importe)}"${dis}></td>
             <td class="n" data-ing="${i}"><span class="co-sem ${semaforo(v)}"></span><b>${v == null ? "—" : dinero(v)}</b></td>
             <td>${fija ? "" : `<button type="button" class="secundario co-mini" data-qr="${i}" title="Quitar ruta">✕</button>`}</td></tr>`;
@@ -588,14 +631,23 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     }));
     const tc = $("#co-e-tc"); if (tc) tc.addEventListener("input", () => { e.tipoCambio = num(tc.value); pintarIngresos(); });
     $("#co-cuerpo").querySelectorAll("tr[data-i] input").forEach(inp => inp.addEventListener("input", () => {
-      const r = e.rutas[Number(inp.closest("tr").dataset.i)];
+      const i = Number(inp.closest("tr").dataset.i), r = e.rutas[i];
       r[inp.dataset.r] = inp.value;
-      if ((inp.dataset.r === "origen" || inp.dataset.r === "destino") && r.origen && r.destino && !num(r.km)) {
-        const cat = rutaDelCatalogo(r.origen, r.destino);
-        if (cat && cat.km) { r.km = cat.km; inp.closest("tr").querySelector('[data-r="km"]').value = cat.km; }
+      if (inp.dataset.r === "origen" || inp.dataset.r === "destino") {
+        delete r[inp.dataset.r + "Coord"]; geo.delete(r); // escrito a mano: ya no es el punto de ORS
+        if (r.origen && r.destino) desdeCatalogo(r, i);
       }
       pintarIngresos();
     }));
+    $("#co-cuerpo").querySelectorAll("tr[data-i] [data-r=origen]:not([disabled]), tr[data-i] [data-r=destino]:not([disabled])").forEach(inp => {
+      if (!ajustes.orsKey) return;
+      autocompletar(inp, (op) => {
+        const i = Number(inp.closest("tr").dataset.i), r = e.rutas[i];
+        r[inp.dataset.r] = op.label; r[inp.dataset.r + "Coord"] = { lng: op.lng, lat: op.lat };
+        if (!desdeCatalogo(r, i) && r.origenCoord && r.destinoCoord) calcularRuta(r, i);
+      });
+    });
+    $("#co-cuerpo").querySelectorAll("[data-mapa]").forEach(b => b.addEventListener("click", () => abrirMapa(Number(b.dataset.mapa), !!original && !puedeEditarRuta(Number(b.dataset.mapa), original))));
     $("#co-cuerpo").querySelectorAll("[data-qr]").forEach(b => b.addEventListener("click", () => {
       leerFormulario(); e.rutas.splice(Number(b.dataset.qr), 1);
       if (!e.rutas.length) e.rutas.push({ origen: "", destino: "", km: "", importe: "" });
@@ -608,6 +660,145 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const p = $("#co-e-pdf"); if (p) p.addEventListener("click", () => pdfDe(original.id));
     const d = $("#co-e-dup"); if (d) d.addEventListener("click", () => duplicar(original.id));
   }
+  // ---- Km: catálogo, ORS y mapa ----
+  const geo = new WeakMap(); // ruta del editor → trazo [[lat, lng]] (solo en memoria)
+  function puedeEditarRuta(i, original) {
+    const r = editor.rutas[i];
+    return !(original && r.agregadaMs && (original.rutas || []).some(x => x.agregadaMs === r.agregadaMs && x.origen === r.origen && x.destino === r.destino));
+  }
+  function hint(i, t) { const h = $(`[data-hint="${i}"]`); if (h) h.textContent = t; }
+  function pintarFila(i) {
+    const r = editor.rutas[i], tr = $(`tr[data-i="${i}"]`);
+    if (!tr) return;
+    const km = tr.querySelector('[data-r="km"]'); if (km && !km.disabled) km.value = r.km == null ? "" : r.km;
+    const b = tr.querySelector("[data-mapa]"); if (b) b.style.display = r.origenCoord && r.destinoCoord ? "" : "none";
+    pintarIngresos();
+  }
+  // Si la ruta (mismo origen y destino) ya está en el catálogo: sus km, puntos y vías.
+  function desdeCatalogo(r, i) {
+    const cat = rutaDelCatalogo(r.origen, r.destino);
+    if (!cat) return false;
+    if (cat.km && !num(r.km)) r.km = cat.km;
+    if (cat.origenCoord && !r.origenCoord) r.origenCoord = cat.origenCoord;
+    if (cat.destinoCoord && !r.destinoCoord) r.destinoCoord = cat.destinoCoord;
+    if (cat.vias && !r.vias) r.vias = cat.vias;
+    pintarFila(i);
+    hint(i, `del catálogo${(cat.vias || []).length ? " · vía " + cat.vias.map(v => v.label.split(",")[0]).join(", ") : ""}`);
+    return true;
+  }
+  async function calcularRuta(r, i) {
+    if (!ajustes.orsKey || !r.origenCoord || !r.destinoCoord) return null;
+    hint(i, "Calculando ruta de camión…");
+    try {
+      const res = await orsRuta([r.origenCoord, ...(r.vias || []), r.destinoCoord], ajustes.orsKey);
+      geo.set(r, res.linea);
+      r.kmOrs = res.km;
+      const cat = rutaDelCatalogo(r.origen, r.destino);
+      if (cat && cat.km && !(r.vias || []).length) {
+        r.km = cat.km;
+        hint(i, Math.abs(cat.km - res.km) > 50 ? `Catálogo: ${miles(cat.km)} km · ORS calcula ${miles(res.km)} km` : "del catálogo");
+      } else {
+        r.km = res.km;
+        hint(i, `${cat ? "Con vías" : "Ruta nueva"} · ${miles(res.km)} km por ORS (camión)`);
+      }
+      pintarFila(i);
+      return res;
+    } catch (x) { hint(i, x.message || "No se pudo calcular la ruta."); return null; }
+  }
+  // Lista de sugerencias de ORS debajo de un campo (sin redibujar la pantalla).
+  function autocompletar(inp, alElegir) {
+    const caja = inp.closest(".co-ac") || inp.parentElement;
+    let lista = null, timer = null, ops = [], sel = -1;
+    const cerrar = () => { if (lista) { lista.remove(); lista = null; } sel = -1; };
+    const pintar = () => {
+      if (!ops.length) return cerrar();
+      if (!lista) { lista = document.createElement("div"); lista.className = "co-ac-lista"; caja.appendChild(lista); }
+      lista.innerHTML = ops.map((o, k) => `<div data-k="${k}" class="${k === sel ? "activo" : ""}">${esc(o.label)}</div>`).join("");
+      lista.querySelectorAll("[data-k]").forEach(d => d.addEventListener("mousedown", (ev) => { ev.preventDefault(); elegir(Number(d.dataset.k)); }));
+    };
+    const elegir = (k) => { const o = ops[k]; if (!o) return; inp.value = o.label; cerrar(); alElegir(o); };
+    inp.addEventListener("input", () => {
+      clearTimeout(timer);
+      const t = inp.value.trim();
+      if (t.length < 3) { ops = []; return cerrar(); }
+      timer = setTimeout(async () => {
+        try { ops = await orsBuscar(t, ajustes.orsKey); sel = -1; if (document.activeElement === inp) pintar(); }
+        catch (x) { ops = []; cerrar(); error(x.message); }
+      }, 350);
+    });
+    inp.addEventListener("keydown", (ev) => {
+      if (!lista) return;
+      if (ev.key === "ArrowDown") { sel = Math.min(sel + 1, ops.length - 1); pintar(); ev.preventDefault(); }
+      else if (ev.key === "ArrowUp") { sel = Math.max(sel - 1, 0); pintar(); ev.preventDefault(); }
+      else if (ev.key === "Enter" && sel >= 0) { elegir(sel); ev.preventDefault(); }
+      else if (ev.key === "Escape") cerrar();
+    });
+    inp.addEventListener("blur", () => setTimeout(cerrar, 150));
+  }
+  // Mapa de la ruta: trazo, puntos vía y "Guardar en catálogo".
+  async function abrirMapa(i, soloVer) {
+    const r = editor.rutas[i];
+    if (!r || !r.origenCoord || !r.destinoCoord) return;
+    const ov = document.createElement("div");
+    ov.className = "modal-overlay";
+    ov.innerHTML = `<div class="modal-tarjeta" style="max-width:760px;width:100%;max-height:92vh;overflow:auto;">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;"><h2 style="margin:0;font-size:16px;" id="mp-titulo"></h2><button type="button" class="secundario co-mini" data-cerrar>✕</button></div>
+      <div class="co-mapa" id="mp-mapa" style="margin-top:10px;"><p class="nota" style="padding:12px;">Cargando mapa…</p></div>
+      <div id="mp-vias" style="margin-top:8px;"></div>
+      ${soloVer || !ajustes.orsKey ? "" : `<div class="co-ac" style="margin-top:8px;"><input type="text" id="mp-via" placeholder="Agregar punto vía (ciudad intermedia)…" autocomplete="off"></div>`}
+      <div class="error" id="mp-err"></div>
+      <div class="modal-acciones">${soloVer ? "" : `<button type="button" id="mp-catalogo">Guardar en catálogo</button>`}<button type="button" class="secundario" data-cerrar>Cerrar</button></div></div>`;
+    document.body.appendChild(ov);
+    let mapa = null;
+    const cerrar = () => { if (mapa) mapa.remove(); ov.remove(); renderEditor(); };
+    ov.querySelectorAll("[data-cerrar]").forEach(b => b.addEventListener("click", cerrar));
+    const errM = (t) => { ov.querySelector("#mp-err").textContent = t || ""; };
+    const titulo = () => { ov.querySelector("#mp-titulo").textContent = `${r.origen} → ${r.destino} · ${miles(r.km)} km`; };
+    const pintarVias = () => {
+      ov.querySelector("#mp-vias").innerHTML = (r.vias || []).length ? `<small class="nota">Pasa por:</small> ${r.vias.map((v, k) => `<span class="co-via">${esc(v.label)}${soloVer ? "" : ` <button type="button" class="co-link" data-qv="${k}" style="text-decoration:none;color:#A32D2D;">✕</button>`}</span>`).join("")}` : "";
+      ov.querySelectorAll("[data-qv]").forEach(b => b.addEventListener("click", async () => { r.vias.splice(Number(b.dataset.qv), 1); await recalcular(); }));
+    };
+    const dibujar = () => {
+      const L = window.L, linea = geo.get(r);
+      if (!L || !linea) return;
+      if (mapa) mapa.remove();
+      ov.querySelector("#mp-mapa").innerHTML = "";
+      mapa = L.map(ov.querySelector("#mp-mapa"));
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap", maxZoom: 18 }).addTo(mapa);
+      const trazo = L.polyline(linea, { color: "#2C1E0F", weight: 4 }).addTo(mapa);
+      const punto = (p, txt, color) => L.circleMarker([p.lat, p.lng], { radius: 7, color: "#fff", weight: 2, fillColor: color, fillOpacity: 1 }).addTo(mapa).bindTooltip(txt);
+      punto(r.origenCoord, r.origen, "#3B7A1E"); punto(r.destinoCoord, r.destino, "#A32D2D");
+      (r.vias || []).forEach(v => punto(v, v.label, "#D99A1E"));
+      mapa.fitBounds(trazo.getBounds(), { padding: [24, 24] });
+    };
+    const recalcular = async () => {
+      errM();
+      const res = await calcularRuta(r, i);
+      if (!res) { errM("No se pudo calcular la ruta."); return; }
+      titulo(); pintarVias(); dibujar();
+    };
+    titulo(); pintarVias();
+    try {
+      cargarCss(URL_LEAFLET_CSS);
+      await cargarScript(URL_LEAFLET_JS, "L");
+      if (!geo.get(r)) { if (!ajustes.orsKey) { errM("Falta la clave de ORS en Ajustes para dibujar la ruta."); return; } await calcularRuta(r, i); titulo(); }
+      dibujar();
+    } catch (x) { errM("No se pudo cargar el mapa: " + x.message); }
+    const via = ov.querySelector("#mp-via");
+    if (via) autocompletar(via, async (op) => { r.vias = [...(r.vias || []), { label: op.label, lng: op.lng, lat: op.lat }]; via.value = ""; await recalcular(); });
+    const bc = ov.querySelector("#mp-catalogo");
+    if (bc) bc.addEventListener("click", async () => {
+      errM();
+      const datos = { origen: r.origen, destino: r.destino, km: num(r.km), kmOrs: r.kmOrs || null, origenCoord: r.origenCoord, destinoCoord: r.destinoCoord, vias: r.vias || [], fuente: "ORS", actualizadoMs: Date.now() };
+      try {
+        const cat = rutaDelCatalogo(r.origen, r.destino);
+        if (cat) await updateDoc(doc(db, COL_RUT, cat.id), datos);
+        else { const ref = doc(collection(db, COL_RUT)); await setDoc(ref, { ...datos, clave: "", creadoMs: Date.now(), creadoPor: { uid, nombre: yo.nombre } }); rutas.set(ref.id, { id: ref.id, ...datos }); }
+        bc.textContent = "Guardada en catálogo ✓"; bc.disabled = true;
+      } catch (x) { errM("No se pudo guardar: " + x.message); }
+    });
+  }
+
   function leerFormulario() {
     const n = $("#co-e-notas"); if (n) editor.notas = n.value;
   }
@@ -616,8 +807,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       const td = $(`[data-ing="${i}"]`); if (!td) return;
       const v = ingresoKm(r, editor.moneda, editor.tipoCambio);
       td.innerHTML = `<span class="co-sem ${semaforo(v)}"></span><b>${v == null ? "—" : dinero(v)}</b>`;
-      const h = $(`[data-hint="${i}"]`);
-      if (h) h.textContent = r.origen && r.destino ? (rutaDelCatalogo(r.origen, r.destino) ? "del catálogo" : "ruta nueva · se agrega al catálogo") : "";
+      const t = $(`[data-tipo="${i}"]`); if (t) t.textContent = num(r.km) ? (num(r.km) < KM_RUTA_LARGA ? "corta" : "larga") : "";
     });
   }
 
@@ -639,6 +829,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const limpias = rs.map(r => ({
       origen: String(r.origen).trim(), destino: String(r.destino).trim(), km: num(r.km), importe: num(r.importe),
       agregadaMs: r.agregadaMs || ahora,
+      origenCoord: r.origenCoord || null, destinoCoord: r.destinoCoord || null, vias: r.vias || [], kmOrs: r.kmOrs || null,
     }));
     const botones = $("#co-cuerpo").querySelectorAll(".co-acciones button");
     botones.forEach(b => b.disabled = true);
@@ -672,7 +863,8 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       // Rutas nuevas al catálogo.
       for (const r of limpias) {
         if (!rutaDelCatalogo(r.origen, r.destino)) {
-          try { const ref = doc(collection(db, COL_RUT)); await setDoc(ref, { origen: r.origen, destino: r.destino, km: r.km, clave: "", creadoMs: ahora, creadoPor: { uid, nombre: yo.nombre } }); rutas.set(ref.id, { id: ref.id, origen: r.origen, destino: r.destino, km: r.km }); }
+          const nueva = { origen: r.origen, destino: r.destino, km: r.km, kmOrs: r.kmOrs || null, origenCoord: r.origenCoord || null, destinoCoord: r.destinoCoord || null, vias: r.vias || [], fuente: r.kmOrs ? "ORS" : "manual" };
+          try { const ref = doc(collection(db, COL_RUT)); await setDoc(ref, { ...nueva, clave: "", creadoMs: ahora, creadoPor: { uid, nombre: yo.nombre } }); rutas.set(ref.id, { id: ref.id, ...nueva }); }
           catch (x) { /* el catálogo es ayuda; no detiene la cotización */ }
         }
       }
@@ -758,9 +950,10 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
         <div><label>Semáforo ámbar desde (MXN/km)</label><input type="number" step="0.01" id="aj-ambar" value="${esc(ajustes.ambar)}"></div>
         <div><label>Tipo de cambio sugerido</label><input type="number" step="0.01" id="aj-tc" value="${esc(ajustes.tipoCambio)}"></div>
         <div><label>Vigencia por omisión (días)</label><input type="number" min="1" id="aj-vig" value="${esc(ajustes.vigenciaDias)}"></div>
+        <div style="grid-column:1/-1;"><label>Clave de OpenRouteService (km por camión y mapa)</label><input type="text" id="aj-ors" value="${esc(ajustes.orsKey || "")}" placeholder="Pega aquí la clave de openrouteservice.org" autocomplete="off"></div>
         <div style="grid-column:1/-1;"><label>Condiciones que salen en todos los PDF (una por renglón)</label><textarea id="aj-cond" rows="5">${esc(ajustes.condiciones)}</textarea></div>
       </div>
-      <p class="nota">Abajo de las condiciones el PDF agrega solo la vigencia, la moneda (si es USD) y las notas de cada cotización. Quién entra a Comercial se marca en Configuración → Utilidades.</p>
+      <p class="nota">La clave de ORS la ven quienes tienen Comercial (la usa su navegador). Plan gratis: 2,000 rutas y 1,000 búsquedas al día; las rutas guardadas en el catálogo ya no se vuelven a calcular. Abajo de las condiciones el PDF agrega solo la vigencia, la moneda (si es USD) y las notas de cada cotización. Quién entra a Comercial se marca en Configuración → Utilidades.</p>
       <div class="co-acciones" style="justify-content:flex-start;"><button type="button" id="aj-ok">Guardar ajustes</button></div>`;
     $("#aj-ok").addEventListener("click", async () => {
       const verde = num($("#aj-verde").value), ambar = num($("#aj-ambar").value), tc = num($("#aj-tc").value), vig = num($("#aj-vig").value);
@@ -768,7 +961,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       if (!(tc > 0) || !(vig > 0)) { error("Revisa el tipo de cambio y la vigencia."); return; }
       error();
       try {
-        await setDoc(doc(db, COL_CFG, "ajustes"), { verde, ambar, tipoCambio: tc, vigenciaDias: Math.round(vig), condiciones: $("#aj-cond").value.trim(), actualizadoMs: Date.now(), actualizadoPor: { uid, nombre: yo.nombre } });
+        await setDoc(doc(db, COL_CFG, "ajustes"), { verde, ambar, tipoCambio: tc, vigenciaDias: Math.round(vig), orsKey: $("#aj-ors").value.trim(), condiciones: $("#aj-cond").value.trim(), actualizadoMs: Date.now(), actualizadoPor: { uid, nombre: yo.nombre } });
         avisar("Ajustes guardados.");
       } catch (x) { error("No se pudieron guardar: " + x.message); }
     });
