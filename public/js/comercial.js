@@ -44,7 +44,8 @@ const URL_JSPDF = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.
 const URL_LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
 const URL_LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const ORS = "https://api.openrouteservice.org";
-const KM_RUTA_LARGA = 350; // igual que Rentabilidad: < 350 corta, 350 o más larga
+const KM_RUTA_CORTA = 350; // como el CRM: RC = 350 km o menos; RL = 351 o más
+const tipoRutaTxt = (km) => km ? (km <= KM_RUTA_CORTA ? "RC" : "RL") : "";
 
 const AJUSTES_BASE = {
   verde: 80, ambar: 60, tipoCambio: 18.5, vigenciaDias: 30, orsKey: "",
@@ -153,7 +154,7 @@ function inyectarEstilos() {
     .co-link { background:none; border:0; padding:0; font:inherit; color:#185FA5; text-decoration:underline; cursor:pointer; font-weight:600; }
     .co-indicador { border:1px solid #e2ddd5; border-radius:12px; padding:12px 14px; background:#fbfaf8; font-size:13px; }
     .co-ac { position:relative; }
-    .co-ac-lista { position:absolute; left:0; right:0; top:100%; z-index:30; background:#fff; border:1px solid #e2ddd5; border-radius:0 0 10px 10px; box-shadow:0 8px 20px rgba(44,30,15,.12); max-height:240px; overflow:auto; }
+    .co-ac-lista { position:fixed; z-index:10050; background:#fff; border:1px solid #e2ddd5; border-radius:0 0 10px 10px; box-shadow:0 8px 20px rgba(44,30,15,.12); max-height:240px; overflow:auto; }
     .co-ac-lista div { padding:8px 10px; font-size:13px; cursor:pointer; border-top:1px solid #f0ece6; }
     .co-ac-lista div:first-child { border-top:0; } .co-ac-lista div:hover, .co-ac-lista div.activo { background:#f2ede6; }
     .co-mapa { height:340px; border-radius:10px; overflow:hidden; border:1px solid #e2ddd5; }
@@ -592,7 +593,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
               ${fija ? "" : `<small class="nota" data-hint="${i}">${r.origen && r.destino ? (cat ? "del catálogo" : "ruta nueva · se agrega al catálogo") : ""}</small>`}
               <button type="button" class="co-link" data-mapa="${i}" style="font-size:12px;${r.origenCoord && r.destinoCoord ? "" : "display:none;"}">Ver ruta</button>
               ${fija && r.agregadaMs - (original.emisionMs || 0) > DIA / 2 ? `<br><small class="nota">agregada ${fecha(r.agregadaMs)}</small>` : ""}</td>
-            <td class="n"><input type="number" min="1" data-r="km" value="${esc(r.km)}"${dis}><br><small class="nota" data-tipo="${i}">${num(r.km) ? (num(r.km) < KM_RUTA_LARGA ? "corta" : "larga") : ""}</small></td>
+            <td class="n"><input type="number" min="1" data-r="km" value="${esc(r.km)}"${dis}><br><small class="nota" data-tipo="${i}">${tipoRutaTxt(num(r.km))}</small></td>
             <td class="n"><input type="number" min="0" step="0.01" data-r="importe" value="${esc(r.importe)}"${dis}></td>
             <td class="n" data-ing="${i}"><span class="co-sem ${semaforo(v)}"></span><b>${v == null ? "—" : dinero(v)}</b></td>
             <td>${fija ? "" : `<button type="button" class="secundario co-mini" data-qr="${i}" title="Quitar ruta">✕</button>`}</td></tr>`;
@@ -644,7 +645,10 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       autocompletar(inp, (op) => {
         const i = Number(inp.closest("tr").dataset.i), r = e.rutas[i];
         r[inp.dataset.r] = op.label; r[inp.dataset.r + "Coord"] = { lng: op.lng, lat: op.lat };
-        if (!desdeCatalogo(r, i) && r.origenCoord && r.destinoCoord) calcularRuta(r, i);
+        const cat = (r.origen && r.destino) ? rutaDelCatalogo(r.origen, r.destino) : null;
+        if (cat) desdeCatalogo(r, i);
+        // Se le pregunta a ORS salvo que el catálogo ya tenga sus km de ORS (ahorra cuota).
+        if (r.origenCoord && r.destinoCoord && !(cat && cat.kmOrs)) calcularRuta(r, i);
       });
     });
     $("#co-cuerpo").querySelectorAll("[data-mapa]").forEach(b => b.addEventListener("click", () => abrirMapa(Number(b.dataset.mapa), !!original && !puedeEditarRuta(Number(b.dataset.mapa), original))));
@@ -667,6 +671,12 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     return !(original && r.agregadaMs && (original.rutas || []).some(x => x.agregadaMs === r.agregadaMs && x.origen === r.origen && x.destino === r.destino));
   }
   function hint(i, t) { const h = $(`[data-hint="${i}"]`); if (h) h.textContent = t; }
+  // Catálogo y ORS no coinciden: muestra los dos y un botón para usar el de ORS.
+  function hintComparar(i, r, kmCat) {
+    const h = $(`[data-hint="${i}"]`); if (!h) return;
+    h.innerHTML = `Catálogo ${miles(kmCat)} km · ORS ${miles(r.kmOrs)} km <button type="button" class="co-link" style="font-size:12px;">usar ${miles(r.kmOrs)}</button>`;
+    h.querySelector("button").addEventListener("click", () => { r.km = r.kmOrs; pintarFila(i); hint(i, `${miles(r.kmOrs)} km por ORS (camión)`); });
+  }
   function pintarFila(i) {
     const r = editor.rutas[i], tr = $(`tr[data-i="${i}"]`);
     if (!tr) return;
@@ -696,7 +706,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       const cat = rutaDelCatalogo(r.origen, r.destino);
       if (cat && cat.km && !(r.vias || []).length) {
         r.km = cat.km;
-        hint(i, Math.abs(cat.km - res.km) > 50 ? `Catálogo: ${miles(cat.km)} km · ORS calcula ${miles(res.km)} km` : "del catálogo");
+        if (cat.km !== res.km) hintComparar(i, r, cat.km); else hint(i, "del catálogo · igual a ORS");
       } else {
         r.km = res.km;
         hint(i, `${cat ? "Con vías" : "Ruta nueva"} · ${miles(res.km)} km por ORS (camión)`);
@@ -707,12 +717,24 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
   }
   // Lista de sugerencias de ORS debajo de un campo (sin redibujar la pantalla).
   function autocompletar(inp, alElegir) {
-    const caja = inp.closest(".co-ac") || inp.parentElement;
     let lista = null, timer = null, ops = [], sel = -1;
     const cerrar = () => { if (lista) { lista.remove(); lista = null; } sel = -1; };
+    // La lista flota sobre la página (position:fixed en <body>): la tabla de rutas tiene su
+    // propio desplazamiento y la recortaba.
+    const ubicar = () => {
+      if (!lista) return;
+      const b = inp.getBoundingClientRect();
+      lista.style.left = b.left + "px"; lista.style.width = Math.max(b.width, 260) + "px";
+      const abajo = window.innerHeight - b.bottom;
+      if (abajo < 200 && b.top > abajo) { lista.style.top = ""; lista.style.bottom = (window.innerHeight - b.top) + "px"; }
+      else { lista.style.bottom = ""; lista.style.top = b.bottom + "px"; }
+    };
+    window.addEventListener("scroll", ubicar, true);
+    window.addEventListener("resize", ubicar);
     const pintar = () => {
       if (!ops.length) return cerrar();
-      if (!lista) { lista = document.createElement("div"); lista.className = "co-ac-lista"; caja.appendChild(lista); }
+      if (!lista) { lista = document.createElement("div"); lista.className = "co-ac-lista"; document.body.appendChild(lista); }
+      ubicar();
       lista.innerHTML = ops.map((o, k) => `<div data-k="${k}" class="${k === sel ? "activo" : ""}">${esc(o.label)}</div>`).join("");
       lista.querySelectorAll("[data-k]").forEach(d => d.addEventListener("mousedown", (ev) => { ev.preventDefault(); elegir(Number(d.dataset.k)); }));
     };
@@ -807,7 +829,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       const td = $(`[data-ing="${i}"]`); if (!td) return;
       const v = ingresoKm(r, editor.moneda, editor.tipoCambio);
       td.innerHTML = `<span class="co-sem ${semaforo(v)}"></span><b>${v == null ? "—" : dinero(v)}</b>`;
-      const t = $(`[data-tipo="${i}"]`); if (t) t.textContent = num(r.km) ? (num(r.km) < KM_RUTA_LARGA ? "corta" : "larga") : "";
+      const t = $(`[data-tipo="${i}"]`); if (t) t.textContent = tipoRutaTxt(num(r.km));
     });
   }
 
