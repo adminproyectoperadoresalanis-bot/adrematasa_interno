@@ -891,8 +891,11 @@ service cloud.firestore {
                     && getAfter(/databases/$(database)/documents/com_contadores/$('cotizaciones_' + request.resource.data.anio)).data.ultimo
                          == request.resource.data.consecutivo;
       allow update: if puedeComercial() && esDuenoCotizacion(resource.data)
-                    && request.resource.data.diff(resource.data).unchangedKeys()
-                         .hasAll(['folio', 'consecutivo', 'anio', 'clienteId', 'creadoPorUid', 'creadoPor', 'creadoMs', 'emisionMs', 'vencimientoMs', 'moneda']);
+                    && (request.resource.data.diff(resource.data).unchangedKeys()
+                          .hasAll(['folio', 'consecutivo', 'anio', 'clienteId', 'creadoPorUid', 'creadoPor', 'creadoMs', 'emisionMs', 'vencimientoMs', 'moneda'])
+                        || (resource.data.estado == 'borrador'
+                            && request.resource.data.diff(resource.data).unchangedKeys()
+                                 .hasAll(['folio', 'consecutivo', 'anio', 'creadoPorUid', 'creadoPor', 'creadoMs', 'emisionMs'])));
       allow delete: if esAdmin();
     }
 

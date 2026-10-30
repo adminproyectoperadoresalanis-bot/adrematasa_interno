@@ -43,6 +43,9 @@ import { LOGO_ALANIS } from "./comercialLogo.js";
 // 2026-10-30: el PDF ya no muestra km (son internos). "Mi firma"
 // (com_firmas/{uid}): cada quien define el puesto y teléfono con que firma sus
 // cotizaciones, sin tocar el puesto del catálogo de usuarios (ese decide permisos).
+// 2026-10-30: en BORRADOR se edita todo (cliente, moneda, vigencia, servicio,
+// carga, rutas e importes). Desde ENVIADA queda bloqueada: solo se agregan rutas
+// y se cambia el estado. La fecha de emisión es la de creación del folio.
 // ============================================================================
 
 const COL_CLI = "com_clientes";
@@ -83,6 +86,8 @@ const ESTADOS = {
 const CARGAS = { refrigerada: "Refrigerada", seca: "Seca" };
 const SERVICIOS = { nacional: "Nacional", importacion: "Importación", exportacion: "Exportación" };
 const DIA = 864e5;
+const VIGENCIAS = [15, 30, 60, 90, 180, 365];
+const textoVigencia = (d) => Number(d) === 365 ? "1 año" : `${d} días`;
 
 // ---- Utilerías ----------------------------------------------------------------
 function esc(t) { const d = document.createElement("div"); d.textContent = t == null ? "" : String(t); return d.innerHTML; }
@@ -242,7 +247,7 @@ export async function generarPdf(cot, cliente, ajustes, firma) {
   // Condiciones
   y += 4;
   const condiciones = String(ajustes.condiciones || "").split(/\n+/).map(t => t.trim()).filter(Boolean);
-  condiciones.push(`Vigencia: ${cot.vigenciaDias} días (hasta el ${fechaLarga(cot.vencimientoMs)}).`);
+  condiciones.push(`Vigencia: ${textoVigencia(cot.vigenciaDias)} (hasta el ${fechaLarga(cot.vencimientoMs)}).`);
   if (cot.moneda === "USD") condiciones.push("Importes en dólares americanos (USD).");
   if (cot.notas) cot.notas.split(/\n+/).map(t => t.trim()).filter(Boolean).forEach(t => condiciones.push(t));
   if (y + 10 + condiciones.length * 5 > 250) { pdf.addPage(); y = 20; }
@@ -618,12 +623,11 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const original = e._id ? cotizaciones.get(e._id) : null;
     const puedeEditar = !original || esAdmin || original.creadoPorUid === uid;
     const vigente = !original || estadoDe(original) !== "vencida";
-    const bloqueada = !!original; // ya guardada: solo se agregan rutas y se cambia estado/notas
+    const bloqueada = !!original && original.estado !== "borrador"; // enviada o después: solo se agregan rutas y se cambia estado/notas
     const cli = clientes.get(e.clienteId);
     const lugares = [...new Set([...rutas.values()].flatMap(r => [r.origen, r.destino]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
     const seg = (campo, opciones, deshab) => `<span class="co-seg">${opciones.map(([v, t]) => `<button type="button" class="${String(e[campo]) === String(v) ? "activo" : ""}" data-campo="${campo}" data-valor="${v}"${deshab ? " disabled" : ""}>${t}</button>`).join("")}</span>`;
-    const vigOpc = [[15, "15 días"], [30, "30 días"], [60, "60 días"], [90, "90 días"]];
-    if (!vigOpc.some(([v]) => v === Number(e.vigenciaDias))) vigOpc.push([e.vigenciaDias, `${e.vigenciaDias} días`]);
+    const vigOpc = [...new Set([...VIGENCIAS, Number(e.vigenciaDias)])].filter(Boolean).sort((a, b) => a - b);
     $("#co-cuerpo").innerHTML = `
       <button type="button" class="co-link" id="co-e-volver">‹ Volver</button>
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;margin-top:8px;">
@@ -636,7 +640,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
         <div><label>Contacto (sale en el PDF)</label><select id="co-e-cont"><option value="">Sin contacto</option>${((cli && cli.contactos) || []).map((k, i) => `<option value="${i}"${e.contacto && e.contacto.nombre === k.nombre ? " selected" : ""}>${esc(k.nombre)}${k.puesto ? " · " + esc(k.puesto) : ""}</option>`).join("")}</select></div>
         <div><label>Moneda</label>${seg("moneda", [["MXN", "MXN"], ["USD", "USD"]], bloqueada)}
           ${e.moneda === "USD" ? `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;"><small class="nota">TC para ing./km</small><input type="number" step="0.01" id="co-e-tc" value="${esc(e.tipoCambio)}" style="width:90px;"${bloqueada ? " disabled" : ""}></div>` : ""}</div>
-        <div><label>Vigencia</label>${seg("vigenciaDias", vigOpc, bloqueada)}</div>
+        <div><label>Vigencia</label><select id="co-e-vig"${bloqueada ? " disabled" : ""} style="width:auto;min-width:140px;">${vigOpc.map(d => `<option value="${d}"${d === Number(e.vigenciaDias) ? " selected" : ""}>${textoVigencia(d)}</option>`).join("")}</select></div>
         <div><label>Tipo de carga</label>${seg("tipoCarga", Object.entries(CARGAS), bloqueada)}</div>
         <div><label>Servicio</label>${seg("tipoServicio", Object.entries(SERVICIOS), bloqueada)}</div>
       </div>
@@ -662,6 +666,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
             <td>${fija ? "" : `<button type="button" class="secundario co-mini" data-qr="${i}" title="Quitar ruta">✕</button>`}</td></tr>`;
         }).join("")}</tbody></table></div>
       ${puedeEditar && vigente ? `<button type="button" class="secundario co-mini" id="co-e-mas" style="margin-top:8px;">+ Agregar ruta</button>` : ""}
+      ${original && !bloqueada ? `<p class="nota">Está en borrador: puedes cambiar todo. Al pasarla a Enviada, las rutas guardadas quedan fijas.</p>` : ""}
       ${bloqueada && vigente ? `<p class="nota">Ya tiene folio: las rutas guardadas no cambian; puedes agregar rutas nuevas mientras siga vigente (salen en el PDF con su fecha). Para cambiar importes, usa "Duplicar".</p>` : ""}
       <div class="co-grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-top:14px;">
         <div class="co-campo"><label>Notas para el cliente (salen en el PDF)</label><textarea id="co-e-notas" rows="3">${esc(e.notas || "")}</textarea></div>
@@ -692,6 +697,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       const cli = clientes.get(e.clienteId); const k = cli && (cli.contactos || [])[Number(ev.target.value)];
       e.contacto = ev.target.value === "" || !k ? null : { nombre: k.nombre || "", puesto: k.puesto || "", correo: k.correo || "" };
     });
+    $("#co-e-vig").addEventListener("change", (ev) => { e.vigenciaDias = Number(ev.target.value); });
     $("#co-cuerpo").querySelectorAll("[data-campo]").forEach(b => b.addEventListener("click", () => {
       const c = b.dataset.campo; e[c] = c === "vigenciaDias" ? Number(b.dataset.valor) : b.dataset.valor; leerFormulario();
       if (c === "tipoServicio" || c === "moneda") e.rutas.forEach(r => { if (r.importeAuto) { r.importe = ""; autoImporte(r); } });
@@ -742,7 +748,8 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
   const geo = new WeakMap(); // ruta del editor → trazo [[lat, lng]] (solo en memoria)
   function puedeEditarRuta(i, original) {
     const r = editor.rutas[i];
-    return !(original && r.agregadaMs && (original.rutas || []).some(x => x.agregadaMs === r.agregadaMs && x.origen === r.origen && x.destino === r.destino));
+    if (!original || original.estado === "borrador") return true;
+    return !(r.agregadaMs && (original.rutas || []).some(x => x.agregadaMs === r.agregadaMs && x.origen === r.origen && x.destino === r.destino));
   }
   function hint(i, t) { const h = $(`[data-hint="${i}"]`); if (h) h.textContent = t; }
   // Catálogo y ORS no coinciden: muestra los dos y un botón para usar el de ORS.
@@ -951,7 +958,17 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     try {
       let guardada;
       if (e._id) {
-        const cambios = { rutas: limpias, estado: e.estado, notas: e.notas.trim() || null, contacto: e.contacto || null, actualizadoMs: ahora, actualizadoPor: { uid, nombre: yo.nombre } };
+        const antes = cotizaciones.get(e._id);
+        let cambios = { rutas: limpias, estado: e.estado, notas: e.notas.trim() || null, contacto: e.contacto || null, actualizadoMs: ahora, actualizadoPor: { uid, nombre: yo.nombre } };
+        if (antes && antes.estado === "borrador") {
+          // Borrador: se reescribe todo; las rutas cuentan desde la emisión (no salen como "agregadas").
+          cambios = {
+            ...cambios, clienteId: cli.id, clienteNombre: cli.nombre, clienteRfc: cli.rfc || null,
+            tipoCarga: e.tipoCarga, tipoServicio: e.tipoServicio, moneda: e.moneda, tipoCambio: e.moneda === "USD" ? num(e.tipoCambio) : 1,
+            vigenciaDias: Number(e.vigenciaDias), vencimientoMs: antes.emisionMs + Number(e.vigenciaDias) * DIA,
+            rutas: limpias.map(r => ({ ...r, agregadaMs: antes.emisionMs })),
+          };
+        }
         await updateDoc(doc(db, COL_COT, e._id), cambios);
         guardada = { ...cotizaciones.get(e._id), ...cambios };
       } else {
@@ -1067,7 +1084,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
             <tbody>${Object.entries(SERV_UMBRAL).map(([sv, k]) => `<tr><td>${esc(SERVICIOS[sv])}</td>${["rc_verde", "rc_ambar", "rl_verde", "rl_ambar"].map(c => `<td class="n"><input type="number" step="0.01" min="0" data-umbral="${k}_${c}" value="${esc(umbralDe(ajustes, sv, c.startsWith("rc") ? 1 : 999)[c.endsWith("verde") ? "verde" : "ambar"])}" style="width:90px;"></td>`).join("")}</tr>`).join("")}</tbody>
           </table></div><small class="nota">RC = 350 km o menos · RL = 351 km o más.</small></div>
         <div><label>Tipo de cambio sugerido</label><input type="number" step="0.01" id="aj-tc" value="${esc(ajustes.tipoCambio)}"></div>
-        <div><label>Vigencia por omisión (días)</label><input type="number" min="1" id="aj-vig" value="${esc(ajustes.vigenciaDias)}"></div>
+        <div><label>Vigencia por omisión</label><select id="aj-vig">${[...new Set([...VIGENCIAS, Number(ajustes.vigenciaDias)])].sort((x, y) => x - y).map(d => `<option value="${d}"${d === Number(ajustes.vigenciaDias) ? " selected" : ""}>${textoVigencia(d)}</option>`).join("")}</select></div>
         <div style="grid-column:1/-1;"><label>Clave de OpenRouteService (km por camión y mapa)</label><input type="text" id="aj-ors" value="${esc(ajustes.orsKey || "")}" placeholder="Pega aquí la clave de openrouteservice.org" autocomplete="off"></div>
         <div style="grid-column:1/-1;"><label>Condiciones que salen en todos los PDF (una por renglón)</label><textarea id="aj-cond" rows="5">${esc(ajustes.condiciones)}</textarea></div>
       </div>
