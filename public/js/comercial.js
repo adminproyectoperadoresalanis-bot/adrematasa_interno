@@ -39,6 +39,10 @@ import { LOGO_ALANIS } from "./comercialLogo.js";
 // = km × umbral verde (en USD se divide entre el TC de la cotización). Se llena
 // solo mientras no escribas un importe; si lo escribes, queda el tuyo y abajo
 // aparece la sugerida con "usar".
+//
+// 2026-10-30: el PDF ya no muestra km (son internos). "Mi firma"
+// (com_firmas/{uid}): cada quien define el puesto y teléfono con que firma sus
+// cotizaciones, sin tocar el puesto del catálogo de usuarios (ese decide permisos).
 // ============================================================================
 
 const COL_CLI = "com_clientes";
@@ -46,6 +50,7 @@ const COL_COT = "com_cotizaciones";
 const COL_RUT = "com_rutas";
 const COL_CFG = "com_config";
 const COL_CONT = "com_contadores";
+const COL_FIR = "com_firmas";
 const URL_JSPDF = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
 const URL_LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
 const URL_LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
@@ -185,7 +190,9 @@ function inyectarEstilos() {
 // ---- PDF ----------------------------------------------------------------------
 // Una hoja carta (o más si hay muchas rutas): logo, folio, cliente, tabla de
 // rutas, condiciones y firma de quien cotizó. Sin ingreso/km (es interno).
-export async function generarPdf(cot, cliente, ajustes) {
+// firma: { nombre, puesto, telefono, correo } de quien hizo la cotización (Mi firma);
+// si no la ha definido, se usa lo guardado en la cotización.
+export async function generarPdf(cot, cliente, ajustes, firma) {
   const { jsPDF } = await cargarScript(URL_JSPDF, "jspdf");
   const pdf = new jsPDF({ unit: "mm", format: "letter" });
   const CAFE = [44, 30, 15], GRIS = [110, 98, 86];
@@ -209,7 +216,7 @@ export async function generarPdf(cot, cliente, ajustes) {
   pdf.splitTextToSize(intro, X1 - X0).forEach(l => { pdf.text(l, X0, y); y += 4.6; });
   y += 3;
   // Tabla
-  const cols = [{ t: "Origen", x: X0 + 2 }, { t: "Destino", x: X0 + 64 }, { t: "Km", x: 150, d: true }, { t: "Tarifa por viaje", x: X1 - 2, d: true }];
+  const cols = [{ t: "Origen", x: X0 + 2 }, { t: "Destino", x: X0 + 74 }, { t: "Tarifa por viaje", x: X1 - 2, d: true }];
   const cabecera = () => {
     pdf.setFillColor(245, 239, 230); pdf.rect(X0, y - 4.5, X1 - X0, 7, "F");
     pdf.setFont("helvetica", "bold"); pdf.setFontSize(8.8); pdf.setTextColor(...CAFE);
@@ -218,16 +225,15 @@ export async function generarPdf(cot, cliente, ajustes) {
   };
   cabecera();
   (cot.rutas || []).forEach(r => {
-    const o = pdf.splitTextToSize(r.origen || "", 58), d = pdf.splitTextToSize(r.destino || "", 58);
+    const o = pdf.splitTextToSize(r.origen || "", 68), d = pdf.splitTextToSize(r.destino || "", 66);
     const nueva = r.agregadaMs && cot.emisionMs && r.agregadaMs - cot.emisionMs > DIA / 2;
     const alto = Math.max(o.length, d.length) * 4.4 + (nueva ? 3.6 : 0) + 2.6;
     if (y + alto > 238) { pdf.addPage(); y = 20; cabecera(); }
     pdf.setFontSize(9.2);
     o.forEach((l, i) => pdf.text(l, cols[0].x, y + i * 4.4));
     d.forEach((l, i) => pdf.text(l, cols[1].x, y + i * 4.4));
-    pdf.text(r.km != null ? miles(r.km) : "—", cols[2].x, y, { align: "right" });
     pdf.setFont("helvetica", "bold");
-    pdf.text(`${dinero(num(r.importe), cot.moneda)} ${cot.moneda}`, cols[3].x, y, { align: "right" });
+    pdf.text(`${dinero(num(r.importe), cot.moneda)} ${cot.moneda}`, cols[2].x, y, { align: "right" });
     pdf.setFont("helvetica", "normal");
     if (nueva) { pdf.setFontSize(7.5); pdf.setTextColor(...GRIS); pdf.text(`Ruta agregada el ${fecha(r.agregadaMs)}`, cols[0].x, y + Math.max(o.length, d.length) * 4.4); pdf.setTextColor(40, 34, 28); }
     y += alto;
@@ -247,10 +253,10 @@ export async function generarPdf(cot, cliente, ajustes) {
   if (y + 30 > 262) { pdf.addPage(); y = 20; }
   y += 8;
   pdf.text("Quedo a sus órdenes.", X0, y); y += 10;
-  const f = cot.creadoPor || {};
+  const f = { ...(cot.creadoPor || {}), ...Object.fromEntries(Object.entries(firma || {}).filter(([, v]) => v)) };
   pdf.setFont("helvetica", "bold"); pdf.setTextColor(...CAFE); pdf.text(f.nombre || "", X0, y); y += 4.8;
   pdf.setFont("helvetica", "normal"); pdf.setTextColor(40, 34, 28);
-  [f.puesto, "Autotransportes Alanis", f.correo].filter(Boolean).forEach(t => { pdf.text(t, X0, y); y += 4.6; });
+  [f.puesto, "Autotransportes Alanis", [f.correo, f.telefono].filter(Boolean).join(" · ")].filter(Boolean).forEach(t => { pdf.text(t, X0, y); y += 4.6; });
   // Pie
   const paginas = pdf.getNumberOfPages();
   for (let p = 1; p <= paginas; p++) {
@@ -270,7 +276,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     <section class="panel">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
         <div><h2 style="margin:0;">Comercial</h2><p class="nota" style="margin:3px 0 0;">Clientes, cotizaciones y rutas.${esAdmin ? "" : " Ves solo tus cotizaciones."}</p></div>
-        <button type="button" id="co-nueva">+ Nueva cotización</button>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;"><button type="button" class="secundario" id="co-firma">Mi firma</button><button type="button" id="co-nueva">+ Nueva cotización</button></div>
       </div>
       <div class="co-tabs" id="co-tabs"></div>
       <div id="co-error" class="error"></div>
@@ -297,6 +303,9 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
   cancelar.push(onSnapshot(qCot, (s) => { cotizaciones = new Map(s.docs.map(d => [d.id, { id: d.id, ...d.data() }])); render(); },
     (e) => error("No se pudieron leer las cotizaciones: " + e.message)));
   cancelar.push(onSnapshot(collection(db, COL_RUT), (s) => { rutas = new Map(s.docs.map(d => [d.id, { id: d.id, ...d.data() }])); if (tab === "rutas") render(); }, () => {}));
+  let firmas = new Map(); // uid → { puesto, telefono }
+  cancelar.push(onSnapshot(collection(db, COL_FIR), (s) => { firmas = new Map(s.docs.map(d => [d.id, d.data()])); }, () => {}));
+  const firmaDe = (uidCreador) => firmas.get(uidCreador) || null;
   cancelar.push(onSnapshot(doc(db, COL_CFG, "ajustes"), (s) => { ajustes = { ...AJUSTES_BASE, ...(s.exists() ? s.data() : {}) }; if (tab === "ajustes") render(); }, () => {}));
   const vigilar = setInterval(() => { if (!contenedor.isConnected) { clearInterval(vigilar); cancelar.forEach(c => c()); } }, 3000);
 
@@ -333,6 +342,32 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     return renderClientes();
   }
   $("#co-nueva").addEventListener("click", () => abrirEditor(null));
+  $("#co-firma").addEventListener("click", () => {
+    const m = firmaDe(uid) || {};
+    const ov = document.createElement("div");
+    ov.className = "modal-overlay";
+    ov.innerHTML = `<div class="modal-tarjeta" style="max-width:480px;width:100%;">
+      <h2 style="margin:0 0 4px;">Mi firma</h2>
+      <p class="nota" style="margin:0 0 12px;">Así sales al final de tus cotizaciones. No cambia tu puesto en el catálogo de usuarios.</p>
+      <div class="co-grid" style="grid-template-columns:1fr;">
+        <div><label>Nombre</label><input type="text" value="${esc(yo.nombre)}" disabled></div>
+        <div><label>Puesto en la cotización</label><input type="text" id="fi-puesto" value="${esc(m.puesto || yo.puesto || "")}" placeholder="Gerente de Operaciones"></div>
+        <div><label>Teléfono (opcional)</label><input type="tel" id="fi-tel" value="${esc(m.telefono || "")}" placeholder="867 711 6565"></div>
+        <div><label>Correo</label><input type="text" value="${esc(yo.correo)}" disabled></div>
+      </div>
+      <div class="error" id="fi-err"></div>
+      <div class="modal-acciones"><button type="button" class="secundario" data-cerrar>Cancelar</button><button type="button" id="fi-ok">Guardar</button></div></div>`;
+    document.body.appendChild(ov);
+    ov.querySelector("[data-cerrar]").addEventListener("click", () => ov.remove());
+    ov.querySelector("#fi-ok").addEventListener("click", async () => {
+      const puesto = ov.querySelector("#fi-puesto").value.trim(), telefono = ov.querySelector("#fi-tel").value.trim();
+      if (!puesto) { ov.querySelector("#fi-err").textContent = "Escribe tu puesto."; return; }
+      try {
+        await setDoc(doc(db, COL_FIR, uid), { nombre: yo.nombre, puesto, telefono: telefono || null, correo: yo.correo, actualizadoMs: Date.now() });
+        ov.remove(); avisar("Firma guardada. Sale así en tus cotizaciones (también en las que ya tenías).");
+      } catch (x) { ov.querySelector("#fi-err").textContent = "No se pudo guardar: " + x.message; }
+    });
+  });
 
   // ============================================================================
   // Clientes
@@ -950,7 +985,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       }
       avisar(`Cotización ${guardada.folio} guardada.`);
       editor = null; fichaId = cli.id; render();
-      if (conPdf) await generarPdf(guardada, cli, ajustes);
+      if (conPdf) await generarPdf(guardada, cli, ajustes, firmaDe(guardada.creadoPorUid));
     } catch (x) {
       err.textContent = "No se pudo guardar: " + x.message;
       botones.forEach(b => b.disabled = false);
@@ -959,7 +994,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
   async function pdfDe(id) {
     const c = cotizaciones.get(id);
     if (!c) return;
-    try { await generarPdf(c, clientes.get(c.clienteId), ajustes); }
+    try { await generarPdf(c, clientes.get(c.clienteId), ajustes, firmaDe(c.creadoPorUid)); }
     catch (x) { error("No se pudo generar el PDF: " + x.message); }
   }
 

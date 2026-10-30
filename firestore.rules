@@ -871,6 +871,10 @@ service cloud.firestore {
       allow read: if puedeComercial();
       allow write: if esAdmin();
     }
+    match /com_firmas/{uid} {
+      allow read: if puedeComercial();
+      allow write: if puedeComercial() && request.auth.uid == uid;
+    }
     match /com_contadores/{id} {
       allow read: if puedeComercial();
       allow create: if puedeComercial() && request.resource.data.ultimo == 1;
