@@ -852,6 +852,46 @@ service cloud.firestore {
       allow update, delete: if esAdmin();
     }
 
+    // Comercial (2026-10-30): clientes, cotizaciones, rutas, ajustes y folio.
+    function puedeComercial() {
+      return usuarioActivoValido() && tieneAccesoUtilidad('comercial');
+    }
+    function esDuenoCotizacion(datos) {
+      return esAdmin() || datos.creadoPorUid == request.auth.uid;
+    }
+    match /com_clientes/{id} {
+      allow read, create, update: if puedeComercial();
+      allow delete: if esAdmin();
+    }
+    match /com_rutas/{id} {
+      allow read, create, update: if puedeComercial();
+      allow delete: if esAdmin();
+    }
+    match /com_config/{id} {
+      allow read: if puedeComercial();
+      allow write: if esAdmin();
+    }
+    match /com_contadores/{id} {
+      allow read: if puedeComercial();
+      allow create: if puedeComercial() && request.resource.data.ultimo == 1;
+      allow update: if puedeComercial() && request.resource.data.ultimo == resource.data.ultimo + 1;
+      allow delete: if false;
+    }
+    match /com_cotizaciones/{id} {
+      allow read: if puedeComercial() && esDuenoCotizacion(resource.data);
+      allow create: if puedeComercial()
+                    && request.resource.data.creadoPorUid == request.auth.uid
+                    && request.resource.data.folio == id
+                    && request.resource.data.consecutivo is int
+                    && request.resource.data.anio is string
+                    && getAfter(/databases/$(database)/documents/com_contadores/$('cotizaciones_' + request.resource.data.anio)).data.ultimo
+                         == request.resource.data.consecutivo;
+      allow update: if puedeComercial() && esDuenoCotizacion(resource.data)
+                    && request.resource.data.diff(resource.data).unchangedKeys()
+                         .hasAll(['folio', 'consecutivo', 'anio', 'clienteId', 'creadoPorUid', 'creadoPor', 'creadoMs', 'emisionMs', 'vencimientoMs', 'moneda']);
+      allow delete: if esAdmin();
+    }
+
     match /bitacora_acciones_operadores/{id} {
       allow read: if esAdmin();
       allow write: if false;

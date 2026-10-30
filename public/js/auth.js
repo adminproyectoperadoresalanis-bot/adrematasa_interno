@@ -37,6 +37,7 @@ import { iniciarTurnos } from "./turnos.js";
 import { iniciarAsignacion } from "./asignacion.js";
 import { iniciarRentabilidad } from "./rentabilidad.js";
 import { iniciarMantenimiento } from "./mantenimiento.js";
+import { iniciarComercial } from "./comercial.js";
 import "./actualizacion.js"; // 2026-10-28: cinta "Hay una versión nueva"
 import { iniciarAsistencia } from "./asistencia.js";
 import { iniciarInventario } from "./inventario.js";
@@ -426,6 +427,7 @@ onAuthStateChanged(auth, async (user) => {
       operadoresAsistencia: (c) => iniciarAsistencia(c),
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       mantenimiento: (c) => iniciarMantenimiento(c, datosUsuario, user.uid),
+      comercial: (c) => iniciarComercial(c, datosUsuario, user.uid, user.email),
       panel: (c) => iniciarPanelResumenAdmin(c),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarGestionSolicitudes(d, user.uid, datosUsuario.nombre),
@@ -461,6 +463,7 @@ onAuthStateChanged(auth, async (user) => {
       operadoresAsistencia: (c) => iniciarAsistencia(c),
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       mantenimiento: (c) => iniciarMantenimiento(c, datosUsuario, user.uid),
+      comercial: (c) => iniciarComercial(c, datosUsuario, user.uid, user.email),
       horasExtra: (c) => iniciarVistaEmpleado(c, datosUsuario, user.uid),
       vacaciones: (c) => iniciarVistaVacacionesEmpleado(c, datosUsuario, user.uid),
       faltas: (c) => iniciarVistaEmpleadoFaltas(c, datosUsuario, user.uid)
@@ -485,6 +488,7 @@ onAuthStateChanged(auth, async (user) => {
       operadoresAsistencia: (c) => iniciarAsistencia(c),
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       mantenimiento: (c) => iniciarMantenimiento(c, datosUsuario, user.uid),
+      comercial: (c) => iniciarComercial(c, datosUsuario, user.uid, user.email),
       panel: (c) => iniciarPanelResumenSupervisor(c, user.uid),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarVistaSupervisor(d, user.uid, datosUsuario.nombre),

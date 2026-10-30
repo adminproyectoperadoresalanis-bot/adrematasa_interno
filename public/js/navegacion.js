@@ -38,6 +38,8 @@
 // 2026-10-28 (pedido de Ivan): "Rentabilidad" (rentabilidad.js), SOLO para su
 // cuenta. No va en OPCIONES_UTILIDADES (no sale en la tabla de accesos por
 // área); solo está en la lista del admin y se quita si el correo no es el suyo.
+// 2026-10-30 (pedido de Ivan): "Comercial" (comercial.js): clientes,
+// cotizaciones y rutas; reemplaza al CRM viejo. Quién entra: tabla de accesos.
 
 // Catálogo de opciones de Utilidades — lo usa configuracion.js para armar las
 // columnas de la tabla de accesos. Al agregar una opción nueva basta con
@@ -48,7 +50,8 @@ export const OPCIONES_UTILIDADES = [
   { id: "operadores", etiqueta: "Operadores" },
   { id: "trafico", etiqueta: "Tráfico" },
   { id: "inventario", etiqueta: "Inventario" },
-  { id: "mantenimiento", etiqueta: "Mantenimiento" }
+  { id: "mantenimiento", etiqueta: "Mantenimiento" },
+  { id: "comercial", etiqueta: "Comercial" }
 ];
 
 const SVG = (contenido) =>
@@ -66,6 +69,7 @@ const ICONOS = {
   operadores: SVG(`<rect x="1" y="6" width="14" height="10" rx="1"/><path d="M15 9h4l3 3v4h-7"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/>`),
   inventario: SVG(`<path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>`),
   mantenimiento: SVG(`<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/>`),
+  comercial: SVG(`<path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><path d="M2 13h20"/>`),
   rentabilidad: SVG(`<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-6"/><path d="M16 8h4v4"/>`),
   trafico: SVG(`<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>`),
   validacionQR: SVG(`<path d="M3 7V4a1 1 0 0 1 1-1h3"/><path d="M17 3h3a1 1 0 0 1 1 1v3"/><path d="M21 17v3a1 1 0 0 1-1 1h-3"/><path d="M7 21H4a1 1 0 0 1-1-1v-3"/><rect x="7" y="7" width="10" height="10" rx="1"/>`),
@@ -196,6 +200,14 @@ const OPCION_MANTENIMIENTO = {
   pantalla: "mantenimiento"
 };
 
+// Comercial (2026-10-30): clientes, cotizaciones y rutas (comercial.js).
+const OPCION_COMERCIAL = {
+  id: "comercial",
+  etiqueta: "Comercial",
+  descripcion: "Clientes · Cotizaciones · Rutas",
+  pantalla: "comercial"
+};
+
 // Rentabilidad (2026-10-28): solo la cuenta de Ivan (soloCorreo).
 const CORREO_RENTABILIDAD = "ilanda@alanis.com.mx";
 const OPCION_RENTABILIDAD = {
@@ -229,15 +241,15 @@ const TABS_POR_ROL = {
   // El empleado solo tiene "Utilidades": con un solo botón el menú inferior
   // no aporta nada, así que se oculta y entra directo a las tarjetas.
   empleado: [
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO] }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO, OPCION_COMERCIAL] }
   ],
   supervisor: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES, CONSULTA_SUPERVISOR), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO] }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES, CONSULTA_SUPERVISOR), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO, OPCION_COMERCIAL] }
   ],
   admin: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO, OPCION_RENTABILIDAD] },
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO, OPCION_COMERCIAL, OPCION_RENTABILIDAD] },
     { id: "configuracion", etiqueta: "Configuración" }
   ]
 };
