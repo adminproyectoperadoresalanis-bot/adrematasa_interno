@@ -33,28 +33,47 @@ import { leerFactura, paginasDePdf, calcular, repartosDeFactura } from "./rentab
 // Porte, o "Se entrega en" con guion; el cobro es el concepto REPARTO /
 // RECOLECCION. La zona la decide el destino FINAL (última parada) y se marca
 // "vía reparto". Alertas: reparto sin cobro y conteo distinto salida ≠ PDF.
+//
+// 2026-10-30 (replanteo con Ivan): el reparto lo define SOLO la salida del
+// Adrematasa. Cada RECORRIDO (paradas antes del destino final) es su propio
+// renglón en Tarifas: "Cunduacán directo" ≠ "MTY → CUL → GDL → Cunduacán".
+// Las paradas se normalizan con equivalencias (MONTERREY = MTY) guardadas en
+// rentabilidad_config/paradas.
+// REFACTURAS: la refactura trae otra carta porte (TAIM) que la salida. Si la
+// carta porte no coincide, la factura se liga con la salida del mismo remolque
+// y mismo sello (o misma unidad) en fechas cercanas; si hay varias, se elige a
+// mano. Ligas manuales en rentabilidad_config/ligas.
 // ============================================================================
 
 // Paradas de una salida del Adrematasa: el destino partido por "-".
 function paradasSalida(x) {
   return String((x && x.destino) || "").split("-").map(t => t.replace(/\s+/g, " ").trim()).filter(Boolean);
 }
-// Reparto de un viaje combinando salida y factura (cualquiera puede faltar).
-function infoReparto(f, salida) {
+// Reparto de un viaje: lo define SOLO la salida (2026-10-30). canon() normaliza
+// el nombre de cada parada (equivalencias). La factura aporta el cobro.
+function infoReparto(f, salida, canon = (p) => p) {
   const rf = f ? repartosDeFactura(f) : { numero: 0, paradas: [], fuente: "", cobro: 0 };
-  const ps = salida ? paradasSalida(salida) : [];
-  const rs = salida ? Math.max(ps.length - 1, 0) : null;
-  const numero = Math.max(rs || 0, rf.numero);
-  const paradas = rs ? ps : rf.paradas;
+  const paradas = salida ? paradasSalida(salida).map(canon) : [];
+  const numero = Math.max(paradas.length - 1, 0);
   const mon = (f && f.moneda) || "MXN";
   const tc = mon === "MXN" ? 1 : ((f && f.tipoCambio) || 1);
   return {
-    numero, paradas, rs, rf,
+    numero, paradas, intermedias: paradas.slice(0, -1), final: paradas[paradas.length - 1] || "", rf,
     cobroMxn: Math.round(rf.cobro * tc * 100) / 100,
     sinCobro: !!f && numero > 0 && !rf.cobro,
-    noCoincide: !!f && rs != null && rf.fuente !== "" && rs !== rf.numero,
   };
 }
+// Sello "AAA214764661/662" → ["AAA214764661", "AAA214764662"] (el corto completa la cola del anterior).
+function sellos(t) {
+  const out = [];
+  String(t || "").toUpperCase().split(/[\/,;\s]+/).filter(Boolean).forEach(tok => {
+    const ant = out[out.length - 1];
+    if (ant && /^\d+$/.test(tok) && tok.length < ant.length) out.push(ant.slice(0, ant.length - tok.length) + tok);
+    else out.push(tok);
+  });
+  return out.filter(x => x.length >= 4);
+}
+const soloDigitos = (t) => String(t || "").replace(/\D/g, "").replace(/^0+/, "");
 
 const COL = "rentabilidad_facturas";
 const COL_SALIDAS = "rentabilidad_salidas";
@@ -204,6 +223,7 @@ function inyectarEstilos() {
     .re-seca { background:#F3E9D7; color:#7a4a12; } .re-refri { background:#DDEEFB; color:#0C447C; }
     .re-parada { display:inline-block; font-size:11px; padding:1px 7px; border-radius:8px; background:#F2EDE6; margin:1px 3px 1px 0; }
     .re-rep { background:#FFE7C2; color:#8a4b00; }
+    .re-col-rec { background:#FFF8EC; min-width:160px; }
     .re-pegar { width:100%; box-sizing:border-box; min-height:120px; font-family:monospace; font-size:11.5px; white-space:pre; }
   `;
   document.head.appendChild(s);
@@ -215,12 +235,12 @@ function htmlRepartos(f, salida) {
   const tramos = ((f.cartaPorte || {}).tramos || []);
   if (!r.numero && tramos.length < 2) return "";
   const mon = f.moneda || "MXN";
-  return `<div class="re-h3">Repartos · ${r.numero} reparto${r.numero === 1 ? "" : "s"}
-      ${r.sinCobro ? ` <span class="re-chip re-rojo">SIN COBRO DE REPARTO</span>` : ""}${r.noCoincide ? ` <span class="re-chip re-ambar">SALIDA ${r.rs} · PDF ${r.rf.numero}</span>` : ""}</div>
+  return `<div class="re-h3">Repartos · ${r.numero ? `${r.numero} reparto${r.numero === 1 ? "" : "s"} (según la salida)` : "la salida no trae reparto"}
+      ${r.sinCobro ? ` <span class="re-chip re-rojo">SIN COBRO DE REPARTO</span>` : ""}</div>
     <div class="re-campos">
       ${tramos.length > 1 ? `<span>Carta porte</span><div>${tramos.map((t, n) => `${n + 1}. ${esc(t.origenLugar || t.origen)} → <b>${esc(t.destinoLugar || t.destino)}</b> <small class="nota">${esc(t.destino)}</small>`).join("<br>")}</div>` : ""}
       ${(f.destinatario || {}).seEntregaEn ? `<span>Se entrega en</span><div>${esc(f.destinatario.seEntregaEn)}</div>` : ""}
-      ${salida ? `<span>Adrematasa</span><div>${esc(salida.destino || "—")}${r.rs ? ` · ${r.rs} reparto${r.rs === 1 ? "" : "s"}` : " · directo"}</div>` : ""}
+      ${salida ? `<span>Adrematasa</span><div>${esc(salida.destino || "—")}${r.numero ? ` · ${r.numero} reparto${r.numero === 1 ? "" : "s"}` : " · directo"}</div>` : ""}
       <span>Cobro</span><div>${r.rf.cobro ? `${dinero(r.rf.cobro, mon)}${r.numero ? ` · ${dinero(r.rf.cobro / r.numero, mon)} por reparto` : ""}` : "No trae concepto de reparto"}</div>
     </div>`;
 }
@@ -237,6 +257,7 @@ function htmlDetalle(f, salida) {
   const cli = f.cliente || {}, fis = f.fiscal || {}, rem = f.remitente || {}, des = f.destinatario || {};
   return `
     <div style="margin-top:10px;font-size:13px;"><span class="re-chip ${TIPO[tipo].clase}">${TIPO[tipo].txt}</span>
+      ${salida && f.cartaPorteFolio && salida.factura !== String(f.cartaPorteFolio).toUpperCase() ? ` <span class="re-chip re-ambar">REFACTURA</span> <span class="nota">Salida ${esc(salida.factura)} (la factura trae ${esc(f.cartaPorteFolio)})${salida._liga ? " · " + esc(salida._liga) : ""}.</span><br>` : ""}
       ${salida ? ` Adrematasa: Prog <b>${esc(salida.prog)}</b> · salida ${esc(salida.tempSalida || "—")} · remolque ${esc(salida.remolque || "—")} · carro ${esc(salida.carro || "—")} · ${esc(salida.fechaHora || "")}` : ` <span class="nota">Todavía no se pega la salida de ${esc(f.cartaPorteFolio || "esta factura")} del Adrematasa.</span>`}</div>
     <div class="re-kpis">
       <div class="re-kpi hero"><b>${c.fletePorKm != null ? dinero(c.fletePorKm) : "—"}</b><small>Flete por km${usd ? " (en MXN)" : ""}</small></div>
@@ -339,7 +360,68 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   let grupoSalidas = null;   // { taims:Set, txt }: salidas sin factura de un renglón de Tarifas
   let grupoFacturas = null;  // { uuids:Set, txt }: facturas de un renglón de Tarifas
   const normTxt = (t) => String(t || "").toUpperCase().replace(/\s+/g, " ").trim();
-  const salidaDe = (f) => (salidas && f && f.cartaPorteFolio) ? salidas.get(String(f.cartaPorteFolio).toUpperCase()) || null : null;
+  // ---- Ligas factura ↔ salida (2026-10-30: refacturas) ----
+  // 1) manual (rentabilidad_config/ligas) · 2) misma carta porte · 3) refactura:
+  // mismo remolque y (mismo sello o misma unidad), salida entre 25 días antes y
+  // 2 días después de la factura. Una sola candidata = se liga sola.
+  let ligasManual = {};            // { uuid: "TAIM-…" | "NO" }
+  let cacheLigas = null;
+  function ligas() {
+    if (cacheLigas) return cacheLigas;
+    const facturaDeTaim = new Map(), salidaDeUuid = new Map(), posibles = new Map(), posiblesDeUuid = new Map();
+    const fs = lista();
+    const sal = salidas || new Map();
+    const ligar = (f, x, como) => { facturaDeTaim.set(x.factura, f); salidaDeUuid.set(f.uuid, como ? { ...x, _liga: como } : x); };
+    fs.forEach(f => { const m = ligasManual[f.uuid]; if (m && m !== "NO" && sal.has(m) && !facturaDeTaim.has(m)) ligar(f, sal.get(m), "ligada a mano"); });
+    fs.forEach(f => {
+      if (salidaDeUuid.has(f.uuid) || ligasManual[f.uuid]) return;
+      const t = String(f.cartaPorteFolio || "").toUpperCase();
+      if (t && sal.has(t) && !facturaDeTaim.has(t)) ligar(f, sal.get(t), "");
+    });
+    const reclamos = new Map(); // TAIM -> [{ f, fuerte }]
+    fs.forEach(f => {
+      if (salidaDeUuid.has(f.uuid) || ligasManual[f.uuid] || !f.remolque) return;
+      const ms = f.fecha ? new Date(f.fecha + "T12:00:00").getTime() : null;
+      const rem = soloDigitos(f.remolque), uni = soloDigitos(f.unidad), ss = new Set(sellos(f.sello));
+      let cand = [];
+      sal.forEach(x => {
+        if (facturaDeTaim.has(x.factura) || soloDigitos(x.remolque) !== rem) return;
+        if (ms && x.fechaMs && (x.fechaMs < ms - 25 * 864e5 || x.fechaMs > ms + 2 * 864e5)) return;
+        const porSello = sellos(x.sello).some(z => ss.has(z));
+        const porUnidad = uni && soloDigitos(x.carro) === uni;
+        if (porSello || porUnidad) cand.push({ x, fuerte: porSello });
+      });
+      if (cand.some(c => c.fuerte)) cand = cand.filter(c => c.fuerte);
+      cand.forEach(c => { const l = reclamos.get(c.x.factura) || []; l.push({ f, fuerte: c.fuerte, n: cand.length }); reclamos.set(c.x.factura, l); });
+      if (cand.length) posiblesDeUuid.set(f.uuid, cand.map(c => c.x.factura));
+    });
+    // Se liga sola si la factura tiene una sola candidata y nadie más la reclama.
+    posiblesDeUuid.forEach((taims, uuid) => {
+      const f = facturas.get(uuid);
+      if (taims.length === 1 && (reclamos.get(taims[0]) || []).length === 1) {
+        const r = reclamos.get(taims[0])[0];
+        ligar(f, sal.get(taims[0]), r.fuerte ? "ligada por sello y remolque" : "ligada por remolque y unidad");
+      }
+    });
+    reclamos.forEach((l, taim) => { if (!facturaDeTaim.has(taim)) posibles.set(taim, l.map(r => r.f).filter(f => !salidaDeUuid.has(f.uuid))); });
+    return (cacheLigas = { facturaDeTaim, salidaDeUuid, posibles, posiblesDeUuid });
+  }
+  const salidaDe = (f) => {
+    if (!f) return null;
+    if (facturas && facturas.has(f.uuid)) return ligas().salidaDeUuid.get(f.uuid) || null;
+    return (salidas && f.cartaPorteFolio) ? salidas.get(String(f.cartaPorteFolio).toUpperCase()) || null : null; // factura aún sin guardar
+  };
+  const facturaDeSalida = (x) => ligas().facturaDeTaim.get(x.factura) || null;
+  async function guardarLiga(uuid, valor) {
+    const nuevo = { ...ligasManual };
+    if (valor) nuevo[uuid] = valor; else delete nuevo[uuid];
+    try { await setDoc(doc(db, COL_CONFIG, "ligas"), { porFactura: nuevo, actualizadoEn: new Date().toISOString() }); }
+    catch (e) { $("#re-error").textContent = "No se pudo guardar la liga: " + e.message; }
+  }
+  // Paradas (2026-10-30): equivalencias de nombres ("MONTERREY" = "MTY").
+  let paradasEq = {};              // { "MONTERREY": "MTY" }
+  const canon = (p) => { const k = normTxt(p); return paradasEq[k] || k; };
+  const recorridoDe = (f, x) => infoReparto(f, x, canon);
   const tipoDe = (f) => { const sa = salidaDe(f); return sa ? sa.tipo : "sin"; };
 
   function avisar(t) {
@@ -405,6 +487,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   }
 
   function render() {
+    cacheLigas = null;
     renderTabs();
     if (tab === "cargar") return renderCargar();
     if (!facturas) { $("#re-cuerpo").innerHTML = `<p class="nota">Cargando…</p>`; return; }
@@ -589,7 +672,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
         <tbody>${pg.items.map(f => { const c = f.calculos || {}; return `<tr class="clic" data-u="${esc(f.uuid)}">
           <td>${fechaCorta(f.fecha)}</td><td>${esc(f.factura)}${f.moneda !== "MXN" ? ` <span class="re-chip re-azul">${esc(f.moneda)}</span>` : ""}</td>
           <td><span class="re-chip ${TIPO[tipoDe(f)].clase}">${TIPO[tipoDe(f)].txt}</span></td>
-          <td>${esc((f.cliente || {}).nombre)}</td><td>${esc(f.ruta)}${(() => { const r = infoReparto(f, salidaDe(f)); return r.numero ? ` <span class="re-chip re-rep">${r.numero} REPARTO${r.numero === 1 ? "" : "S"}</span>${r.sinCobro ? ` <span class="re-chip re-rojo">SIN COBRO</span>` : ""}${r.noCoincide ? ` <span class="re-chip re-ambar">NO COINCIDE</span>` : ""}` : ""; })()}</td><td>${esc(f.unidad)}</td>
+          <td>${esc((f.cliente || {}).nombre)}</td><td>${esc(f.ruta)}${(() => { const sa = salidaDe(f); const r = infoReparto(f, sa); return (r.numero ? ` <span class="re-chip re-rep">${r.numero} REPARTO${r.numero === 1 ? "" : "S"}</span>${r.sinCobro ? ` <span class="re-chip re-rojo">SIN COBRO</span>` : ""}` : "") + (sa && sa.factura !== String(f.cartaPorteFolio || "").toUpperCase() ? ` <span class="re-chip re-ambar">REFACTURA</span>` : "") + (!sa && ligas().posiblesDeUuid.has(f.uuid) ? ` <span class="re-chip re-ambar">¿REFACTURA?</span>` : ""); })()}</td><td>${esc(f.unidad)}</td>
           <td class="n">${miles(c.km)}${f.kmCapturado ? "*" : ""}</td><td class="n">${dinero(c.fleteMxn)}</td><td class="n"><b>${dinero(c.fletePorKm)}</b></td>
           <td class="n">${dinero(c.subtotalMxn)}</td><td class="n">${dinero(c.subtotalPorKm)}</td></tr>`; }).join("")}</tbody>
       </table></div>${pg.html}
@@ -616,6 +699,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
         <div class="re-errores" id="re-d-err" style="display:none;"></div>
         <div class="modal-acciones" style="flex-wrap:wrap;">
           <span class="re-km"><input type="number" min="1" step="1" id="re-d-km" value="${esc((f.cartaPorte || {}).distanciaKm || "")}"><button type="button" class="secundario" id="re-d-km-ok">Corregir km</button></span>
+          <button type="button" class="secundario" id="re-d-liga">${salidaDe(f) ? "Desligar salida" : "Ligar salida"}</button>
           <button type="button" class="secundario" id="re-d-borrar">Borrar factura</button>
           <button type="button" class="re-cerrar">Cerrar</button>
         </div>
@@ -634,6 +718,18 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
         await updateDoc(doc(db, COL, id), { "cartaPorte.distanciaKm": km, kmCapturado: true, calculos: calcular(copia) });
         cerrar(); avisar(`Km de ${f.factura} corregidos.`);
       } catch (e) { err("No se pudo guardar: " + e.message); }
+    });
+    overlay.querySelector("#re-d-liga").addEventListener("click", async () => {
+      const actual = salidaDe(f);
+      if (actual) {
+        if (!confirm(`¿Desligar la salida ${actual.factura} de ${f.factura}? Ya no se ligará sola.`)) return;
+        await guardarLiga(f.uuid, "NO"); cerrar(); avisar(`${f.factura} quedó sin salida.`);
+      } else {
+        const t = normTxt(prompt(`Carta porte de la salida para ${f.factura} (ej. TAIM-55587):`) || "").replace(/\s+/g, "");
+        if (!t) return;
+        if (!salidas || !salidas.has(t)) return err(`No encontré la salida ${t} en el periodo.`);
+        await guardarLiga(f.uuid, t); cerrar(); avisar(`${f.factura} ligada con ${t}.`);
+      }
     });
     overlay.querySelector("#re-d-borrar").addEventListener("click", async () => {
       if (!confirm(`¿Borrar la factura ${f.factura}? Podrás volver a cargarla después.`)) return;
@@ -655,7 +751,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   const KM_RUTA_LARGA = 350; // < 350 = corta; 350 o más = larga
   const tipoRuta = (km) => km == null || !isFinite(km) ? "sin" : (km < KM_RUTA_LARGA ? "corta" : "larga");
   const RUTA = { corta: { txt: "CORTA", clase: "re-verde" }, larga: { txt: "LARGA", clase: "re-azul" }, sin: { txt: "SIN KM", clase: "re-gris" } };
-  const ft = { cliente: "", zona: "", carga: "", ruta: "", q: "", reparto: "" }; // filtros de Tarifas ("reparto": "" juntos | "separar")
+  const ft = { cliente: "", zona: "", carga: "", ruta: "", q: "", viajes: "" }; // filtros de Tarifas ("viajes": "" todos | "directo" | "reparto")
   let config = { zonas: [], clientes: {} }; // rentabilidad_config/zonas y /equivalencias
   let cancelarConfig = null;
   function suscribirConfig() {
@@ -668,7 +764,15 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       config.clientes = s.exists() && s.data().clientes ? s.data().clientes : {};
       if (tab === "tarifas" || tab === "zonas") render();
     }, () => {});
-    cancelarConfig = () => { c1(); c2(); };
+    const c3 = onSnapshot(doc(db, COL_CONFIG, "ligas"), (s) => {
+      ligasManual = s.exists() && s.data().porFactura ? s.data().porFactura : {};
+      if (facturas) render();
+    }, () => {});
+    const c4 = onSnapshot(doc(db, COL_CONFIG, "paradas"), (s) => {
+      paradasEq = s.exists() && s.data().mapa ? s.data().mapa : {};
+      if (tab === "tarifas" || tab === "zonas") render();
+    }, () => {});
+    cancelarConfig = () => { c1(); c2(); c3(); c4(); };
   }
   const zonaDe = (clave) => config.zonas.find(z => (z.destinos || []).includes(clave)) || null;
   const destAdr = (x) => normTxt(paradasSalida(x).slice(-1)[0] || x.destino); // destino FINAL (última parada)
@@ -678,7 +782,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
 
   // Equivalencias aprendidas de las salidas que sí tienen factura.
   function aprender() {
-    const porTaim = new Map(lista().filter(f => f.cartaPorteFolio).map(f => [String(f.cartaPorteFolio).toUpperCase(), f]));
+    const porTaim = ligas().facturaDeTaim;
     const cli = new Map(), des = new Map(), kmDes = new Map(), nombres = new Map();
     lista().forEach(f => {
       nombres.set(f.clienteClave, (f.cliente || {}).nombre || f.clienteClave);
@@ -722,32 +826,33 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     const ap = aprender();
     const ORDEN_C = { seca: 0, refrigerada: 1, sin: 2 }, ORDEN_R = { corta: 0, larga: 1, sin: 2 };
     const grupos = new Map();
-    const separar = ft.reparto === "separar";
+    // Recorrido = paradas antes del destino final (vacío = directo). Es parte del renglón.
     const grupo = (cli, cliNombre, destClave, carga, ruta, rep) => {
       const z = zonaDe(destClave);
       const zona = z ? z.nombre : etiquetaDestino(destClave);
-      const conRep = separar ? (rep.numero > 0 ? "rep" : "dir") : "";
-      const k = `${cli}|${zona}|${carga}|${ruta}|${conRep}`;
-      if (!grupos.has(k)) grupos.set(k, { k, cli, cliNombre, zona, conZona: !!z, destinos: new Set(), carga, ruta, conRep, fs: [], pendientes: [], reps: [], vias: new Set() });
+      const rec = rep.intermedias.join(" → ");
+      const k = `${cli}|${zona}|${carga}|${ruta}|${rec}`;
+      if (!grupos.has(k)) grupos.set(k, { k, cli, cliNombre, zona, conZona: !!z, destinos: new Set(), carga, ruta, rec, intermedias: rep.intermedias, finales: new Set(), fs: [], pendientes: [], reps: [] });
       const g = grupos.get(k);
       g.destinos.add(etiquetaDestino(destClave));
+      if (rep.final) g.finales.add(rep.final);
       g.reps.push(rep);
-      if (rep.numero > 0) rep.paradas.slice(0, -1).forEach(p => g.vias.add(p));
       return g;
     };
     lista().forEach(f => {
       const km = (f.calculos || {}).km;
-      const rep = infoReparto(f, salidaDe(f)); rep.f = f;
+      const rep = recorridoDe(f, salidaDe(f)); rep.f = f;
       grupo(f.clienteClave, (f.cliente || {}).nombre || f.clienteClave, f.destino || "Sin destino", tipoDe(f), tipoRuta(km), rep).fs.push(f);
     });
     (salidas ? [...salidas.values()] : []).forEach(x => {
       if (ap.porTaim.has(x.factura)) return;
+      if (ligas().posibles.has(x.factura)) return; // posible refactura ya cargada: no se cuenta como "sin factura"
       const adrCli = normTxt(x.cliente);
       const c = ap.clienteDe(adrCli);
       const destPdf = ap.destinoDe(destAdr(x));
       const destClave = destPdf || adrDestino(x);
       const ruta = destPdf ? tipoRuta(ap.kmDe(destPdf)) : "sin";
-      grupo(c ? c.clave : "ADR:" + adrCli, c ? c.nombre : `${adrCli || "SIN CLIENTE"} (Adrematasa, sin facturas)`, destClave, x.tipo, ruta, infoReparto(null, x)).pendientes.push(x);
+      grupo(c ? c.clave : "ADR:" + adrCli, c ? c.nombre : `${adrCli || "SIN CLIENTE"} (Adrematasa, sin facturas)`, destClave, x.tipo, ruta, recorridoDe(null, x)).pendientes.push(x);
     });
     const todos = [...grupos.values()];
     const clientesOpc = new Map(); todos.forEach(g => clientesOpc.set(g.cli, g.cliNombre));
@@ -755,8 +860,9 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     const q = normTxt(ft.q);
     const gs = todos.filter(g => (!ft.cliente || g.cli === ft.cliente) && (!ft.zona || g.zona === ft.zona) &&
       (!ft.carga || g.carga === ft.carga) && (!ft.ruta || g.ruta === ft.ruta) &&
+      (!ft.viajes || (ft.viajes === "reparto" ? !!g.rec : !g.rec)) &&
       (!q || normTxt(g.cliNombre).includes(q) || normTxt(g.zona).includes(q)))
-      .sort((a, b) => a.cliNombre.localeCompare(b.cliNombre, "es") || a.zona.localeCompare(b.zona, "es") || ORDEN_C[a.carga] - ORDEN_C[b.carga] || ORDEN_R[a.ruta] - ORDEN_R[b.ruta] || a.conRep.localeCompare(b.conRep));
+      .sort((a, b) => a.cliNombre.localeCompare(b.cliNombre, "es") || a.zona.localeCompare(b.zona, "es") || ORDEN_C[a.carga] - ORDEN_C[b.carga] || ORDEN_R[a.ruta] - ORDEN_R[b.ruta] || a.intermedias.length - b.intermedias.length || a.rec.localeCompare(b.rec, "es"));
 
     // Columnas de conceptos (FLETE + los más frecuentes; el resto en OTROS)
     const fsVis = gs.flatMap(g => g.fs);
@@ -785,31 +891,29 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       const tot = g.fs.reduce((s, f) => s + ((f.calculos || {})[metricaKm === "flete" ? "fleteMxn" : "subtotalMxn"] || 0), 0);
       const porKm = g.fs.map(f => (f.calculos || {})[metricaKm === "flete" ? "fletePorKm" : "subtotalPorKm"]).filter(x => x != null);
       const rango = porKm.length > 1 && Math.min(...porKm) !== Math.max(...porKm) ? `<br><small>${dinero(Math.min(...porKm))} – ${dinero(Math.max(...porKm))}</small>` : "";
-      const encabezado = g.cli !== anterior ? `<tr><td colspan="${columnas.length + 8 + (separar ? 1 : 0)}" style="background:#f2ede6;font-weight:800;padding-top:10px;">${esc(g.cliNombre)}</td></tr>` : "";
+      const encabezado = g.cli !== anterior ? `<tr><td colspan="${columnas.length + 8}" style="background:#f2ede6;font-weight:800;padding-top:10px;">${esc(g.cliNombre)}</td></tr>` : "";
       anterior = g.cli;
       const destinosTxt = g.conZona || g.destinos.size > 1 ? `<br><small class="nota">${esc([...g.destinos].join(" · "))}</small>` : "";
-      const viasTxt = g.vias.size ? `<br><small class="nota" style="color:#8a4b00;">vía reparto: ${esc([...g.vias].slice(0, 4).join(" · "))}${g.vias.size > 4 ? "…" : ""}</small>` : "";
-      // Con reparto: viajes con reparto de todos los del renglón (con y sin factura).
-      const conRep = g.reps.filter(r => r.numero > 0);
-      const repFact = conRep.filter(r => r.f);
-      const sinCobro = repFact.filter(r => r.sinCobro).length, noCoin = repFact.filter(r => r.noCoincide).length;
-      const nRep = conRep.reduce((s, r) => s + r.numero, 0);
+      // Recorrido: paradas → destino final; cobro por reparto y "sin cobro".
+      const repFact = g.reps.filter(r => r.f && r.numero > 0);
+      const sinCobro = repFact.filter(r => r.sinCobro).length;
       const cobrados = repFact.filter(r => r.rf.cobro);
       const porRep = cobrados.length ? cobrados.reduce((s, r) => s + r.cobroMxn, 0) / cobrados.reduce((s, r) => s + r.numero, 0) : null;
-      const celdaRep = conRep.length ? `${repFact.length ? `<button type="button" class="re-link" data-ver="r" data-k="${esc(g.k)}">${conRep.length} de ${g.reps.length}</button>` : `${conRep.length} de ${g.reps.length}`}
-        <br><small>${(nRep / conRep.length).toLocaleString("es-MX", { maximumFractionDigits: 1 })} reparto${nRep === conRep.length ? "" : "s"} prom.</small>${porRep != null ? `<br><small>${dinero(porRep)} por reparto</small>` : ""}
-        ${sinCobro ? `<br><span class="re-chip re-rojo">${sinCobro} sin cobro</span>` : ""}${noCoin ? `<br><span class="re-chip re-ambar">${noCoin} no coincide${noCoin === 1 ? "" : "n"}</span>` : ""}` : `0 de ${g.reps.length}`;
+      const fin = [...g.finales][0] || g.zona;
+      const celdaRec = g.rec
+        ? `${g.intermedias.map(p => `<span class="re-parada">${esc(p)}</span>`).join(`<span class="nota"> → </span>`)}<span class="nota"> → </span><span class="re-parada"><b>${esc(fin)}</b></span>
+          <br><small>${g.intermedias.length} reparto${g.intermedias.length === 1 ? "" : "s"}${porRep != null ? ` · ${dinero(porRep)} c/u` : ""}</small>${sinCobro ? ` <span class="re-chip re-rojo">${sinCobro} sin cobro</span>` : ""}`
+        : `<span class="re-chip re-gris">DIRECTO</span>`;
       return encabezado + `<tr>
-        <td>${esc(g.zona)}${g.conZona ? "" : ` <small class="nota">(sin zona)</small>`}${destinosTxt}${viasTxt}</td>
+        <td>${esc(g.zona)}${g.conZona ? "" : ` <small class="nota">(sin zona)</small>`}${destinosTxt}</td>
+        <td class="re-col-rec">${celdaRec}</td>
         <td><span class="re-chip ${TIPO[g.carga].clase}">${TIPO[g.carga].txt}</span></td>
         <td><span class="re-chip ${RUTA[g.ruta].clase}">${RUTA[g.ruta].txt}</span></td>
-        ${separar ? `<td>${g.conRep === "rep" ? `<span class="re-chip re-rep">CON REPARTO</span>` : `<span class="re-chip re-gris">DIRECTO</span>`}</td>` : ""}
         <td class="n">${g.fs.length ? celdaValor(g.fs.map(f => (f.calculos || {}).km), g.fs.length, (n) => miles(n)) : "—"}</td>
         ${columnas.map(c => `<td class="n${c === "FLETE" ? " re-col-flete" : ""}">${g.fs.length ? celdaValor(mapas.map(m => m.has(c) ? m.get(c) : null), g.fs.length, fmt) : "—"}</td>`).join("")}
         <td class="n"><b>${km ? dinero(tot / km) : "—"}</b>${rango}</td>
         <td class="n">${g.fs.length ? `<button type="button" class="re-link" data-ver="f" data-k="${esc(g.k)}">${g.fs.length}</button>` : "0"}</td>
-        <td class="n">${g.pendientes.length ? `<button type="button" class="re-link re-falta" data-ver="s" data-k="${esc(g.k)}">${g.pendientes.length}</button>` : "—"}</td>
-        <td class="n">${celdaRep}</td></tr>`;
+        <td class="n">${g.pendientes.length ? `<button type="button" class="re-link re-falta" data-ver="s" data-k="${esc(g.k)}">${g.pendientes.length}</button>` : "—"}</td></tr>`;
     }).join("");
 
     const seg = (clave, opciones) => `<span class="re-seg">${opciones.map(([v, t]) => `<button type="button" class="${ft[clave] === v ? "activo" : ""}" data-ft="${clave}" data-v="${v}">${t}</button>`).join("")}</span>`;
@@ -822,15 +926,15 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       <div class="re-filtros">
         ${seg("carga", [["", "Seca y refri"], ["seca", "Seca"], ["refrigerada", "Refrigerada"], ["sin", "Sin dato"]])}
         ${seg("ruta", [["", "Corta y larga"], ["corta", "Corta"], ["larga", "Larga"]])}
-        ${seg("reparto", [["", "Repartos juntos"], ["separar", "Separar con / sin reparto"]])}
+        ${seg("viajes", [["", "Todos los viajes"], ["directo", "Directos"], ["reparto", "Con reparto"]])}
         <span class="re-seg" style="margin-left:auto;">${[["flete", "Ing./km FLETE"], ["subtotal", "Ing./km SUBTOTAL"]].map(([v, t]) => `<button type="button" class="${metricaKm === v ? "activo" : ""}" data-m="${v}">${t}</button>`).join("")}</span>
       </div>
       ${gs.length ? `<div class="tabla-wrap"><table class="tabla re-tabla">
-        <thead><tr><th>Zona destino</th><th>Carga</th><th>Ruta</th>${separar ? "<th>Reparto</th>" : ""}<th class="n">Km</th>
+        <thead><tr><th>Zona destino</th><th class="re-col-rec">Recorrido</th><th>Carga</th><th>Ruta</th><th class="n">Km</th>
           ${columnas.map(c => `<th class="n${c === "FLETE" ? " re-col-flete" : " re-col-con"}">${esc(c)}</th>`).join("")}
-          <th class="n">Ing./km ${metricaKm === "flete" ? "flete" : "subtotal"} (MXN)</th><th class="n">Facturas</th><th class="n">Sin factura</th><th class="n">Con reparto</th></tr></thead>
+          <th class="n">Ing./km ${metricaKm === "flete" ? "flete" : "subtotal"} (MXN)</th><th class="n">Facturas</th><th class="n">Sin factura</th></tr></thead>
         <tbody>${filas}</tbody></table></div>${pg.html}
-        <p class="nota">Ruta: CORTA si la factura tiene menos de ${KM_RUTA_LARGA} km; LARGA si tiene ${KM_RUTA_LARGA} o más. Valores como vienen en la factura; si cambian, el más común y en chico "varía". "Sin factura" = salidas del Adrematasa de ese cliente, zona y carga que todavía no tienen PDF cargado (toca el número para ver cuáles). Carga "SIN DATO" = la factura no encontró su salida. Reparto: destino con guion en el Adrematasa, o tramos en la Carta Porte / guion en "Se entrega en"; la zona es la del destino final. "Sin cobro" = la factura no trae concepto de reparto; "no coincide" = la salida y el PDF cuentan distinto número de repartos.${hayOtros ? ` "OTROS" junta ${otrosNombres.length - visibles.length} concepto(s) poco frecuentes.` : ""}</p>`
+        <p class="nota">Ruta: CORTA si la factura tiene menos de ${KM_RUTA_LARGA} km; LARGA si tiene ${KM_RUTA_LARGA} o más. Valores como vienen en la factura; si cambian, el más común y en chico "varía". "Sin factura" = salidas del Adrematasa de ese cliente, zona y carga que todavía no tienen PDF cargado (toca el número para ver cuáles). Carga "SIN DATO" = la factura no encontró su salida. Recorrido: sale del destino de la salida del Adrematasa ("MTY-CUL-GDL-CUNDUACAN"); la última parada es el destino final y decide la zona. Cada recorrido distinto es su propio renglón (los nombres de parada se igualan en Zonas y equivalencias). Una factura sin salida ligada cuenta como directo. "Sin cobro" = hubo reparto y la factura no trae concepto de reparto.${hayOtros ? ` "OTROS" junta ${otrosNombres.length - visibles.length} concepto(s) poco frecuentes.` : ""}</p>`
         : `<p class="nota" style="text-align:center;padding:16px;">${todos.length ? "No hay renglones con estos filtros." : "Todavía no hay facturas ni salidas en el periodo."}</p>`}`;
     const qi = $("#re-t-q");
     qi.addEventListener("input", () => { ft.q = qi.value; const pos = qi.selectionStart; renderTarifas(); const n = $("#re-t-q"); n.focus(); n.setSelectionRange(pos, pos); });
@@ -841,11 +945,8 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     $("#re-cuerpo").querySelectorAll("[data-ver]").forEach(b => b.addEventListener("click", () => {
       const g = grupos.get(b.dataset.k);
       if (!g) return;
-      const txt = `${g.cliNombre} · ${g.zona} · ${TIPO[g.carga].txt} · ${RUTA[g.ruta].txt}${g.conRep ? (g.conRep === "rep" ? " · con reparto" : " · directo") : ""}`;
-      if (b.dataset.ver === "r") {
-        grupoFacturas = { uuids: new Set(g.reps.filter(r => r.f && r.numero > 0).map(r => r.f.uuid)), txt: txt + " · viajes con reparto" };
-        tab = "facturas";
-      } else if (b.dataset.ver === "s") {
+      const txt = `${g.cliNombre} · ${g.zona} · ${g.rec ? "vía " + g.rec : "directo"} · ${TIPO[g.carga].txt} · ${RUTA[g.ruta].txt}`;
+      if (b.dataset.ver === "s") {
         grupoSalidas = { taims: new Set(g.pendientes.map(x => x.factura)), txt };
         filtroSalidas = "sinfactura"; tab = "salidas";
       } else {
@@ -877,7 +978,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     lista().forEach(f => {
       const k = f.destino || "Sin destino";
       const d = destinos.get(k) || { clave: k, viajes: 0, alias: new Set(), soloAdr: false, reparto: 0 };
-      d.viajes++; if (infoReparto(f, salidaDe(f)).numero > 0) d.reparto = (d.reparto || 0) + 1; destinos.set(k, d);
+      d.viajes++; if (recorridoDe(f, salidaDe(f)).numero > 0) d.reparto = (d.reparto || 0) + 1; destinos.set(k, d);
     });
     ap.des.forEach((m, adr) => { const k = moda(m); const d = destinos.get(k); if (d) d.alias.add(adr); });
     (salidas ? [...salidas.values()] : []).forEach(x => {
@@ -893,6 +994,10 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       .sort((a, b) => (a.soloAdr - b.soloAdr) || b.viajes - a.viajes || a.clave.localeCompare(b.clave, "es"));
     [...selZonas].forEach(k => { if (!destinos.has(k)) selZonas.delete(k); });
 
+    // Paradas de reparto (todas menos el destino final de salidas con guion)
+    const paradasVistas = new Map();
+    (salidas ? [...salidas.values()] : []).forEach(x => { const ps = paradasSalida(x); if (ps.length > 1) ps.forEach(p => { const k = normTxt(p); paradasVistas.set(k, (paradasVistas.get(k) || 0) + 1); }); });
+    const nombresCanon = [...new Set([...paradasVistas.keys()].map(canon))].sort((a, b) => a.localeCompare(b, "es"));
     // Clientes del Adrematasa
     const adrClientes = new Map();
     (salidas ? [...salidas.values()] : []).forEach(x => { const c = normTxt(x.cliente); if (c) adrClientes.set(c, (adrClientes.get(c) || 0) + 1); });
@@ -939,6 +1044,13 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
                 ${clientesPdf.map(([k, nom]) => `<option value="${esc(k)}"${manual && manual.clave === k ? " selected" : ""}>${esc(nom)}</option>`).join("")}
               </select></div>`; }).join("") || `<p class="nota" style="padding:10px;">Todavía no hay salidas en el periodo.</p>`}</div>
           <p class="nota">Se aprenden solas por la carta porte. Elige un cliente solo para corregir o para los que todavía no tienen ninguna factura.</p>
+          <div class="re-h3">Paradas de reparto: nombre en el Adrematasa → se cuenta como</div>
+          <datalist id="re-p-nombres">${nombresCanon.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
+          <div class="re-lista">${[...paradasVistas.entries()].sort((a, b) => a[0].localeCompare(b[0], "es")).map(([p, n]) => `
+            <div class="re-dest" style="cursor:default;align-items:center;"><span><b>${esc(p)}</b> <small class="nota">${n}</small></span>
+              <input type="text" list="re-p-nombres" data-parada="${esc(p)}" value="${esc(paradasEq[p] || "")}" placeholder="igual (${esc(p)})" style="width:auto;max-width:55%;margin-left:auto;"></div>`).join("")
+            || `<p class="nota" style="padding:10px;">Todavía no hay salidas con reparto en el periodo.</p>`}</div>
+          <p class="nota">Si una parada se escribe distinto (MONTERREY y MTY), escribe a la derecha el nombre con el que se debe contar. Vacío = se queda como está. Así el mismo recorrido no sale en dos renglones.</p>
         </div>
       </div>`;
     const qi = $("#re-z-q");
@@ -974,6 +1086,13 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       const nuevo = z ? (prompt("Nuevo nombre de la zona:", z.nombre) || "").trim() : "";
       if (z && nuevo && nuevo !== z.nombre) guardarZonas(config.zonas.map(x => x.id === z.id ? { ...x, nombre: nuevo } : x));
     }));
+    $("#re-cuerpo").querySelectorAll("[data-parada]").forEach(inp => inp.addEventListener("change", async () => {
+      const mapa = { ...paradasEq };
+      const v = normTxt(inp.value);
+      if (v && v !== inp.dataset.parada) mapa[inp.dataset.parada] = v; else delete mapa[inp.dataset.parada];
+      try { await setDoc(doc(db, COL_CONFIG, "paradas"), { mapa, actualizadoEn: new Date().toISOString() }); }
+      catch (e) { $("#re-error").textContent = "No se pudo guardar la parada: " + e.message; }
+    }));
     $("#re-cuerpo").querySelectorAll("[data-cli]").forEach(s => s.addEventListener("change", () => {
       const clave = s.value;
       guardarCliente(s.dataset.cli, clave ? { clave, nombre: ap.nombres.get(clave) || clave } : null);
@@ -983,7 +1102,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   // ---- Salidas Adrematasa ----
   function renderSalidas() {
     const guardadas = [...(salidas || new Map()).values()];
-    const porTaim = new Map(lista().filter(f => f.cartaPorteFolio).map(f => [String(f.cartaPorteFolio).toUpperCase(), f]));
+    const porTaim = ligas().facturaDeTaim, posibles = ligas().posibles;
     const cuenta = (arr, t) => arr.filter(x => x.tipo === t).length;
     const resumenPegadas = pegadas ? `
       <div class="re-kpis">
@@ -1013,13 +1132,15 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       <div class="re-filtros">${filtros.map(([k, t, n]) => `<button type="button" class="re-tab${filtroSalidas === k ? " activo" : ""}" data-fs="${k}">${t} ${n}</button>`).join("")}</div>
       ${vista.length ? `<div class="tabla-wrap"><table class="tabla re-tabla">
         <thead><tr><th>Carta porte</th><th>Fecha</th><th>Cliente</th><th>Destino</th><th class="n">Repartos</th><th>Remolque</th><th>Carro</th><th>Salida</th><th>Prog</th><th>Tipo</th><th>Factura</th></tr></thead>
-        <tbody>${pgS.items.map(x => { const f = porTaim.get(x.factura); const ps = paradasSalida(x); const r = f ? infoReparto(f, x) : null; return `<tr${f ? ` class="clic" data-u="${esc(f.uuid)}"` : ""}>
+        <tbody>${pgS.items.map(x => { const f = porTaim.get(x.factura); const ps = paradasSalida(x); const r = f ? infoReparto(f, x) : null; const refa = f && String(f.cartaPorteFolio || "").toUpperCase() !== x.factura; const pos = !f ? (posibles.get(x.factura) || []) : []; return `<tr${f ? ` class="clic" data-u="${esc(f.uuid)}"` : ""}>
           <td>${esc(x.factura)}</td><td>${esc(x.fechaHora)}</td><td>${esc(x.cliente)}</td>
           <td>${ps.length > 1 ? ps.map((p, n) => `<span class="re-parada">${n === ps.length - 1 ? `<b>${esc(p)}</b>` : esc(p)}</span>`).join("") : esc(x.destino)}</td>
           <td class="n">${ps.length > 1 ? `<span class="re-chip re-rep">${ps.length - 1}</span>` : "—"}</td>
           <td>${esc(x.remolque)}</td><td>${esc(x.carro)}</td><td>${esc(x.tempSalida)}</td><td>${esc(x.prog)}</td>
           <td><span class="re-chip ${TIPO[x.tipo].clase}">${TIPO[x.tipo].txt}</span></td>
-          <td>${f ? `<span class="re-chip re-verde">${esc(f.factura)}</span>${r.sinCobro ? ` <span class="re-chip re-rojo">reparto sin cobro</span>` : ""}${r.noCoincide ? ` <span class="re-chip re-ambar">PDF: ${r.rf.numero} reparto${r.rf.numero === 1 ? "" : "s"}</span>` : ""}` : `<span class="re-chip re-gris">sin factura cargada</span>`}</td></tr>`; }).join("")}</tbody>
+          <td>${f ? `<span class="re-chip re-verde">${esc(f.factura)}</span>${refa ? ` <span class="re-chip re-ambar">REFACTURA</span><br><small class="nota">factura con ${esc(f.cartaPorteFolio)}</small>` : ""}${r.sinCobro ? ` <span class="re-chip re-rojo">reparto sin cobro</span>` : ""}`
+            : pos.length ? `<span class="re-chip re-ambar">¿refactura?</span> ${pos.map(pf => `<button type="button" class="re-link" data-ligar="${esc(pf.uuid)}" data-taim="${esc(x.factura)}">${esc(pf.factura)}</button>`).join(" ")}<br><small class="nota">mismo remolque${pos.length > 1 ? "; elige cuál" : ""}</small>`
+            : `<span class="re-chip re-gris">sin factura cargada</span> <button type="button" class="re-link re-mini" data-ligar-folio="${esc(x.factura)}">Ligar</button>`}</td></tr>`; }).join("")}</tbody>
       </table></div>${pgS.html}`
         : `<p class="nota" style="text-align:center;padding:16px;">${guardadas.length ? "No hay salidas con este filtro." : "Todavía no hay salidas guardadas."}</p>`}`;
     const leer = $("#re-s-leer");
@@ -1034,6 +1155,19 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     const qg = $("#re-s-quitar-grupo"); if (qg) qg.addEventListener("click", () => { grupoSalidas = null; renderSalidas(); });
     enlazarPaginas(renderSalidas);
     $("#re-cuerpo").querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => abrirDetalle(tr.dataset.u)));
+    $("#re-cuerpo").querySelectorAll("[data-ligar]").forEach(b => b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const f = facturas.get(b.dataset.ligar);
+      if (f && confirm(`¿Ligar la salida ${b.dataset.taim} con la factura ${f.factura} (refactura)?`)) { await guardarLiga(f.uuid, b.dataset.taim); avisar(`${b.dataset.taim} ligada con ${f.factura}.`); }
+    }));
+    $("#re-cuerpo").querySelectorAll("[data-ligar-folio]").forEach(b => b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const folio = normTxt(prompt(`Folio de la factura para la salida ${b.dataset.ligarFolio} (ej. FAIM-55733):`) || "").replace(/\s+/g, "");
+      if (!folio) return;
+      const f = lista().find(x => normTxt(x.factura) === folio);
+      if (!f) { $("#re-error").textContent = `No encontré la factura ${folio} en el periodo. Cárgala primero.`; return; }
+      await guardarLiga(f.uuid, b.dataset.ligarFolio); avisar(`${b.dataset.ligarFolio} ligada con ${f.factura}.`);
+    }));
   }
 
   async function guardarSalidas() {
@@ -1065,7 +1199,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       const conceptosExcel = [...new Set(fs.flatMap(f => (f.conceptos || []).map(k => nombreConcepto(k.servicio))))]
         .sort((a, b) => (a === "FLETE" ? -1 : b === "FLETE" ? 1 : a.localeCompare(b, "es")));
       const filas = fs.map(f => {
-        const c = f.calculos || {}, cli = f.cliente || {}, cp = f.cartaPorte || {}, r = infoReparto(f, salidaDe(f));
+        const c = f.calculos || {}, cli = f.cliente || {}, cp = f.cartaPorte || {}, r = recorridoDe(f, salidaDe(f)), sa = salidaDe(f);
         const porNombre = {};
         (f.conceptos || []).forEach(k => { const n = nombreConcepto(k.servicio); porNombre[n] = Math.round(((porNombre[n] || 0) + (k.importe || 0)) * 100) / 100; });
         return {
@@ -1073,8 +1207,9 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
           "Zona": (zonaDe(f.destino || "") || {}).nombre || "", "Prog": (salidaDe(f) || {}).prog || "", "Temp. salida": (salidaDe(f) || {}).tempSalida || "", "Carta porte": f.cartaPorteFolio, "Viaje": f.viaje, "Folio fiscal": f.uuid,
           "Cliente": cli.nombre, "RFC cliente": cli.rfc, "Remitente": (f.remitente || {}).nombre, "Destinatario": (f.destinatario || {}).nombre,
           "Origen": f.origen, "Destino": f.destino, "Se entrega en": (f.destinatario || {}).seEntregaEn,
-          "Repartos": r.numero, "Paradas": r.paradas.join(" - "), "Repartos según salida": r.rs != null ? r.rs : "", "Repartos según PDF": r.rf.fuente ? r.rf.numero : "",
+          "Recorrido": r.numero ? r.paradas.join(" → ") : "Directo", "Repartos": r.numero,
           "Cobro reparto (moneda)": r.rf.cobro || "", "Reparto sin cobro": r.sinCobro ? "Sí" : "",
+          "Salida ligada": sa ? sa.factura : "", "Refactura": sa && sa.factura !== String(f.cartaPorteFolio || "").toUpperCase() ? "Sí" : "",
           "Moneda": f.moneda, "Tipo de cambio": f.tipoCambio, "Flete (moneda)": c.flete, "Subtotal (moneda)": f.subtotal, "Total (moneda)": f.total,
           ...Object.fromEntries(conceptosExcel.map(n => [`${n} (moneda)`, porNombre[n] != null ? porNombre[n] : ""])),
           "Km": c.km, "Km capturados a mano": f.kmCapturado ? "Sí" : "",
