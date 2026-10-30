@@ -33,6 +33,12 @@ import { LOGO_ALANIS } from "./comercialLogo.js";
 // (driving-hgv), mapa (Leaflet + OpenStreetMap), puntos vía y "Guardar en
 // catálogo". La clave de ORS va en Ajustes (com_config/ajustes.orsKey), no en
 // el código. Si la ruta ya está en el catálogo, mandan los km del catálogo.
+//
+// 2026-10-30: umbrales como el CRM, por SERVICIO (expo / impo / nacional) y
+// TRAMO (RC ≤ 350 km, RL ≥ 351), con verde y ámbar en MXN/km. Importe sugerido
+// = km × umbral verde (en USD se divide entre el TC de la cotización). Se llena
+// solo mientras no escribas un importe; si lo escribes, queda el tuyo y abajo
+// aparece la sugerida con "usar".
 // ============================================================================
 
 const COL_CLI = "com_clientes";
@@ -45,10 +51,21 @@ const URL_LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/lea
 const URL_LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const ORS = "https://api.openrouteservice.org";
 const KM_RUTA_CORTA = 350; // como el CRM: RC = 350 km o menos; RL = 351 o más
+const SERV_UMBRAL = { exportacion: "expo", importacion: "impo", nacional: "dom" };
+const UMBRALES_BASE = { // valores del CRM (nacional = importación hasta que se ajuste)
+  expo_rc_verde: 100, expo_rc_ambar: 80, expo_rl_verde: 45, expo_rl_ambar: 40,
+  impo_rc_verde: 100, impo_rc_ambar: 80, impo_rl_verde: 35, impo_rl_ambar: 33,
+  dom_rc_verde: 100, dom_rc_ambar: 80, dom_rl_verde: 35, dom_rl_ambar: 33,
+};
+export function umbralDe(ajustes, servicio, km) {
+  const s = SERV_UMBRAL[servicio] || "dom", t = km && km <= KM_RUTA_CORTA ? "rc" : "rl";
+  const u = { ...UMBRALES_BASE, ...((ajustes && ajustes.umbrales) || {}) };
+  return { verde: Number(u[`${s}_${t}_verde`]) || 0, ambar: Number(u[`${s}_${t}_ambar`]) || 0, tramo: t.toUpperCase() };
+}
 const tipoRutaTxt = (km) => km ? (km <= KM_RUTA_CORTA ? "RC" : "RL") : "";
 
 const AJUSTES_BASE = {
-  verde: 80, ambar: 60, tipoCambio: 18.5, vigenciaDias: 30, orsKey: "",
+  umbrales: { ...UMBRALES_BASE }, tipoCambio: 18.5, vigenciaDias: 30, orsKey: "",
   condiciones: "Precios más IVA, menos retención del 4%.\nTarifa por viaje sencillo.\nNo incluye maniobras, estadías ni seguro de la mercancía.",
 };
 const ESTADOS = {
@@ -285,7 +302,18 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
 
   const listaCot = () => [...(cotizaciones || new Map()).values()].sort((a, b) => (b.emisionMs || 0) - (a.emisionMs || 0));
   const cotDeCliente = (id) => listaCot().filter(c => c.clienteId === id);
-  const semaforo = (v) => v == null ? "co-s-n" : v >= ajustes.verde ? "co-s-v" : v >= ajustes.ambar ? "co-s-a" : "co-s-r";
+  const semaforo = (v, servicio, km) => {
+    if (v == null) return "co-s-n";
+    const u = umbralDe(ajustes, servicio, num(km));
+    return v >= u.verde ? "co-s-v" : v >= u.ambar ? "co-s-a" : "co-s-r";
+  };
+  // Importe sugerido = km × umbral verde (MXN); en USD, entre el TC.
+  const sugerida = (servicio, km, moneda, tc) => {
+    const k = num(km); if (!k) return null;
+    const u = umbralDe(ajustes, servicio, k); if (!u.verde) return null;
+    const mxn = k * u.verde;
+    return Math.round((moneda === "USD" ? mxn / (num(tc) || 1) : mxn) * 100) / 100;
+  };
   const chipEstado = (c) => { const e = estadoDe(c); return `<span class="co-chip ${ESTADOS[e].clase}">${ESTADOS[e].txt}</span>`; };
   const chipCarga = (t) => t ? `<span class="co-chip ${t === "seca" ? "co-seca" : "co-refri"}">${esc((CARGAS[t] || t).toUpperCase())}</span>` : "";
 
@@ -443,7 +471,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
           <td>${chipCarga(c.tipoCarga)}</td>
           <td class="n">${lineas(r => miles(r.km))}</td>
           <td class="n">${lineas(r => `${dinero(num(r.importe), c.moneda)} ${esc(c.moneda)}`)}</td>
-          <td class="n">${lineas(r => { const v = ingresoKm(r, c.moneda, c.tipoCambio); return `<span class="co-sem ${semaforo(v)}"></span><b>${v == null ? "—" : dinero(v)}</b>`; })}</td>
+          <td class="n">${lineas(r => { const v = ingresoKm(r, c.moneda, c.tipoCambio); return `<span class="co-sem ${semaforo(v, c.tipoServicio, r.km)}"></span><b>${v == null ? "—" : dinero(v)}</b>`; })}</td>
           <td>${estadoDe(c) === "vencida" ? `venció ${fecha(c.vencimientoMs)}` : `hasta ${fecha(c.vencimientoMs)}`}</td>
           <td>${chipEstado(c)}</td>
           <td style="white-space:nowrap;"><button type="button" class="co-link" data-pdf="${esc(c.id)}">PDF</button> · <button type="button" class="co-link" data-dup="${esc(c.id)}">Duplicar</button></td></tr>`;
@@ -594,8 +622,8 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
               <button type="button" class="co-link" data-mapa="${i}" style="font-size:12px;${r.origenCoord && r.destinoCoord ? "" : "display:none;"}">Ver ruta</button>
               ${fija && r.agregadaMs - (original.emisionMs || 0) > DIA / 2 ? `<br><small class="nota">agregada ${fecha(r.agregadaMs)}</small>` : ""}</td>
             <td class="n"><input type="number" min="1" data-r="km" value="${esc(r.km)}"${dis}><br><small class="nota" data-tipo="${i}">${tipoRutaTxt(num(r.km))}</small></td>
-            <td class="n"><input type="number" min="0" step="0.01" data-r="importe" value="${esc(r.importe)}"${dis}></td>
-            <td class="n" data-ing="${i}"><span class="co-sem ${semaforo(v)}"></span><b>${v == null ? "—" : dinero(v)}</b></td>
+            <td class="n"><input type="number" min="0" step="0.01" data-r="importe" value="${esc(r.importe)}"${dis}>${fija ? "" : `<br><small class="nota" data-sug="${i}"></small>`}</td>
+            <td class="n" data-ing="${i}"><span class="co-sem ${semaforo(v, e.tipoServicio, r.km)}"></span><b>${v == null ? "—" : dinero(v)}</b></td>
             <td>${fija ? "" : `<button type="button" class="secundario co-mini" data-qr="${i}" title="Quitar ruta">✕</button>`}</td></tr>`;
         }).join("")}</tbody></table></div>
       ${puedeEditar && vigente ? `<button type="button" class="secundario co-mini" id="co-e-mas" style="margin-top:8px;">+ Agregar ruta</button>` : ""}
@@ -603,7 +631,9 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       <div class="co-grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-top:14px;">
         <div class="co-campo"><label>Notas para el cliente (salen en el PDF)</label><textarea id="co-e-notas" rows="3">${esc(e.notas || "")}</textarea></div>
         <div class="co-indicador"><div class="nota" style="margin:0;">Semáforo de ingreso por km (MXN)</div>
-          <div style="margin-top:6px;"><span class="co-sem co-s-v"></span>${ajustes.verde} o más · <span class="co-sem co-s-a"></span>${ajustes.ambar} a ${(ajustes.verde - 0.01).toFixed(2)} · <span class="co-sem co-s-r"></span>menos de ${ajustes.ambar}</div>
+          ${(() => { const rc = umbralDe(ajustes, e.tipoServicio, 1), rl = umbralDe(ajustes, e.tipoServicio, 999); const t = (u) => `<span class="co-sem co-s-v"></span>${u.verde} o más · <span class="co-sem co-s-a"></span>${u.ambar} o más · <span class="co-sem co-s-r"></span>menos de ${u.ambar}`;
+            return `<div style="margin-top:6px;"><b>${esc(SERVICIOS[e.tipoServicio] || "")}</b></div><div style="margin-top:4px;">RC (350 km o menos): ${t(rc)}</div><div style="margin-top:2px;">RL (351 km o más): ${t(rl)}</div>
+              <div class="nota" style="margin:6px 0 0;">Importe sugerido = km × umbral verde. Se llena solo mientras no escribas otro.</div>`; })()}
           ${e.moneda === "USD" ? `<div class="nota" style="margin:6px 0 0;">En USD se pasa a MXN con el tipo de cambio de esta cotización.</div>` : ""}
           ${original ? `<div style="margin-top:10px;"><label>Estado</label><span class="co-seg">${["borrador", "enviada", "aceptada", "rechazada"].map(k => `<button type="button" class="${e.estado === k ? "activo" : ""}" data-estado="${k}"${puedeEditar ? "" : " disabled"}>${ESTADOS[k].txt.charAt(0) + ESTADOS[k].txt.slice(1).toLowerCase()}</button>`).join("")}</span>
             ${estadoDe(original) === "vencida" ? `<div class="nota" style="margin:6px 0 0;">Vencida por fecha. Usa "Duplicar" para renovarla con folio nuevo.</div>` : ""}</div>` : ""}
@@ -628,12 +658,20 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       e.contacto = ev.target.value === "" || !k ? null : { nombre: k.nombre || "", puesto: k.puesto || "", correo: k.correo || "" };
     });
     $("#co-cuerpo").querySelectorAll("[data-campo]").forEach(b => b.addEventListener("click", () => {
-      const c = b.dataset.campo; e[c] = c === "vigenciaDias" ? Number(b.dataset.valor) : b.dataset.valor; leerFormulario(); renderEditor();
+      const c = b.dataset.campo; e[c] = c === "vigenciaDias" ? Number(b.dataset.valor) : b.dataset.valor; leerFormulario();
+      if (c === "tipoServicio" || c === "moneda") e.rutas.forEach(r => { if (r.importeAuto) { r.importe = ""; autoImporte(r); } });
+      renderEditor();
     }));
-    const tc = $("#co-e-tc"); if (tc) tc.addEventListener("input", () => { e.tipoCambio = num(tc.value); pintarIngresos(); });
+    const tc = $("#co-e-tc"); if (tc) tc.addEventListener("input", () => {
+      e.tipoCambio = num(tc.value);
+      e.rutas.forEach((r, i) => { if (r.importeAuto) { r.importe = ""; autoImporte(r); const imp = $(`tr[data-i="${i}"] [data-r="importe"]`); if (imp && !imp.disabled) imp.value = r.importe; } });
+      pintarIngresos();
+    });
     $("#co-cuerpo").querySelectorAll("tr[data-i] input").forEach(inp => inp.addEventListener("input", () => {
       const i = Number(inp.closest("tr").dataset.i), r = e.rutas[i];
       r[inp.dataset.r] = inp.value;
+      if (inp.dataset.r === "importe") r.importeAuto = false; // lo escribiste tú
+      if (inp.dataset.r === "km") { autoImporte(r); const imp = inp.closest("tr").querySelector('[data-r="importe"]'); if (imp && r.importeAuto) imp.value = r.importe; }
       if (inp.dataset.r === "origen" || inp.dataset.r === "destino") {
         delete r[inp.dataset.r + "Coord"]; geo.delete(r); // escrito a mano: ya no es el punto de ORS
         if (r.origen && r.destino) desdeCatalogo(r, i);
@@ -663,6 +701,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const gp = $("#co-e-guardar-pdf"); if (gp) gp.addEventListener("click", () => guardarCotizacion(true));
     const p = $("#co-e-pdf"); if (p) p.addEventListener("click", () => pdfDe(original.id));
     const d = $("#co-e-dup"); if (d) d.addEventListener("click", () => duplicar(original.id));
+    pintarIngresos();
   }
   // ---- Km: catálogo, ORS y mapa ----
   const geo = new WeakMap(); // ruta del editor → trazo [[lat, lng]] (solo en memoria)
@@ -677,10 +716,19 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     h.innerHTML = `Catálogo ${miles(kmCat)} km · ORS ${miles(r.kmOrs)} km <button type="button" class="co-link" style="font-size:12px;">usar ${miles(r.kmOrs)}</button>`;
     h.querySelector("button").addEventListener("click", () => { r.km = r.kmOrs; pintarFila(i); hint(i, `${miles(r.kmOrs)} km por ORS (camión)`); });
   }
+  // Llena el importe con la sugerida si está vacío o si lo había puesto la sugerida.
+  function autoImporte(r) {
+    if (num(r.importe) != null && !r.importeAuto) return;
+    const sug = sugerida(editor.tipoServicio, r.km, editor.moneda, editor.tipoCambio);
+    if (sug == null) return;
+    r.importe = sug; r.importeAuto = true;
+  }
   function pintarFila(i) {
     const r = editor.rutas[i], tr = $(`tr[data-i="${i}"]`);
     if (!tr) return;
     const km = tr.querySelector('[data-r="km"]'); if (km && !km.disabled) km.value = r.km == null ? "" : r.km;
+    const imp = tr.querySelector('[data-r="importe"]');
+    if (imp && !imp.disabled) { autoImporte(r); imp.value = r.importe == null ? "" : r.importe; }
     const b = tr.querySelector("[data-mapa]"); if (b) b.style.display = r.origenCoord && r.destinoCoord ? "" : "none";
     pintarIngresos();
   }
@@ -828,7 +876,17 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     editor.rutas.forEach((r, i) => {
       const td = $(`[data-ing="${i}"]`); if (!td) return;
       const v = ingresoKm(r, editor.moneda, editor.tipoCambio);
-      td.innerHTML = `<span class="co-sem ${semaforo(v)}"></span><b>${v == null ? "—" : dinero(v)}</b>`;
+      td.innerHTML = `<span class="co-sem ${semaforo(v, editor.tipoServicio, r.km)}"></span><b>${v == null ? "—" : dinero(v)}</b>`;
+      const sg = $(`[data-sug="${i}"]`);
+      if (sg) {
+        const sug = sugerida(editor.tipoServicio, r.km, editor.moneda, editor.tipoCambio);
+        if (sug == null) sg.innerHTML = "";
+        else if (r.importeAuto || num(r.importe) === sug) sg.textContent = "sugerida (umbral verde)";
+        else {
+          sg.innerHTML = `sugerida ${dinero(sug, editor.moneda)} <button type="button" class="co-link" style="font-size:12px;">usar</button>`;
+          sg.querySelector("button").addEventListener("click", () => { r.importe = sug; r.importeAuto = true; const inp = $(`tr[data-i="${i}"] [data-r="importe"]`); if (inp) inp.value = sug; pintarIngresos(); });
+        }
+      }
       const t = $(`[data-tipo="${i}"]`); if (t) t.textContent = tipoRutaTxt(num(r.km));
     });
   }
@@ -968,8 +1026,11 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
   function renderAjustes() {
     $("#co-cuerpo").innerHTML = `
       <div class="co-grid" style="max-width:760px;">
-        <div><label>Semáforo verde desde (MXN/km)</label><input type="number" step="0.01" id="aj-verde" value="${esc(ajustes.verde)}"></div>
-        <div><label>Semáforo ámbar desde (MXN/km)</label><input type="number" step="0.01" id="aj-ambar" value="${esc(ajustes.ambar)}"></div>
+        <div style="grid-column:1/-1;"><label>Umbrales de ingreso por km (MXN). Verde = importe sugerido; abajo del ámbar = rojo.</label>
+          <div class="tabla-wrap"><table class="tabla co-tabla" style="max-width:640px;">
+            <thead><tr><th>Servicio</th><th class="n">RC verde</th><th class="n">RC ámbar</th><th class="n">RL verde</th><th class="n">RL ámbar</th></tr></thead>
+            <tbody>${Object.entries(SERV_UMBRAL).map(([sv, k]) => `<tr><td>${esc(SERVICIOS[sv])}</td>${["rc_verde", "rc_ambar", "rl_verde", "rl_ambar"].map(c => `<td class="n"><input type="number" step="0.01" min="0" data-umbral="${k}_${c}" value="${esc(umbralDe(ajustes, sv, c.startsWith("rc") ? 1 : 999)[c.endsWith("verde") ? "verde" : "ambar"])}" style="width:90px;"></td>`).join("")}</tr>`).join("")}</tbody>
+          </table></div><small class="nota">RC = 350 km o menos · RL = 351 km o más.</small></div>
         <div><label>Tipo de cambio sugerido</label><input type="number" step="0.01" id="aj-tc" value="${esc(ajustes.tipoCambio)}"></div>
         <div><label>Vigencia por omisión (días)</label><input type="number" min="1" id="aj-vig" value="${esc(ajustes.vigenciaDias)}"></div>
         <div style="grid-column:1/-1;"><label>Clave de OpenRouteService (km por camión y mapa)</label><input type="text" id="aj-ors" value="${esc(ajustes.orsKey || "")}" placeholder="Pega aquí la clave de openrouteservice.org" autocomplete="off"></div>
@@ -978,12 +1039,16 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       <p class="nota">La clave de ORS la ven quienes tienen Comercial (la usa su navegador). Plan gratis: 2,000 rutas y 1,000 búsquedas al día; las rutas guardadas en el catálogo ya no se vuelven a calcular. Abajo de las condiciones el PDF agrega solo la vigencia, la moneda (si es USD) y las notas de cada cotización. Quién entra a Comercial se marca en Configuración → Utilidades.</p>
       <div class="co-acciones" style="justify-content:flex-start;"><button type="button" id="aj-ok">Guardar ajustes</button></div>`;
     $("#aj-ok").addEventListener("click", async () => {
-      const verde = num($("#aj-verde").value), ambar = num($("#aj-ambar").value), tc = num($("#aj-tc").value), vig = num($("#aj-vig").value);
-      if (verde == null || ambar == null || ambar > verde) { error("El ámbar debe ser menor o igual que el verde."); return; }
+      const tc = num($("#aj-tc").value), vig = num($("#aj-vig").value);
+      const umbrales = {};
+      $("#co-cuerpo").querySelectorAll("[data-umbral]").forEach(i => { umbrales[i.dataset.umbral] = num(i.value) || 0; });
+      for (const k of Object.values(SERV_UMBRAL)) for (const t of ["rc", "rl"]) {
+        if (umbrales[`${k}_${t}_ambar`] > umbrales[`${k}_${t}_verde`]) { error("En cada servicio, el ámbar debe ser menor o igual que el verde."); return; }
+      }
       if (!(tc > 0) || !(vig > 0)) { error("Revisa el tipo de cambio y la vigencia."); return; }
       error();
       try {
-        await setDoc(doc(db, COL_CFG, "ajustes"), { verde, ambar, tipoCambio: tc, vigenciaDias: Math.round(vig), orsKey: $("#aj-ors").value.trim(), condiciones: $("#aj-cond").value.trim(), actualizadoMs: Date.now(), actualizadoPor: { uid, nombre: yo.nombre } });
+        await setDoc(doc(db, COL_CFG, "ajustes"), { umbrales, tipoCambio: tc, vigenciaDias: Math.round(vig), orsKey: $("#aj-ors").value.trim(), condiciones: $("#aj-cond").value.trim(), actualizadoMs: Date.now(), actualizadoPor: { uid, nombre: yo.nombre } });
         avisar("Ajustes guardados.");
       } catch (x) { error("No se pudieron guardar: " + x.message); }
     });
