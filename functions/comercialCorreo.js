@@ -28,6 +28,7 @@ const REMITENTE_RESPALDO = { name: "Ivan Landa", email: "ilanda@alanis.com.mx" }
 const MAX_DESTINATARIOS = 10;
 const MAX_PDF_BYTES = 3 * 1024 * 1024;
 const brevoApiKeyComercial = defineSecret("BREVO_API_KEY");
+const VERSION = "2026-10-30c"; // sale en los mensajes de error y en el log, para saber qué versión está publicada
 
 const txt = (v, max) => (typeof v === "string" ? v.trim().slice(0, max || 200) : "");
 const correoValido = (t) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t);
@@ -54,10 +55,13 @@ async function leerActor(request) {
   return { uid: request.auth.uid, nombre: u.nombre || "", rol: u.rol, correo };
 }
 
+// Brevo exige "name" en cada destinatario ("name is missing in to"): si el
+// contacto no tiene nombre, se usa el mismo correo.
 function listaDirecciones(v) {
-  return (Array.isArray(v) ? v : []).map((d) => ({
-    email: txt(d && d.email, 120).toLowerCase(), name: txt(d && d.nombre, 80),
-  })).filter((d) => correoValido(d.email));
+  return (Array.isArray(v) ? v : []).map((d) => {
+    const email = txt(d && d.email, 120).toLowerCase();
+    return { email, name: txt(d && d.nombre, 80) || email };
+  }).filter((d) => correoValido(d.email));
 }
 
 async function enviarBrevo(clave, cuerpo) {
@@ -101,10 +105,10 @@ exports.enviarCotizacionComercial = onCall({ region: REGION, secrets: [brevoApiK
   }
 
   const propio = actor.correo.endsWith("@alanis.com.mx") ? { name: actor.nombre || actor.correo, email: actor.correo } : null;
-  const bcc = e.copiaParaMi && correoValido(actor.correo) && !vistos.has(actor.correo) ? [{ email: actor.correo }] : undefined;
+  const bcc = e.copiaParaMi && correoValido(actor.correo) && !vistos.has(actor.correo) ? [{ email: actor.correo, name: actor.nombre || actor.correo }] : undefined;
   const base = {
     to: para, cc: cc.length ? cc : undefined, bcc,
-    replyTo: correoValido(actor.correo) ? { email: actor.correo, name: actor.nombre || undefined } : undefined,
+    replyTo: correoValido(actor.correo) ? { email: actor.correo, name: actor.nombre || actor.correo } : undefined,
     subject: asunto,
     textContent: mensaje,
     htmlContent: `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.55;color:#1f1a14;">${escHtml(mensaje).replace(/\n/g, "<br>")}</div>`,
@@ -121,8 +125,8 @@ exports.enviarCotizacionComercial = onCall({ region: REGION, secrets: [brevoApiK
     r = await enviarBrevo(clave, { ...base, sender: remitente });
   }
   if (!r.ok) {
-    logger.error("enviarCotizacionComercial: Brevo rechazó el envío", { folio, status: r.status, detalle: r.datos });
-    throw new HttpsError("internal", `El servicio de correo rechazó el envío (${r.status}). ${txt(r.datos && r.datos.message, 200)}`);
+    logger.error("enviarCotizacionComercial: Brevo rechazó el envío", { version: VERSION, folio, status: r.status, detalle: r.datos, to: base.to, cc: base.cc });
+    throw new HttpsError("internal", `El servicio de correo rechazó el envío (${r.status}). ${txt(r.datos && r.datos.message, 200)} [v ${VERSION}]`);
   }
 
   const envio = {

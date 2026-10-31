@@ -56,6 +56,10 @@ import { LOGO_ALANIS } from "./comercialLogo.js";
 //     (la clave de Brevo solo vive en la función). Pasa sola a ENVIADA.
 //   - WhatsApp (solo celular): menú de compartir del teléfono con el PDF; al
 //     compartir, pasa a ENVIADA. Cada envío queda en cot.envios.
+// 2026-10-30: la misma pantalla se acomoda al celular (≤ 700 px): cada ruta es
+// una tarjeta (origen/destino arriba, km e importe abajo, ingreso/km en color y
+// borde de color). Sin recuadro de semáforo: el color va en cada ruta y al
+// tocar/pasar el mouse dice el umbral aplicado.
 // ============================================================================
 
 const COL_CLI = "com_clientes";
@@ -200,7 +204,34 @@ function inyectarEstilos() {
     .co-mapa { height:340px; border-radius:10px; overflow:hidden; border:1px solid #e2ddd5; }
     .co-via { display:inline-flex; align-items:center; gap:4px; background:#f2ede6; border-radius:8px; padding:2px 8px; font-size:12px; margin:2px 4px 2px 0; }
     .co-contacto { display:grid; grid-template-columns:1.2fr 1fr 1fr 1.3fr auto; gap:6px; margin-bottom:6px; }
-    @media (max-width:700px) { .co-contacto { grid-template-columns:1fr 1fr; } .co-campos { grid-template-columns:1fr; } }
+    .co-ing { font-weight:800; white-space:nowrap; cursor:help; background:none !important; display:inline; width:auto; height:auto; }
+    .co-ing.co-s-v { color:#3B7A1E; } .co-ing.co-s-a { color:#B7790B; } .co-ing.co-s-r { color:#B83227; } .co-ing.co-s-n { color:#8a7f73; }
+    @media (max-width:700px) {
+      .co-contacto { grid-template-columns:1fr 1fr; } .co-campos { grid-template-columns:1fr; }
+      .co-grid { grid-template-columns:1fr !important; }
+      /* Rutas: cada renglón es una tarjeta */
+      .co-rutas thead { display:none; }
+      .co-rutas, .co-rutas tbody { display:block; width:100%; }
+      .co-rutas tr.co-fila { position:relative; display:grid; grid-template-columns:1fr 1.3fr; gap:8px 10px; border:1px solid #e2ddd5; border-left:5px solid #cfc8bf; border-radius:12px; padding:10px 12px; margin-bottom:10px; background:#fff; }
+      .co-rutas tr.co-fila.co-f-v { border-left-color:#3B7A1E; } .co-rutas tr.co-fila.co-f-a { border-left-color:#D99A1E; } .co-rutas tr.co-fila.co-f-r { border-left-color:#B83227; }
+      .co-rutas td { display:block; border:0 !important; padding:0 !important; text-align:left !important; }
+      .co-rutas td::before { content:attr(data-et); display:block; font-size:10.5px; font-weight:700; color:#6b5f52; text-transform:uppercase; letter-spacing:.3px; margin-bottom:3px; }
+      .co-rutas .co-c-or, .co-rutas .co-c-de, .co-rutas .co-c-ing { grid-column:1 / -1; }
+      .co-rutas .co-c-or { padding-right:40px !important; }
+      .co-rutas .co-c-ing { display:flex; justify-content:space-between; align-items:center; border-top:1px solid #f0ece6 !important; padding-top:8px !important; }
+      .co-rutas .co-c-ing::before { margin:0; }
+      .co-rutas .co-c-x { position:absolute; top:8px; right:8px; }
+      .co-rutas .co-c-x::before { content:none; }
+      .co-rutas input { font-size:16px; padding:9px 10px; }
+      .co-seg-estado { display:grid; grid-template-columns:1fr 1fr; width:100%; }
+      .co-seg-estado button { border-left:0; border-top:1px solid #e2ddd5; padding:10px; }
+      /* Botones: enviar arriba y grandes; PDF · Duplicar · Guardar abajo */
+      .co-acciones { display:flex; flex-wrap:wrap; gap:8px; }
+      .co-acciones button { flex:1 1 30%; padding:11px 6px; }
+      #co-e-correo { order:1; flex-basis:100%; } #co-e-wa { order:2; flex-basis:100%; }
+      #co-e-pdf { order:3; } #co-e-dup { order:4; } #co-e-guardar { order:5; } #co-e-guardar-pdf { order:6; flex-basis:100%; }
+      .modal-tarjeta { padding:16px !important; }
+    }
   `;
   document.head.appendChild(s);
 }
@@ -336,6 +367,12 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     if (v == null) return "co-s-n";
     const u = umbralDe(ajustes, servicio, num(km));
     return v >= u.verde ? "co-s-v" : v >= u.ambar ? "co-s-a" : "co-s-r";
+  };
+  // Celda de ingreso/km: número en color y el umbral aplicado (title).
+  const celdaIng = (v, servicio, km) => {
+    const cls = semaforo(v, servicio, km), u = umbralDe(ajustes, servicio, num(km));
+    const tit = num(km) ? `${u.tramo} ${SERVICIOS[servicio] || ""}: verde ${u.verde} o más, ámbar ${u.ambar} o más` : "";
+    return `<span class="co-ing ${cls}" title="${esc(tit)}">${v == null ? "—" : dinero(v)}</span>`;
   };
   // Importe sugerido = km × umbral verde (MXN); en USD, entre el TC.
   const sugerida = (servicio, km, moneda, tc) => {
@@ -662,29 +699,26 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
           const dis = fija ? " disabled" : "";
           const v = ingresoKm(r, e.moneda, e.tipoCambio);
           const cat = r.origen && r.destino ? rutaDelCatalogo(r.origen, r.destino) : null;
-          return `<tr data-i="${i}">
-            <td><div class="co-ac"><input type="text" list="co-lugares" data-r="origen" value="${esc(r.origen)}"${dis} placeholder="${ajustes.orsKey ? "Escribe la ciudad…" : "Ciudad, estado"}" autocomplete="off"></div>
+          return `<tr data-i="${i}" class="co-fila ${semaforo(v, e.tipoServicio, r.km).replace("co-s-", "co-f-")}">
+            <td class="co-c-or" data-et="Origen"><div class="co-ac"><input type="text" list="co-lugares" data-r="origen" value="${esc(r.origen)}"${dis} placeholder="${ajustes.orsKey ? "Escribe la ciudad…" : "Ciudad, estado"}" autocomplete="off"></div>
               ${(r.vias || []).length ? `<small class="nota">vía ${esc(r.vias.map(v => v.label.split(",")[0]).join(", "))}</small>` : ""}</td>
-            <td><div class="co-ac"><input type="text" list="co-lugares" data-r="destino" value="${esc(r.destino)}"${dis} placeholder="${ajustes.orsKey ? "Escribe la ciudad…" : "Ciudad, estado"}" autocomplete="off"></div>
+            <td class="co-c-de" data-et="Destino"><div class="co-ac"><input type="text" list="co-lugares" data-r="destino" value="${esc(r.destino)}"${dis} placeholder="${ajustes.orsKey ? "Escribe la ciudad…" : "Ciudad, estado"}" autocomplete="off"></div>
               ${fija ? "" : `<small class="nota" data-hint="${i}">${r.origen && r.destino ? (cat ? "del catálogo" : "ruta nueva · se agrega al catálogo") : ""}</small>`}
               <button type="button" class="co-link" data-mapa="${i}" style="font-size:12px;${r.origenCoord && r.destinoCoord ? "" : "display:none;"}">Ver ruta</button>
               ${fija && r.agregadaMs - (original.emisionMs || 0) > DIA / 2 ? `<br><small class="nota">agregada ${fecha(r.agregadaMs)}</small>` : ""}</td>
-            <td class="n"><input type="number" min="1" data-r="km" value="${esc(r.km)}"${dis}><br><small class="nota" data-tipo="${i}">${tipoRutaTxt(num(r.km))}</small></td>
-            <td class="n"><input type="number" min="0" step="0.01" data-r="importe" value="${esc(r.importe)}"${dis}>${fija ? "" : `<br><small class="nota" data-sug="${i}"></small>`}</td>
-            <td class="n" data-ing="${i}"><span class="co-sem ${semaforo(v, e.tipoServicio, r.km)}"></span><b>${v == null ? "—" : dinero(v)}</b></td>
-            <td>${fija ? "" : `<button type="button" class="secundario co-mini" data-qr="${i}" title="Quitar ruta">✕</button>`}</td></tr>`;
+            <td class="n co-c-km" data-et="Km"><input type="number" min="1" data-r="km" value="${esc(r.km)}"${dis}><br><small class="nota" data-tipo="${i}">${tipoRutaTxt(num(r.km))}</small></td>
+            <td class="n co-c-im" data-et="Importe (${esc(e.moneda)})"><input type="number" min="0" step="0.01" data-r="importe" value="${esc(r.importe)}"${dis}>${fija ? "" : `<br><small class="nota" data-sug="${i}"></small>`}</td>
+            <td class="n co-c-ing" data-et="Ingreso por km" data-ing="${i}">${celdaIng(v, e.tipoServicio, r.km)}</td>
+            <td class="co-c-x">${fija ? "" : `<button type="button" class="secundario co-mini" data-qr="${i}" title="Quitar ruta">✕</button>`}</td></tr>`;
         }).join("")}</tbody></table></div>
-      ${puedeEditar && vigente ? `<button type="button" class="secundario co-mini" id="co-e-mas" style="margin-top:8px;">+ Agregar ruta</button>` : ""}
+      ${puedeEditar && vigente ? `<div style="margin-top:8px;"><button type="button" class="secundario co-mini" id="co-e-mas">+ Agregar ruta</button></div>` : ""}
       ${original && !bloqueada ? `<p class="nota">Está en borrador: puedes cambiar todo. Al pasarla a Enviada, las rutas guardadas quedan fijas.</p>` : ""}
       ${bloqueada && vigente ? `<p class="nota">Ya tiene folio: las rutas guardadas no cambian; puedes agregar rutas nuevas mientras siga vigente (salen en el PDF con su fecha). Para cambiar importes, usa "Duplicar".</p>` : ""}
       <div class="co-grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-top:14px;">
         <div class="co-campo"><label>Notas para el cliente (salen en el PDF)</label><textarea id="co-e-notas" rows="3">${esc(e.notas || "")}</textarea></div>
-        <div class="co-indicador"><div class="nota" style="margin:0;">Semáforo de ingreso por km (MXN)</div>
-          ${(() => { const rc = umbralDe(ajustes, e.tipoServicio, 1), rl = umbralDe(ajustes, e.tipoServicio, 999); const t = (u) => `<span class="co-sem co-s-v"></span>${u.verde} o más · <span class="co-sem co-s-a"></span>${u.ambar} o más · <span class="co-sem co-s-r"></span>menos de ${u.ambar}`;
-            return `<div style="margin-top:6px;"><b>${esc(SERVICIOS[e.tipoServicio] || "")}</b></div><div style="margin-top:4px;">RC (350 km o menos): ${t(rc)}</div><div style="margin-top:2px;">RL (351 km o más): ${t(rl)}</div>
-              <div class="nota" style="margin:6px 0 0;">Importe sugerido = km × umbral verde. Se llena solo mientras no escribas otro.</div>`; })()}
-          ${e.moneda === "USD" ? `<div class="nota" style="margin:6px 0 0;">En USD se pasa a MXN con el tipo de cambio de esta cotización.</div>` : ""}
-          ${original ? `<div style="margin-top:10px;"><label>Estado</label><span class="co-seg">${["borrador", "enviada", "aceptada", "rechazada"].map(k => `<button type="button" class="${e.estado === k ? "activo" : ""}" data-estado="${k}"${puedeEditar ? "" : " disabled"}>${ESTADOS[k].txt.charAt(0) + ESTADOS[k].txt.slice(1).toLowerCase()}</button>`).join("")}</span>
+        <div>
+          ${e.moneda === "USD" ? `<div class="nota" style="margin:0 0 8px;">El ingreso por km se calcula en MXN con el tipo de cambio de esta cotización.</div>` : ""}
+          ${original ? `<div><label>Estado</label><span class="co-seg co-seg-estado">${["borrador", "enviada", "aceptada", "rechazada"].map(k => `<button type="button" class="${e.estado === k ? "activo" : ""}" data-estado="${k}"${puedeEditar ? "" : " disabled"}>${ESTADOS[k].txt.charAt(0) + ESTADOS[k].txt.slice(1).toLowerCase()}</button>`).join("")}</span>
             ${estadoDe(original) === "vencida" ? `<div class="nota" style="margin:6px 0 0;">Vencida por fecha. Usa "Duplicar" para renovarla con folio nuevo.</div>` : ""}</div>` : ""}
         </div>
       </div>
@@ -935,7 +969,8 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     editor.rutas.forEach((r, i) => {
       const td = $(`[data-ing="${i}"]`); if (!td) return;
       const v = ingresoKm(r, editor.moneda, editor.tipoCambio);
-      td.innerHTML = `<span class="co-sem ${semaforo(v, editor.tipoServicio, r.km)}"></span><b>${v == null ? "—" : dinero(v)}</b>`;
+      td.innerHTML = celdaIng(v, editor.tipoServicio, r.km);
+      const tr = $(`tr[data-i="${i}"]`); if (tr) tr.className = `co-fila ${semaforo(v, editor.tipoServicio, r.km).replace("co-s-", "co-f-")}`;
       const sg = $(`[data-sug="${i}"]`);
       if (sg) {
         const sug = sugerida(editor.tipoServicio, r.km, editor.moneda, editor.tipoCambio);
