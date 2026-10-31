@@ -4,8 +4,9 @@
 // ##########################################################################
 import { db } from "./firebase-config.js";
 import {
-  collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, runTransaction, query, where
+  collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, runTransaction, query, where, arrayUnion
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
 import { LOGO_ALANIS } from "./comercialLogo.js";
 
 // ============================================================================
@@ -49,6 +50,12 @@ import { LOGO_ALANIS } from "./comercialLogo.js";
 // 2026-10-30: los ajustes (umbrales, TC, vigencia, clave de ORS y condiciones)
 // se editan en Configuración → 2 · Utilidades → Comercial con
 // iniciarAjustesComercial(); los datos siguen en com_config/ajustes.
+// 2026-10-30: historial compacto (folio · fecha · vigencia · estado) y ENVÍO:
+//   - Correo: la función enviarCotizacionComercial (functions/comercialCorreo.js)
+//     lo manda por Brevo con el PDF adjunto, desde el correo de quien cotiza
+//     (la clave de Brevo solo vive en la función). Pasa sola a ENVIADA.
+//   - WhatsApp (solo celular): menú de compartir del teléfono con el PDF; al
+//     compartir, pasa a ENVIADA. Cada envío queda en cot.envios.
 // ============================================================================
 
 const COL_CLI = "com_clientes";
@@ -57,6 +64,8 @@ const COL_RUT = "com_rutas";
 const COL_CFG = "com_config";
 const COL_CONT = "com_contadores";
 const COL_FIR = "com_firmas";
+const esCelular = () => /iphone|ipad|ipod|android|mobi/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const correoValido = (t) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(t || "").trim());
 const URL_JSPDF = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
 const URL_LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
 const URL_LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
@@ -95,6 +104,7 @@ const textoVigencia = (d) => Number(d) === 365 ? "1 año" : `${d} días`;
 // ---- Utilerías ----------------------------------------------------------------
 function esc(t) { const d = document.createElement("div"); d.textContent = t == null ? "" : String(t); return d.innerHTML; }
 const pad = (n, l = 2) => String(n).padStart(l, "0");
+const fechaHoraTxt = (ms) => { if (!ms) return "—"; const d = new Date(ms); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const fecha = (ms) => { if (!ms) return "—"; const d = new Date(ms); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`; };
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 const fechaLarga = (ms) => { const d = new Date(ms); return `${d.getDate()} de ${MESES[d.getMonth()]} de ${d.getFullYear()}`; };
@@ -200,7 +210,8 @@ function inyectarEstilos() {
 // rutas, condiciones y firma de quien cotizó. Sin ingreso/km (es interno).
 // firma: { nombre, puesto, telefono, correo } de quien hizo la cotización (Mi firma);
 // si no la ha definido, se usa lo guardado en la cotización.
-export async function generarPdf(cot, cliente, ajustes, firma) {
+// opciones.descargar === false: no descarga, solo regresa el archivo.
+export async function generarPdf(cot, cliente, ajustes, firma, opciones = {}) {
   const { jsPDF } = await cargarScript(URL_JSPDF, "jspdf");
   const pdf = new jsPDF({ unit: "mm", format: "letter" });
   const CAFE = [44, 30, 15], GRIS = [110, 98, 86];
@@ -272,7 +283,9 @@ export async function generarPdf(cot, cliente, ajustes, firma) {
     pdf.text("Autotransportes Alanis · Carretera Aeropuerto Km 2.75, Col. América 4, Nuevo Laredo, Tamps., C.P. 88299 · (867) 711 6565", 108, 272, { align: "center" });
     if (paginas > 1) pdf.text(`${p} / ${paginas}`, X1, 272, { align: "right" });
   }
-  pdf.save(`${cot.folio || "cotizacion"}.pdf`);
+  const nombre = `${cot.folio || "cotizacion"}.pdf`;
+  if (opciones.descargar !== false) pdf.save(nombre);
+  return { nombre, blob: pdf.output("blob"), base64: pdf.output("datauristring").split(",")[1] };
 }
 
 // ---- Pantalla -----------------------------------------------------------------
@@ -498,25 +511,19 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
   }
 
   // ---- Ficha del cliente ----
+  // Historial compacto: folio · fecha · vigencia · estado. El detalle, al abrirla.
   function tablaCotizaciones(cs, conCliente) {
     if (!cs.length) return `<p class="nota" style="text-align:center;padding:14px;">Sin cotizaciones.</p>`;
     return `<div class="tabla-wrap"><table class="tabla co-tabla">
-      <thead><tr><th>Folio</th><th>Fecha</th>${conCliente ? "<th>Cliente</th>" : ""}<th>Rutas</th><th>Carga</th><th class="n">Km</th><th class="n">Importe</th><th class="n">Ing./km MXN</th><th>Vigencia</th><th>Estado</th><th></th></tr></thead>
+      <thead><tr><th>Folio</th>${conCliente ? "<th>Cliente</th>" : ""}<th>Fecha</th><th>Vigencia</th><th>Estado</th></tr></thead>
       <tbody>${cs.map(c => {
-        const rs = c.rutas || [];
-        const lineas = (f) => rs.map(f).join("<br>");
+        const n = (c.rutas || []).length, env = (c.envios || [])[(c.envios || []).length - 1];
         return `<tr class="clic" data-cot="${esc(c.id)}">
-          <td><b>${esc(c.folio)}</b>${esAdmin && c.creadoPorUid !== uid ? `<br><small class="nota">${esc((c.creadoPor || {}).nombre || "")}</small>` : ""}</td>
-          <td>${fecha(c.emisionMs)}</td>
+          <td><b>${esc(c.folio)}</b> <small class="nota">· ${n} ruta${n === 1 ? "" : "s"}</small>${esAdmin && c.creadoPorUid !== uid ? `<br><small class="nota">${esc((c.creadoPor || {}).nombre || "")}</small>` : ""}</td>
           ${conCliente ? `<td>${esc(c.clienteNombre)}</td>` : ""}
-          <td>${lineas(r => `${esc(r.origen)} → ${esc(r.destino)}`)}${rs.length > 1 ? `<br><small class="nota">${rs.length} rutas</small>` : ""}</td>
-          <td>${chipCarga(c.tipoCarga)}</td>
-          <td class="n">${lineas(r => miles(r.km))}</td>
-          <td class="n">${lineas(r => `${dinero(num(r.importe), c.moneda)} ${esc(c.moneda)}`)}</td>
-          <td class="n">${lineas(r => { const v = ingresoKm(r, c.moneda, c.tipoCambio); return `<span class="co-sem ${semaforo(v, c.tipoServicio, r.km)}"></span><b>${v == null ? "—" : dinero(v)}</b>`; })}</td>
+          <td>${fecha(c.emisionMs)}</td>
           <td>${estadoDe(c) === "vencida" ? `venció ${fecha(c.vencimientoMs)}` : `hasta ${fecha(c.vencimientoMs)}`}</td>
-          <td>${chipEstado(c)}</td>
-          <td style="white-space:nowrap;"><button type="button" class="co-link" data-pdf="${esc(c.id)}">PDF</button> · <button type="button" class="co-link" data-dup="${esc(c.id)}">Duplicar</button></td></tr>`;
+          <td>${chipEstado(c)}${env ? `<br><small class="nota">${fecha(env.ms)} ${env.canal === "whatsapp" ? "por WhatsApp" : "a " + esc((env.para || [])[0] || "")}</small>` : ""}</td></tr>`;
       }).join("")}</tbody></table></div>`;
   }
   function enlazarTablaCot() {
@@ -555,7 +562,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       </div>
       <div class="co-h3">Historial de cotizaciones</div>
       ${tablaCotizaciones(cs, false)}
-      <p class="nota">Toca una cotización para verla, cambiar su estado o agregarle rutas dentro de su vigencia. "Duplicar" crea una nueva con lo mismo (para renovar una vencida).</p>`;
+      <p class="nota">Toca una cotización para ver el detalle, editarla, descargar el PDF, enviarla o duplicarla.</p>`;
     $("#co-f-volver").addEventListener("click", () => { fichaId = null; tab = "clientes"; render(); });
     $("#co-f-editar").addEventListener("click", () => abrirCliente(c.id));
     $("#co-f-cotizar").addEventListener("click", () => abrirEditor(null, c.id));
@@ -684,8 +691,14 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       <div class="error" id="co-e-err"></div>
       <div class="co-acciones">
         ${original ? `<button type="button" class="secundario" id="co-e-dup">Duplicar</button><button type="button" class="secundario" id="co-e-pdf">PDF</button>` : ""}
-        ${puedeEditar ? `<button type="button" class="secundario" id="co-e-guardar">${original ? "Guardar cambios" : "Guardar borrador"}</button><button type="button" id="co-e-guardar-pdf">Guardar y ver PDF</button>` : ""}
-      </div>`;
+        ${puedeEditar ? `<button type="button" class="secundario" id="co-e-guardar">${original ? "Guardar cambios" : "Guardar borrador"}</button>` : ""}
+        ${puedeEditar && !original ? `<button type="button" id="co-e-guardar-pdf">Guardar y ver PDF</button>` : ""}
+        ${original && puedeEditar && esCelular() ? `<button type="button" class="secundario" id="co-e-wa">WhatsApp</button>` : ""}
+        ${original && puedeEditar ? `<button type="button" id="co-e-correo">✉ Enviar por correo</button>` : ""}
+      </div>
+      ${original && (original.envios || []).length ? `<div class="co-h3">Envíos</div><div class="tabla-wrap"><table class="tabla co-tabla">
+        <thead><tr><th>Fecha</th><th>Por</th><th>Para</th><th>CC</th><th>Quién</th></tr></thead>
+        <tbody>${original.envios.slice().reverse().map(v => `<tr><td>${esc(fechaHoraTxt(v.ms))}</td><td>${v.canal === "whatsapp" ? "WhatsApp" : "Correo"}</td><td>${esc((v.para || []).join(", ") || "—")}</td><td>${esc((v.cc || []).join(", ") || "—")}</td><td>${esc((v.por || {}).nombre || "")}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
     enlazarEditor(original, bloqueada);
   }
 
@@ -743,6 +756,8 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const g = $("#co-e-guardar"); if (g) g.addEventListener("click", () => guardarCotizacion(false));
     const gp = $("#co-e-guardar-pdf"); if (gp) gp.addEventListener("click", () => guardarCotizacion(true));
     const p = $("#co-e-pdf"); if (p) p.addEventListener("click", () => pdfDe(original.id));
+    const ec = $("#co-e-correo"); if (ec) ec.addEventListener("click", () => abrirEnvio(original.id));
+    const wa = $("#co-e-wa"); if (wa) wa.addEventListener("click", () => compartirWhatsApp(original.id));
     const d = $("#co-e-dup"); if (d) d.addEventListener("click", () => duplicar(original.id));
     pintarIngresos();
   }
@@ -1010,6 +1025,116 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       botones.forEach(b => b.disabled = false);
     }
   }
+  // ---- Envío por correo (función enviarCotizacionComercial) ----
+  const fnEnviar = httpsCallable(getFunctions(undefined, "us-central1"), "enviarCotizacionComercial");
+  function mensajeCorreo(c, saludo) {
+    const f = { ...(c.creadoPor || {}), ...Object.fromEntries(Object.entries(firmaDe(c.creadoPorUid) || {}).filter(([, v]) => v)) };
+    const n = (c.rutas || []).length;
+    const origenes = [...new Set((c.rutas || []).map(r => String(r.origen).split(",")[0]))];
+    const servicio = c.tipoServicio && c.tipoServicio !== "nacional" ? ` (${(SERVICIOS[c.tipoServicio] || "").toLowerCase()})` : "";
+    return `${saludo ? saludo + ", buen día." : "Buen día."}\n\nPor medio del presente te comparto nuestra cotización ${c.folio} para el servicio de autotransporte de carga ${(CARGAS[c.tipoCarga] || "").toLowerCase()}${servicio}, con ${n} ruta${n === 1 ? "" : "s"}${origenes.length === 1 ? " desde " + origenes[0] : ""}.\n\nLa propuesta tiene vigencia hasta el ${fechaLarga(c.vencimientoMs)}. Adjunto el documento con el detalle de tarifas y condiciones.\n\nQuedo a tus órdenes.\n\nUn saludo.\n\n${[f.nombre, f.puesto, "Autotransportes Alanis", f.telefono].filter(Boolean).join("\n")}`;
+  }
+  function abrirEnvio(id) {
+    const c = cotizaciones.get(id), cli = c && clientes.get(c.clienteId);
+    if (!c) return;
+    const contactos = ((cli && cli.contactos) || []).filter(k => correoValido(k.correo));
+    const elegidos = contactos.map((k, i) => ({ ...k, sel: i === 0, tipo: "para" }));
+    const extras = [];
+    const primerNombre = (t) => String(t || "").trim().split(/\s+/)[0].toLowerCase().replace(/^./, x => x.toUpperCase());
+    const ov = document.createElement("div");
+    ov.className = "modal-overlay";
+    ov.innerHTML = `<div class="modal-tarjeta" style="max-width:640px;width:100%;max-height:92vh;overflow:auto;">
+      <h2 style="margin:0 0 4px;">Enviar ${esc(c.folio)}</h2>
+      <p class="nota" style="margin:0;">Sale de ${esc(yo.correo)} con el PDF adjunto. Al enviarla pasa a ENVIADA.</p>
+      <div class="co-h3">Destinatarios</div>
+      <div id="en-lista"></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;">
+        <input type="email" id="en-nuevo" placeholder="Agregar otro correo" style="flex:1;min-width:200px;">
+        <button type="button" class="secundario co-mini" id="en-agregar">Agregar</button></div>
+      <label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-weight:400;font-size:12.5px;"><input type="checkbox" id="en-guardar" checked style="width:auto;"> Guardar los correos nuevos en los contactos de ${esc(c.clienteNombre)}</label>
+      <label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-weight:400;font-size:12.5px;"><input type="checkbox" id="en-yo" checked style="width:auto;"> Copia oculta para mí (${esc(yo.correo)})</label>
+      <div class="co-campo" style="margin-top:12px;"><label>Asunto</label><input type="text" id="en-asunto" value="${esc(`Cotización ${c.folio} · Autotransportes Alanis`)}"></div>
+      <div class="co-campo" style="margin-top:10px;"><label>Mensaje</label><textarea id="en-msg" rows="12"></textarea></div>
+      <div class="error" id="en-err"></div>
+      <div class="modal-acciones"><button type="button" class="secundario" data-cerrar>Cancelar</button><button type="button" id="en-ok">Enviar</button></div></div>`;
+    document.body.appendChild(ov);
+    const q = (s2) => ov.querySelector(s2);
+    const err = (t) => { q("#en-err").textContent = t || ""; };
+    const todos = () => [...elegidos, ...extras];
+    const primero = () => todos().find(k => k.sel && k.tipo === "para");
+    let msgTocado = false;
+    const pintarMsg = () => { if (!msgTocado) q("#en-msg").value = mensajeCorreo(c, primero() ? primerNombre(primero().nombre) : ""); };
+    const pintar = () => {
+      q("#en-lista").innerHTML = todos().length ? todos().map((k, i) => `<div style="display:flex;gap:8px;align-items:center;padding:5px 0;font-size:13px;">
+          <input type="checkbox" data-sel="${i}" style="width:auto;"${k.sel ? " checked" : ""}>
+          <span style="flex:1;">${esc(k.nombre || k.correo)}${k.puesto ? ` <small class="nota">· ${esc(k.puesto)}</small>` : ""}<br><small class="nota">${esc(k.correo)}${k.nuevo ? " · nuevo" : ""}</small></span>
+          <span class="co-seg"><button type="button" class="${k.tipo === "para" ? "activo" : ""}" data-tipo="${i}" data-v="para">Para</button><button type="button" class="${k.tipo === "cc" ? "activo" : ""}" data-tipo="${i}" data-v="cc">CC</button></span></div>`).join("")
+        : `<p class="nota">${esc(c.clienteNombre)} no tiene contactos con correo. Agrega uno abajo.</p>`;
+      ov.querySelectorAll("[data-sel]").forEach(x => x.addEventListener("change", () => { todos()[Number(x.dataset.sel)].sel = x.checked; pintarMsg(); }));
+      ov.querySelectorAll("[data-tipo]").forEach(x => x.addEventListener("click", () => { todos()[Number(x.dataset.tipo)].tipo = x.dataset.v; pintar(); pintarMsg(); }));
+    };
+    pintar(); pintarMsg();
+    q("#en-msg").addEventListener("input", () => { msgTocado = true; });
+    q("#en-agregar").addEventListener("click", () => {
+      const v = q("#en-nuevo").value.trim().toLowerCase();
+      if (!correoValido(v)) { err("Ese correo no es válido."); return; }
+      if (todos().some(k => String(k.correo).toLowerCase() === v)) { err("Ese correo ya está en la lista."); return; }
+      err(); extras.push({ nombre: "", correo: v, sel: true, tipo: primero() ? "cc" : "para", nuevo: true });
+      q("#en-nuevo").value = ""; pintar(); pintarMsg();
+    });
+    q("#en-nuevo").addEventListener("keydown", (e2) => { if (e2.key === "Enter") { e2.preventDefault(); q("#en-agregar").click(); } });
+    ov.querySelector("[data-cerrar]").addEventListener("click", () => ov.remove());
+    q("#en-ok").addEventListener("click", async () => {
+      const sel = todos().filter(k => k.sel);
+      const para = sel.filter(k => k.tipo === "para"), cc = sel.filter(k => k.tipo === "cc");
+      if (!para.length) { err("Elige al menos un destinatario en Para."); return; }
+      const asunto = q("#en-asunto").value.trim(), mensaje = q("#en-msg").value.trim();
+      if (!asunto || !mensaje) { err("Escribe el asunto y el mensaje."); return; }
+      err();
+      const b = q("#en-ok"); b.disabled = true; b.textContent = "Enviando…";
+      try {
+        const archivo = await generarPdf(c, cli, ajustes, firmaDe(c.creadoPorUid), { descargar: false });
+        const dir = (k) => ({ email: k.correo, nombre: k.nombre || "" });
+        const r = await fnEnviar({ folio: c.folio, para: para.map(dir), cc: cc.map(dir), copiaParaMi: q("#en-yo").checked, asunto, mensaje, pdfBase64: archivo.base64 });
+        const nuevos = extras.filter(k => k.sel);
+        if (q("#en-guardar").checked && nuevos.length && cli) {
+          try { await updateDoc(doc(db, COL_CLI, cli.id), { contactos: [...(cli.contactos || []), ...nuevos.map(k => ({ nombre: "", puesto: "", telefono: "", correo: k.correo }))], actualizadoMs: Date.now() }); } catch (x) { /* el envío ya salió */ }
+        }
+        ov.remove();
+        avisar(`${c.folio} enviada a ${para.map(k => k.correo).join(", ")}${r.data && r.data.remitente && r.data.remitente !== yo.correo ? ` (salió de ${r.data.remitente}, con respuesta a tu correo)` : ""}.`);
+      } catch (x) {
+        b.disabled = false; b.textContent = "Enviar";
+        err("No se pudo enviar: " + (x.message || x));
+      }
+    });
+  }
+  // ---- WhatsApp (celular): menú de compartir con el PDF ----
+  async function compartirWhatsApp(id) {
+    const c = cotizaciones.get(id), cli = c && clientes.get(c.clienteId);
+    if (!c) return;
+    error();
+    try {
+      const archivo = await generarPdf(c, cli, ajustes, firmaDe(c.creadoPorUid), { descargar: false });
+      const file = new File([archivo.blob], archivo.nombre, { type: "application/pdf" });
+      const texto = `Buen día. Te comparto la cotización ${c.folio} de Autotransportes Alanis, vigente hasta el ${fechaLarga(c.vencimientoMs)}.`;
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: c.folio, text: texto });
+      } else {
+        // Sin compartir archivos: se descarga el PDF y se abre WhatsApp con el texto.
+        const a = document.createElement("a"); a.href = URL.createObjectURL(archivo.blob); a.download = archivo.nombre; a.click();
+        window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, "_blank");
+      }
+      const cambios = { envios: arrayUnion({ ms: Date.now(), canal: "whatsapp", para: [], cc: [], por: { uid, nombre: yo.nombre } }), actualizadoMs: Date.now() };
+      if (c.estado === "borrador") cambios.estado = "enviada";
+      await updateDoc(doc(db, COL_COT, c.id), cambios);
+      editor = null; fichaId = c.clienteId; render();
+      avisar(`${c.folio} compartida por WhatsApp.`);
+    } catch (x) {
+      if (x && x.name === "AbortError") return; // canceló el menú de compartir
+      error("No se pudo compartir: " + (x.message || x));
+    }
+  }
+
   async function pdfDe(id) {
     const c = cotizaciones.get(id);
     if (!c) return;

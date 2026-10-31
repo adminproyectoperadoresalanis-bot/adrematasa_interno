@@ -789,3 +789,4 @@ exports.crearAsignacionOperador = require("./operadoresAlanis").crearAsignacionO
 exports.cancelarAsignacionOperador = require("./operadoresAlanis").cancelarAsignacionOperador;
 
 exports.crearSolicitudMantenimiento = require("./mantenimiento").crearSolicitudMantenimiento;
+exports.enviarCotizacionComercial = require("./comercialCorreo").enviarCotizacionComercial;
