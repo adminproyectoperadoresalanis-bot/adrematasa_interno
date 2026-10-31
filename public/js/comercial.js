@@ -8,6 +8,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
 import { LOGO_ALANIS } from "./comercialLogo.js";
+import { tomarFiltro } from "./navegacion.js"; // 2026-10-31: el Panel abre Comercial ya filtrado
 
 // ============================================================================
 // Utilidades → Comercial (2026-10-30, pedido de Ivan). Reemplaza al CRM viejo
@@ -351,6 +352,8 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
   let fichaId = null;   // cliente abierto
   const fc = { q: "", vista: "todos" };       // filtros de Clientes
   const fq = { q: "", estado: "" };            // filtros de Cotizaciones
+  const desdePanel = tomarFiltro("comercial");  // { tab, estado } si se abrió desde el Panel
+  if (desdePanel) { if (desdePanel.tab) tab = desdePanel.tab; if (desdePanel.estado != null) fq.estado = desdePanel.estado; }
 
   function avisar(t) { const e = $("#co-exito"); e.textContent = t; e.classList.remove("oculto"); setTimeout(() => e.classList.add("oculto"), 6000); }
   function error(t) { $("#co-error").textContent = t || ""; }

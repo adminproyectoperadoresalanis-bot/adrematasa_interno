@@ -38,6 +38,8 @@ import { iniciarAsignacion } from "./asignacion.js";
 import { iniciarRentabilidad } from "./rentabilidad.js";
 import { iniciarMantenimiento } from "./mantenimiento.js";
 import { iniciarComercial } from "./comercial.js";
+import { iniciarPanelGeneral } from "./panelGeneral.js"; // 2026-10-31: Panel por área para todos los roles
+import { iniciarActualizaciones } from "./actualizaciones.js"; // 2026-10-31: Tráfico → Actualizaciones
 import "./actualizacion.js"; // 2026-10-28: cinta "Hay una versión nueva"
 import { iniciarAsistencia } from "./asistencia.js";
 import { iniciarInventario } from "./inventario.js";
@@ -424,11 +426,12 @@ onAuthStateChanged(auth, async (user) => {
       operadoresRegistrados: (c) => iniciarOperadoresRegistrados(c),
       operadoresTurnos: (c) => iniciarTurnos(c, datosUsuario, user.uid),
       traficoAsignacion: (c) => iniciarAsignacion(c, datosUsuario),
+      traficoActualizaciones: (c) => iniciarActualizaciones(c),
       operadoresAsistencia: (c) => iniciarAsistencia(c),
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       mantenimiento: (c) => iniciarMantenimiento(c, datosUsuario, user.uid),
       comercial: (c) => iniciarComercial(c, datosUsuario, user.uid, user.email),
-      panel: (c) => iniciarPanelResumenAdmin(c),
+      panel: (c) => iniciarPanelGeneral(c, { rol: "admin", uid: user.uid, datosUsuario, correo: user.email, permitidas: null }),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarGestionSolicitudes(d, user.uid, datosUsuario.nombre),
         (d) => iniciarVistaEmpleado(d, datosUsuario, user.uid)
@@ -454,12 +457,14 @@ onAuthStateChanged(auth, async (user) => {
     iniciarCentroNotificaciones(user.uid);
     const permitidasEmpleado = await opcionesUtilidadesPermitidas(datosUsuario);
     iniciarNavegacion("empleado", {
+      panel: (c) => iniciarPanelGeneral(c, { rol: "empleado", uid: user.uid, datosUsuario, correo: user.email, permitidas: permitidasEmpleado }),
       escaneoOrigen: (c) => iniciarEscaneoOrigen(c, datosUsuario, user.uid),
       operadoresSolicitudes: (c) => iniciarSolicitudesOperadores(c),
       operadoresOrdenes: (c) => iniciarOrdenesTrabajo(c, datosUsuario.nombre),
       operadoresRegistrados: (c) => iniciarOperadoresRegistrados(c),
       operadoresTurnos: (c) => iniciarTurnos(c, datosUsuario, user.uid),
       traficoAsignacion: (c) => iniciarAsignacion(c, datosUsuario),
+      traficoActualizaciones: (c) => iniciarActualizaciones(c),
       operadoresAsistencia: (c) => iniciarAsistencia(c),
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       mantenimiento: (c) => iniciarMantenimiento(c, datosUsuario, user.uid),
@@ -485,11 +490,12 @@ onAuthStateChanged(auth, async (user) => {
       operadoresRegistrados: (c) => iniciarOperadoresRegistrados(c),
       operadoresTurnos: (c) => iniciarTurnos(c, datosUsuario, user.uid),
       traficoAsignacion: (c) => iniciarAsignacion(c, datosUsuario),
+      traficoActualizaciones: (c) => iniciarActualizaciones(c),
       operadoresAsistencia: (c) => iniciarAsistencia(c),
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       mantenimiento: (c) => iniciarMantenimiento(c, datosUsuario, user.uid),
       comercial: (c) => iniciarComercial(c, datosUsuario, user.uid, user.email),
-      panel: (c) => iniciarPanelResumenSupervisor(c, user.uid),
+      panel: (c) => iniciarPanelGeneral(c, { rol: "supervisor", uid: user.uid, datosUsuario, correo: user.email, permitidas: permitidasSupervisor }),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarVistaSupervisor(d, user.uid, datosUsuario.nombre),
         (d) => iniciarVistaEmpleado(d, datosUsuario, user.uid)

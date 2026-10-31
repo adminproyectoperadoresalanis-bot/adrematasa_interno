@@ -24,8 +24,11 @@ const COL = {
   ordenes: "espejo_op_ordenes",           // {id}   ordenes_trabajo
   asignaciones: "espejo_op_asignaciones", // {id}   asignaciones de viaje
   estatus: "espejo_op_estatus",           // {uid}  ÚLTIMO estatus de patio de cada operador
+  eventosViaje: "espejo_op_eventos_viaje", // {id}  cada reporte de VIAJE (2026-10-31, Tráfico → Actualizaciones)
 };
 
+// Estatus de viaje que reporta el operador (2026-10-31): van a Tráfico → Actualizaciones.
+const ESTATUS_VIAJE = ["incidencia_viaje", "arribo_destino", "fin_descarga"];
 // "liberado_taller" (2026-10-19): lo escribe el servidor al terminar la última OT abierta.
 const ESTATUS_PATIO = ["disponible", "taller", "enfermo", "permiso", "vacaciones", "incapacitado", "liberado_taller"];
 const TIPOS_RUTA = ["larga", "corta", "local", "circuito"]; // circuito: 2026-10-22
@@ -132,4 +135,31 @@ function estatus(ev) {
   };
 }
 
-module.exports = { COL, ESTATUS_PATIO, solicitud, operador, orden, asignacion, estatus };
+// De un documento de eventos: los reportes de VIAJE (incidencia, arribo, fin
+// de descarga; pueden venir combinados). Aquí sí va la ubicación GPS, porque
+// Tráfico la usa para ubicar el viaje.
+function eventoViaje(ev) {
+  if (!ev || !ev.uid) return null;
+  const ids = (Array.isArray(ev.estatus_ids) && ev.estatus_ids.length ? ev.estatus_ids : [ev.estatus]).filter((x) => ESTATUS_VIAJE.includes(x));
+  if (!ids.length) return null;
+  const g = ev.gps || {};
+  const lat = Number(g.lat != null ? g.lat : g.latitude);
+  const lng = Number(g.lng != null ? g.lng : (g.lon != null ? g.lon : g.longitude));
+  const hayGps = isFinite(lat) && isFinite(lng) && !(lat === 0 && lng === 0);
+  return {
+    uid: txt(ev.uid),
+    operador: txt(ev.operador),
+    numero: txt(ev.numero),
+    ids,
+    etiqueta: txt(ev.estatus_label),
+    ms: ms(ev.timestamp),
+    fecha: txt(ev.fecha),
+    hora: txt(ev.hora),
+    comentario: txt(ev.incidencia_desc || ev.observaciones).slice(0, 500),
+    lat: hayGps ? lat : null,
+    lng: hayGps ? lng : null,
+    viajeId: txt(ev.viaje_id),
+  };
+}
+
+module.exports = { COL, ESTATUS_PATIO, ESTATUS_VIAJE, solicitud, operador, orden, asignacion, estatus, eventoViaje };

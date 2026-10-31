@@ -40,6 +40,9 @@
 // área); solo está en la lista del admin y se quita si el correo no es el suyo.
 // 2026-10-30 (pedido de Ivan): "Comercial" (comercial.js): clientes,
 // cotizaciones y rutas; reemplaza al CRM viejo. Quién entra: tabla de accesos.
+// 2026-10-31 (pedido de Ivan): Panel general para TODOS los roles (el
+// empleado ahora también ve el menú inferior: Panel · Utilidades), Tráfico →
+// Actualizaciones, e irA(): desde el Panel, cada número abre su pantalla.
 
 // Catálogo de opciones de Utilidades — lo usa configuracion.js para armar las
 // columnas de la tabla de accesos. Al agregar una opción nueva basta con
@@ -222,10 +225,11 @@ const OPCION_RENTABILIDAD = {
 const OPCION_TRAFICO = {
   id: "trafico",
   etiqueta: "Tráfico",
-  descripcion: "Turnos · Asignación",
+  descripcion: "Turnos · Asignación · Actualizaciones",
   subtabs: [
     { id: "operadoresTurnos", etiqueta: "Turnos" },
-    { id: "traficoAsignacion", etiqueta: "Asignación" }
+    { id: "traficoAsignacion", etiqueta: "Asignación" },
+    { id: "traficoActualizaciones", etiqueta: "Actualizaciones" }
   ]
 };
 
@@ -241,6 +245,7 @@ const TABS_POR_ROL = {
   // El empleado solo tiene "Utilidades": con un solo botón el menú inferior
   // no aporta nada, así que se oculta y entra directo a las tarjetas.
   empleado: [
+    { id: "panel", etiqueta: "Panel" },
     { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO, OPCION_COMERCIAL] }
   ],
   supervisor: [
@@ -324,6 +329,25 @@ function inyectarEstilosUtilidades() {
     }
   `;
   document.head.appendChild(estilo);
+}
+
+// ---- Ir a una pantalla desde código (2026-10-31, lo usa el Panel) ----
+// destino: { opcion: "rh" | "comercial" | "trafico" | …, item?: id del renglón
+// de RH o del toggle (subtab), filtro?: dato que la pantalla recoge con
+// tomarFiltro(opcion) al abrirse }. Si el usuario no tiene esa opción, no pasa nada.
+let navegador = null;
+const filtrosPendientes = {};
+export function irA(destino) {
+  if (!destino || !navegador) return false;
+  return navegador(destino);
+}
+export function tomarFiltro(idOpcion) {
+  const f = filtrosPendientes[idOpcion];
+  delete filtrosPendientes[idOpcion];
+  return f || null;
+}
+export function puedeIrA(idOpcion) {
+  return opcionesVisibles.has(idOpcion);
 }
 
 // pantallas: objeto { idPantalla: (contenedor) => void } con la función que dibuja cada pantalla.
@@ -544,6 +568,28 @@ export function iniciarNavegacion(rol, pantallas, pantallaInicial, opcionesPermi
       });
     });
   }
+
+  navegador = (destino) => {
+    const tab = tabs.find(t => t.opciones && t.opciones.some(op => op.id === destino.opcion));
+    if (!tab) return false;
+    const opcion = tab.opciones.find(op => op.id === destino.opcion);
+    if (destino.filtro) filtrosPendientes[opcion.id] = destino.filtro;
+    nav.querySelectorAll(".nav-boton").forEach(btn => btn.classList.toggle("activo", btn.dataset.tab === tab.id));
+    const contenedor = encabezadoOpcion(tab, opcion, opcion.etiqueta);
+    if (opcion.grupos) {
+      dibujarListaGrupos(contenedor, tab, opcion);
+      if (destino.item) {
+        const btn = contenedor.querySelector(`.rh-item[data-item="${destino.item}"]`);
+        if (btn) btn.click();
+      }
+    } else if (opcion.subtabs) {
+      mostrarGrupo(contenedor, opcion.subtabs, opcion.subtabs.some(st => st.id === destino.item) ? destino.item : undefined);
+    } else {
+      dibujarPantalla(opcion.pantalla, contenedor);
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return true;
+  };
 
   function mostrar(idTab) {
     nav.querySelectorAll(".nav-boton").forEach(btn => {

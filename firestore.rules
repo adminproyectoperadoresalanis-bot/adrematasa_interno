@@ -790,6 +790,11 @@ service cloud.firestore {
       allow read: if usuarioActivoValido() && (tieneAccesoUtilidad('operadores') || tieneAccesoUtilidad('trafico'));
       allow write: if false;
     }
+    // Tráfico → Actualizaciones (2026-10-31): reportes de viaje de los operadores.
+    match /espejo_op_eventos_viaje/{id} {
+      allow read: if usuarioActivoValido() && (tieneAccesoUtilidad('operadores') || tieneAccesoUtilidad('trafico'));
+      allow write: if false;
+    }
     match /espejo_op_estatus/{id} {
       allow read: if usuarioActivoValido() && (tieneAccesoUtilidad('operadores') || tieneAccesoUtilidad('trafico'));
       allow write: if false;
