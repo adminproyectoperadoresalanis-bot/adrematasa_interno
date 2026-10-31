@@ -60,6 +60,9 @@ import { LOGO_ALANIS } from "./comercialLogo.js";
 // una tarjeta (origen/destino arriba, km e importe abajo, ingreso/km en color y
 // borde de color). Sin recuadro de semáforo: el color va en cada ruta y al
 // tocar/pasar el mouse dice el umbral aplicado.
+// 2026-10-30: vigencia "Único evento" (vigenciaDias = 0): tarifa válida para un
+// solo servicio; no tiene fecha de vencimiento (vencimientoMs = null) y nunca
+// pasa a VENCIDA por fecha.
 // ============================================================================
 
 const COL_CLI = "com_clientes";
@@ -102,8 +105,13 @@ const ESTADOS = {
 const CARGAS = { refrigerada: "Refrigerada", seca: "Seca" };
 const SERVICIOS = { nacional: "Nacional", importacion: "Importación", exportacion: "Exportación" };
 const DIA = 864e5;
-const VIGENCIAS = [15, 30, 60, 90, 180, 365];
-const textoVigencia = (d) => Number(d) === 365 ? "1 año" : `${d} días`;
+const UNICO_EVENTO = 0; // vigenciaDias = 0: tarifa para un solo servicio, sin fecha de vencimiento
+const VIGENCIAS = [15, 30, 60, 90, 180, 365, UNICO_EVENTO];
+const textoVigencia = (d) => Number(d) === UNICO_EVENTO ? "Único evento" : Number(d) === 365 ? "1 año" : `${d} días`;
+const opcionesVigencia = (actual) => { const n = Number(actual); return VIGENCIAS.includes(n) || !isFinite(n) ? VIGENCIAS : [...VIGENCIAS.slice(0, -1), n, UNICO_EVENTO].sort((a, b) => (a || 1e9) - (b || 1e9)); };
+const venceEn = (desdeMs, dias) => Number(dias) > 0 ? desdeMs + Number(dias) * DIA : null;
+const textoVence = (c) => !c.vencimientoMs ? "Único evento" : (estadoDe(c) === "vencida" ? `venció ${fecha(c.vencimientoMs)}` : `hasta ${fecha(c.vencimientoMs)}`);
+const sigueVigente = (c, ahora) => !c.vencimientoMs || c.vencimientoMs >= ahora;
 
 // ---- Utilerías ----------------------------------------------------------------
 function esc(t) { const d = document.createElement("div"); d.textContent = t == null ? "" : String(t); return d.innerHTML; }
@@ -292,7 +300,7 @@ export async function generarPdf(cot, cliente, ajustes, firma, opciones = {}) {
   // Condiciones
   y += 4;
   const condiciones = String(ajustes.condiciones || "").split(/\n+/).map(t => t.trim()).filter(Boolean);
-  condiciones.push(`Vigencia: ${textoVigencia(cot.vigenciaDias)} (hasta el ${fechaLarga(cot.vencimientoMs)}).`);
+  condiciones.push(cot.vencimientoMs ? `Vigencia: ${textoVigencia(cot.vigenciaDias)} (hasta el ${fechaLarga(cot.vencimientoMs)}).` : "Vigencia: único evento (tarifa válida para un solo servicio).");
   if (cot.moneda === "USD") condiciones.push("Importes en dólares americanos (USD).");
   if (cot.notas) cot.notas.split(/\n+/).map(t => t.trim()).filter(Boolean).forEach(t => condiciones.push(t));
   if (y + 10 + condiciones.length * 5 > 250) { pdf.addPage(); y = 20; }
@@ -433,8 +441,8 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const ahora = Date.now(), q = normTxt(fc.q);
     const filas = [...clientes.values()].map(c => {
       const cs = cotDeCliente(c.id);
-      const vig = cs.filter(x => ["borrador", "enviada", "aceptada"].includes(estadoDe(x, ahora)) && (x.vencimientoMs || 0) >= ahora);
-      const porVencer = vig.filter(x => x.vencimientoMs - ahora <= 7 * DIA && estadoDe(x, ahora) !== "aceptada");
+      const vig = cs.filter(x => ["borrador", "enviada", "aceptada"].includes(estadoDe(x, ahora)) && sigueVigente(x, ahora));
+      const porVencer = vig.filter(x => x.vencimientoMs && x.vencimientoMs - ahora <= 7 * DIA && estadoDe(x, ahora) !== "aceptada");
       return { c, cs, vig, porVencer, ultima: cs[0] || null };
     }).filter(r => (!q || normTxt(r.c.nombre).includes(q) || normTxt(r.c.rfc).includes(q)) &&
       (fc.vista === "todos" || (fc.vista === "vigente" ? r.vig.length > 0 : (!r.ultima || ahora - (r.ultima.emisionMs || 0) > 90 * DIA))))
@@ -559,7 +567,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
           <td><b>${esc(c.folio)}</b> <small class="nota">· ${n} ruta${n === 1 ? "" : "s"}</small>${esAdmin && c.creadoPorUid !== uid ? `<br><small class="nota">${esc((c.creadoPor || {}).nombre || "")}</small>` : ""}</td>
           ${conCliente ? `<td>${esc(c.clienteNombre)}</td>` : ""}
           <td>${fecha(c.emisionMs)}</td>
-          <td>${estadoDe(c) === "vencida" ? `venció ${fecha(c.vencimientoMs)}` : `hasta ${fecha(c.vencimientoMs)}`}</td>
+          <td>${textoVence(c)}</td>
           <td>${chipEstado(c)}${env ? `<br><small class="nota">${fecha(env.ms)} ${env.canal === "whatsapp" ? "por WhatsApp" : "a " + esc((env.para || [])[0] || "")}</small>` : ""}</td></tr>`;
       }).join("")}</tbody></table></div>`;
   }
@@ -572,7 +580,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const c = clientes.get(fichaId);
     if (!c) { fichaId = null; return render(); }
     const cs = cotDeCliente(c.id), ahora = Date.now();
-    const vig = cs.filter(x => ["borrador", "enviada", "aceptada"].includes(estadoDe(x, ahora)) && (x.vencimientoMs || 0) >= ahora).length;
+    const vig = cs.filter(x => ["borrador", "enviada", "aceptada"].includes(estadoDe(x, ahora)) && sigueVigente(x, ahora)).length;
     const ings = cs.flatMap(x => (x.rutas || []).map(r => ingresoKm(r, x.moneda, x.tipoCambio))).filter(v => v != null);
     const dom = c.domicilio || {};
     $("#co-cuerpo").innerHTML = `
@@ -614,7 +622,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const todas = listaCot();
     const cs = todas.filter(c => (!fq.estado || estadoDe(c, ahora) === fq.estado) &&
       (!q || normTxt(c.folio).includes(q) || normTxt(c.clienteNombre).includes(q) || (c.rutas || []).some(r => normTxt(r.origen + " " + r.destino).includes(q))));
-    const porVencer = todas.filter(c => ["borrador", "enviada"].includes(estadoDe(c, ahora)) && c.vencimientoMs - ahora <= 7 * DIA);
+    const porVencer = todas.filter(c => ["borrador", "enviada"].includes(estadoDe(c, ahora)) && c.vencimientoMs && c.vencimientoMs - ahora <= 7 * DIA);
     const cuenta = (e) => todas.filter(c => estadoDe(c, ahora) === e).length;
     $("#co-cuerpo").innerHTML = `
       ${porVencer.length ? `<div class="co-indicador" style="margin-bottom:12px;"><b>Vencen en los próximos 7 días:</b> ${porVencer.map(c => `<button type="button" class="co-link" data-abrir="${esc(c.id)}">${esc(c.folio)}</button> <small class="nota">${esc(c.clienteNombre)} · ${fecha(c.vencimientoMs)}</small>`).join(" · ")}</div>` : ""}
@@ -673,12 +681,12 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const cli = clientes.get(e.clienteId);
     const lugares = [...new Set([...rutas.values()].flatMap(r => [r.origen, r.destino]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
     const seg = (campo, opciones, deshab) => `<span class="co-seg">${opciones.map(([v, t]) => `<button type="button" class="${String(e[campo]) === String(v) ? "activo" : ""}" data-campo="${campo}" data-valor="${v}"${deshab ? " disabled" : ""}>${t}</button>`).join("")}</span>`;
-    const vigOpc = [...new Set([...VIGENCIAS, Number(e.vigenciaDias)])].filter(Boolean).sort((a, b) => a - b);
+    const vigOpc = opcionesVigencia(e.vigenciaDias);
     $("#co-cuerpo").innerHTML = `
       <button type="button" class="co-link" id="co-e-volver">‹ Volver</button>
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;margin-top:8px;">
         <h2 style="margin:0;">${original ? esc(original.folio) : "Nueva cotización"} ${original ? chipEstado(original) : `<span class="nota" style="font-weight:400;font-size:13px;">· el folio se asigna al guardar</span>`}</h2>
-        ${original ? `<span class="nota">Emitida ${fecha(original.emisionMs)} · vence ${fecha(original.vencimientoMs)} · por ${esc((original.creadoPor || {}).nombre || "")}</span>` : ""}
+        ${original ? `<span class="nota">Emitida ${fecha(original.emisionMs)} · ${original.vencimientoMs ? "vence " + fecha(original.vencimientoMs) : "único evento"} · por ${esc((original.creadoPor || {}).nombre || "")}</span>` : ""}
       </div>
       <div class="co-grid" style="margin-top:14px;">
         <div><label>Cliente</label><select id="co-e-cli"${bloqueada ? " disabled" : ""}><option value="">Elige un cliente…</option>${[...clientes.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, "es")).map(c => `<option value="${esc(c.id)}"${c.id === e.clienteId ? " selected" : ""}>${esc(c.nombre)}</option>`).join("")}</select>
@@ -1017,7 +1025,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
           cambios = {
             ...cambios, clienteId: cli.id, clienteNombre: cli.nombre, clienteRfc: cli.rfc || null,
             tipoCarga: e.tipoCarga, tipoServicio: e.tipoServicio, moneda: e.moneda, tipoCambio: e.moneda === "USD" ? num(e.tipoCambio) : 1,
-            vigenciaDias: Number(e.vigenciaDias), vencimientoMs: antes.emisionMs + Number(e.vigenciaDias) * DIA,
+            vigenciaDias: Number(e.vigenciaDias), vencimientoMs: venceEn(antes.emisionMs, e.vigenciaDias),
             rutas: limpias.map(r => ({ ...r, agregadaMs: antes.emisionMs })),
           };
         }
@@ -1028,7 +1036,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
         const datos = {
           estado: "borrador", clienteId: cli.id, clienteNombre: cli.nombre, clienteRfc: cli.rfc || null, contacto: e.contacto || null,
           tipoCarga: e.tipoCarga, tipoServicio: e.tipoServicio, moneda: e.moneda, tipoCambio: e.moneda === "USD" ? num(e.tipoCambio) : 1,
-          vigenciaDias: Number(e.vigenciaDias), emisionMs: ahora, vencimientoMs: ahora + Number(e.vigenciaDias) * DIA,
+          vigenciaDias: Number(e.vigenciaDias), emisionMs: ahora, vencimientoMs: venceEn(ahora, e.vigenciaDias),
           rutas: limpias, notas: e.notas.trim() || null,
           creadoPorUid: uid, creadoPor: { uid, nombre: yo.nombre, puesto: yo.puesto, correo: yo.correo }, creadoMs: ahora, anio,
         };
@@ -1067,7 +1075,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const n = (c.rutas || []).length;
     const origenes = [...new Set((c.rutas || []).map(r => String(r.origen).split(",")[0]))];
     const servicio = c.tipoServicio && c.tipoServicio !== "nacional" ? ` (${(SERVICIOS[c.tipoServicio] || "").toLowerCase()})` : "";
-    return `${saludo ? saludo + ", buen día." : "Buen día."}\n\nPor medio del presente te comparto nuestra cotización ${c.folio} para el servicio de autotransporte de carga ${(CARGAS[c.tipoCarga] || "").toLowerCase()}${servicio}, con ${n} ruta${n === 1 ? "" : "s"}${origenes.length === 1 ? " desde " + origenes[0] : ""}.\n\nLa propuesta tiene vigencia hasta el ${fechaLarga(c.vencimientoMs)}. Adjunto el documento con el detalle de tarifas y condiciones.\n\nQuedo a tus órdenes.\n\nUn saludo.\n\n${[f.nombre, f.puesto, "Autotransportes Alanis", f.telefono].filter(Boolean).join("\n")}`;
+    return `${saludo ? saludo + ", buen día." : "Buen día."}\n\nPor medio del presente te comparto nuestra cotización ${c.folio} para el servicio de autotransporte de carga ${(CARGAS[c.tipoCarga] || "").toLowerCase()}${servicio}, con ${n} ruta${n === 1 ? "" : "s"}${origenes.length === 1 ? " desde " + origenes[0] : ""}.\n\n${c.vencimientoMs ? `La propuesta tiene vigencia hasta el ${fechaLarga(c.vencimientoMs)}.` : "La tarifa es válida para un solo servicio (único evento)."} Adjunto el documento con el detalle de tarifas y condiciones.\n\nQuedo a tus órdenes.\n\nUn saludo.\n\n${[f.nombre, f.puesto, "Autotransportes Alanis", f.telefono].filter(Boolean).join("\n")}`;
   }
   function abrirEnvio(id) {
     const c = cotizaciones.get(id), cli = c && clientes.get(c.clienteId);
@@ -1151,7 +1159,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     try {
       const archivo = await generarPdf(c, cli, ajustes, firmaDe(c.creadoPorUid), { descargar: false });
       const file = new File([archivo.blob], archivo.nombre, { type: "application/pdf" });
-      const texto = `Buen día. Te comparto la cotización ${c.folio} de Autotransportes Alanis, vigente hasta el ${fechaLarga(c.vencimientoMs)}.`;
+      const texto = `Buen día. Te comparto la cotización ${c.folio} de Autotransportes Alanis, ${c.vencimientoMs ? `vigente hasta el ${fechaLarga(c.vencimientoMs)}` : "válida para un solo servicio (único evento)"}.`;
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: c.folio, text: texto });
       } else {
@@ -1258,7 +1266,7 @@ export function iniciarAjustesComercial(caja, resumen) {
             <tbody>${Object.entries(SERV_UMBRAL).map(([sv, k]) => `<tr><td>${esc(SERVICIOS[sv])}</td>${["rc_verde", "rc_ambar", "rl_verde", "rl_ambar"].map(c => `<td class="n"><input type="number" step="0.01" min="0" data-umbral="${k}_${c}" value="${esc(umbralDe(ajustes, sv, c.startsWith("rc") ? 1 : 999)[c.endsWith("verde") ? "verde" : "ambar"])}" style="width:90px;"></td>`).join("")}</tr>`).join("")}</tbody>
           </table></div><small class="nota">RC = 350 km o menos · RL = 351 km o más.</small></div>
         <div><label>Tipo de cambio sugerido</label><input type="number" step="0.01" id="caj-tc" value="${esc(ajustes.tipoCambio)}"></div>
-        <div><label>Vigencia por omisión</label><select id="caj-vig">${[...new Set([...VIGENCIAS, Number(ajustes.vigenciaDias)])].sort((x, y) => x - y).map(d => `<option value="${d}"${d === Number(ajustes.vigenciaDias) ? " selected" : ""}>${textoVigencia(d)}</option>`).join("")}</select></div>
+        <div><label>Vigencia por omisión</label><select id="caj-vig">${opcionesVigencia(ajustes.vigenciaDias).map(d => `<option value="${d}"${d === Number(ajustes.vigenciaDias) ? " selected" : ""}>${textoVigencia(d)}</option>`).join("")}</select></div>
         <div style="grid-column:1/-1;"><label>Clave de OpenRouteService</label><input type="text" id="caj-ors" value="${esc(ajustes.orsKey || "")}" placeholder="Pega aquí la clave de openrouteservice.org" autocomplete="off"></div>
         <div style="grid-column:1/-1;"><label>Condiciones que salen en todos los PDF (una por renglón)</label><textarea id="caj-cond" rows="5">${esc(ajustes.condiciones)}</textarea></div>
       </div>
@@ -1273,7 +1281,7 @@ export function iniciarAjustesComercial(caja, resumen) {
       for (const k of Object.values(SERV_UMBRAL)) for (const t of ["rc", "rl"]) {
         if (umbrales[`${k}_${t}_ambar`] > umbrales[`${k}_${t}_verde`]) { err("En cada servicio, el ámbar debe ser menor o igual que el verde."); return; }
       }
-      if (!(tc > 0) || !(vig > 0)) { err("Revisa el tipo de cambio y la vigencia."); return; }
+      if (!(tc > 0) || vig == null || vig < 0) { err("Revisa el tipo de cambio y la vigencia."); return; }
       err();
       try {
         await setDoc(doc(db, COL_CFG, "ajustes"), { umbrales, tipoCambio: tc, vigenciaDias: Math.round(vig), orsKey: q("#caj-ors").value.trim(), condiciones: q("#caj-cond").value.trim(), actualizadoMs: Date.now() });
