@@ -9,6 +9,7 @@ import {
 import { UMBRALES_DEFAULT, FESTIVOS_DEFAULT } from "./vacacionesCalculo.js";
 import { AREAS_DEFAULT } from "./estructuraOrganizacional.js";
 import { OPCIONES_UTILIDADES } from "./navegacion.js";
+import { iniciarAjustesComercial } from "./comercial.js";
 
 export function iniciarConfiguracion(contenedor) {
   // Configuración en 2 secciones (2026-10-13, pedido de Ivan): "1 · RH" y
@@ -245,8 +246,20 @@ export function iniciarConfiguracion(contenedor) {
       </div>
         </div>
       </details>
+      <details class="cfg-acordeon">
+        <summary>
+          <svg class="cfg-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><path d="M2 13h20"/></svg>
+          <span class="cfg-titulos"><span class="cfg-titulo">Comercial</span><span class="cfg-resumen" id="resumen-comercial">Umbrales · tipo de cambio · ORS · condiciones</span></span>
+          <span class="cfg-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div class="cfg-cuerpo" id="cfg-comercial"><p class="nota">Cargando…</p></div>
+      </details>
     </div>
   `;
+
+  // Comercial (2026-10-30): los ajustes viven en com_config/ajustes; el formulario
+  // lo dibuja comercial.js (iniciarAjustesComercial) para no duplicar la lógica aquí.
+  iniciarAjustesComercial(contenedor.querySelector("#cfg-comercial"), contenedor.querySelector("#resumen-comercial"));
 
   // Inventario (2026-10-27): configuracion/inventario { editanPuestos[] }.
   // Lo leen inventario.js (para mostrar edición) y firestore.rules (puedeEditarInventario).

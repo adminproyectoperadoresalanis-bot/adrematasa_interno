@@ -46,6 +46,9 @@ import { LOGO_ALANIS } from "./comercialLogo.js";
 // 2026-10-30: en BORRADOR se edita todo (cliente, moneda, vigencia, servicio,
 // carga, rutas e importes). Desde ENVIADA queda bloqueada: solo se agregan rutas
 // y se cambia el estado. La fecha de emisión es la de creación del folio.
+// 2026-10-30: los ajustes (umbrales, TC, vigencia, clave de ORS y condiciones)
+// se editan en Configuración → 2 · Utilidades → Comercial con
+// iniciarAjustesComercial(); los datos siguen en com_config/ajustes.
 // ============================================================================
 
 const COL_CLI = "com_clientes";
@@ -311,7 +314,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
   let firmas = new Map(); // uid → { puesto, telefono }
   cancelar.push(onSnapshot(collection(db, COL_FIR), (s) => { firmas = new Map(s.docs.map(d => [d.id, d.data()])); }, () => {}));
   const firmaDe = (uidCreador) => firmas.get(uidCreador) || null;
-  cancelar.push(onSnapshot(doc(db, COL_CFG, "ajustes"), (s) => { ajustes = { ...AJUSTES_BASE, ...(s.exists() ? s.data() : {}) }; if (tab === "ajustes") render(); }, () => {}));
+  cancelar.push(onSnapshot(doc(db, COL_CFG, "ajustes"), (s) => { ajustes = { ...AJUSTES_BASE, ...(s.exists() ? s.data() : {}) }; }, () => {}));
   const vigilar = setInterval(() => { if (!contenedor.isConnected) { clearInterval(vigilar); cancelar.forEach(c => c()); } }, 3000);
 
   const listaCot = () => [...(cotizaciones || new Map()).values()].sort((a, b) => (b.emisionMs || 0) - (a.emisionMs || 0));
@@ -332,7 +335,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
   const chipCarga = (t) => t ? `<span class="co-chip ${t === "seca" ? "co-seca" : "co-refri"}">${esc((CARGAS[t] || t).toUpperCase())}</span>` : "";
 
   function renderTabs() {
-    const ts = [["clientes", "Clientes"], ["cotizaciones", "Cotizaciones"], ["rutas", "Rutas"], ...(esAdmin ? [["ajustes", "Ajustes"]] : [])];
+    const ts = [["clientes", "Clientes"], ["cotizaciones", "Cotizaciones"], ["rutas", "Rutas"]];
     $("#co-tabs").innerHTML = ts.map(([k, t]) => `<button type="button" class="co-tab${tab === k && !editor && !fichaId ? " activo" : ""}" data-t="${k}">${t}</button>`).join("");
     $("#co-tabs").querySelectorAll("[data-t]").forEach(b => b.addEventListener("click", () => { tab = b.dataset.t; editor = null; fichaId = null; error(); render(); }));
   }
@@ -343,7 +346,6 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     if (fichaId) return renderFicha();
     if (tab === "cotizaciones") return renderCotizaciones();
     if (tab === "rutas") return renderRutas();
-    if (tab === "ajustes" && esAdmin) return renderAjustes();
     return renderClientes();
   }
   $("#co-nueva").addEventListener("click", () => abrirEditor(null));
@@ -1072,37 +1074,58 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     });
   }
 
-  // ============================================================================
-  // Ajustes (solo admin)
-  // ============================================================================
-  function renderAjustes() {
-    $("#co-cuerpo").innerHTML = `
+}
+
+// ---- Ajustes de Comercial (los dibuja Configuración → 2 · Utilidades) --------------
+// caja: donde se dibuja el formulario; resumen: el texto de una línea del acordeón.
+export function iniciarAjustesComercial(caja, resumen) {
+  inyectarEstilos();
+  let ajustes = { ...AJUSTES_BASE };
+  const pintarResumen = () => {
+    if (!resumen) return;
+    const impo = umbralDe(ajustes, "importacion", 999);
+    resumen.textContent = `Impo RL ${impo.verde}/${impo.ambar} · TC ${ajustes.tipoCambio} · vigencia ${textoVigencia(ajustes.vigenciaDias)} · ORS ${ajustes.orsKey ? "conectado" : "sin clave"}`;
+  };
+  const pintar = () => {
+    caja.innerHTML = `
+      <p class="nota">Reglas de Comercial: umbrales del semáforo e importe sugerido, tipo de cambio, vigencia por omisión, clave de OpenRouteService (km por camión y mapa) y las condiciones de todos los PDF.</p>
+      <div id="caj-error" class="error"></div>
+      <p id="caj-exito" class="nota oculto" style="color:#1c7a41;"></p>
       <div class="co-grid" style="max-width:760px;">
         <div style="grid-column:1/-1;"><label>Umbrales de ingreso por km (MXN). Verde = importe sugerido; abajo del ámbar = rojo.</label>
           <div class="tabla-wrap"><table class="tabla co-tabla" style="max-width:640px;">
             <thead><tr><th>Servicio</th><th class="n">RC verde</th><th class="n">RC ámbar</th><th class="n">RL verde</th><th class="n">RL ámbar</th></tr></thead>
             <tbody>${Object.entries(SERV_UMBRAL).map(([sv, k]) => `<tr><td>${esc(SERVICIOS[sv])}</td>${["rc_verde", "rc_ambar", "rl_verde", "rl_ambar"].map(c => `<td class="n"><input type="number" step="0.01" min="0" data-umbral="${k}_${c}" value="${esc(umbralDe(ajustes, sv, c.startsWith("rc") ? 1 : 999)[c.endsWith("verde") ? "verde" : "ambar"])}" style="width:90px;"></td>`).join("")}</tr>`).join("")}</tbody>
           </table></div><small class="nota">RC = 350 km o menos · RL = 351 km o más.</small></div>
-        <div><label>Tipo de cambio sugerido</label><input type="number" step="0.01" id="aj-tc" value="${esc(ajustes.tipoCambio)}"></div>
-        <div><label>Vigencia por omisión</label><select id="aj-vig">${[...new Set([...VIGENCIAS, Number(ajustes.vigenciaDias)])].sort((x, y) => x - y).map(d => `<option value="${d}"${d === Number(ajustes.vigenciaDias) ? " selected" : ""}>${textoVigencia(d)}</option>`).join("")}</select></div>
-        <div style="grid-column:1/-1;"><label>Clave de OpenRouteService (km por camión y mapa)</label><input type="text" id="aj-ors" value="${esc(ajustes.orsKey || "")}" placeholder="Pega aquí la clave de openrouteservice.org" autocomplete="off"></div>
-        <div style="grid-column:1/-1;"><label>Condiciones que salen en todos los PDF (una por renglón)</label><textarea id="aj-cond" rows="5">${esc(ajustes.condiciones)}</textarea></div>
+        <div><label>Tipo de cambio sugerido</label><input type="number" step="0.01" id="caj-tc" value="${esc(ajustes.tipoCambio)}"></div>
+        <div><label>Vigencia por omisión</label><select id="caj-vig">${[...new Set([...VIGENCIAS, Number(ajustes.vigenciaDias)])].sort((x, y) => x - y).map(d => `<option value="${d}"${d === Number(ajustes.vigenciaDias) ? " selected" : ""}>${textoVigencia(d)}</option>`).join("")}</select></div>
+        <div style="grid-column:1/-1;"><label>Clave de OpenRouteService</label><input type="text" id="caj-ors" value="${esc(ajustes.orsKey || "")}" placeholder="Pega aquí la clave de openrouteservice.org" autocomplete="off"></div>
+        <div style="grid-column:1/-1;"><label>Condiciones que salen en todos los PDF (una por renglón)</label><textarea id="caj-cond" rows="5">${esc(ajustes.condiciones)}</textarea></div>
       </div>
-      <p class="nota">La clave de ORS la ven quienes tienen Comercial (la usa su navegador). Plan gratis: 2,000 rutas y 1,000 búsquedas al día; las rutas guardadas en el catálogo ya no se vuelven a calcular. Abajo de las condiciones el PDF agrega solo la vigencia, la moneda (si es USD) y las notas de cada cotización. Quién entra a Comercial se marca en Configuración → Utilidades.</p>
-      <div class="co-acciones" style="justify-content:flex-start;"><button type="button" id="aj-ok">Guardar ajustes</button></div>`;
-    $("#aj-ok").addEventListener("click", async () => {
-      const tc = num($("#aj-tc").value), vig = num($("#aj-vig").value);
+      <p class="nota">La clave de ORS la ven quienes tienen Comercial (la usa su navegador). Plan gratis: 2,000 rutas y 1,000 búsquedas al día. Abajo de las condiciones el PDF agrega la vigencia, la moneda (si es USD) y las notas de cada cotización.</p>
+      <div class="acciones-form" style="margin-top:14px;"><button type="button" id="caj-ok">Guardar</button></div>`;
+    const q = (sel) => caja.querySelector(sel);
+    const err = (t) => { q("#caj-error").textContent = t || ""; };
+    q("#caj-ok").addEventListener("click", async () => {
+      const tc = num(q("#caj-tc").value), vig = num(q("#caj-vig").value);
       const umbrales = {};
-      $("#co-cuerpo").querySelectorAll("[data-umbral]").forEach(i => { umbrales[i.dataset.umbral] = num(i.value) || 0; });
+      caja.querySelectorAll("[data-umbral]").forEach(i => { umbrales[i.dataset.umbral] = num(i.value) || 0; });
       for (const k of Object.values(SERV_UMBRAL)) for (const t of ["rc", "rl"]) {
-        if (umbrales[`${k}_${t}_ambar`] > umbrales[`${k}_${t}_verde`]) { error("En cada servicio, el ámbar debe ser menor o igual que el verde."); return; }
+        if (umbrales[`${k}_${t}_ambar`] > umbrales[`${k}_${t}_verde`]) { err("En cada servicio, el ámbar debe ser menor o igual que el verde."); return; }
       }
-      if (!(tc > 0) || !(vig > 0)) { error("Revisa el tipo de cambio y la vigencia."); return; }
-      error();
+      if (!(tc > 0) || !(vig > 0)) { err("Revisa el tipo de cambio y la vigencia."); return; }
+      err();
       try {
-        await setDoc(doc(db, COL_CFG, "ajustes"), { umbrales, tipoCambio: tc, vigenciaDias: Math.round(vig), orsKey: $("#aj-ors").value.trim(), condiciones: $("#aj-cond").value.trim(), actualizadoMs: Date.now(), actualizadoPor: { uid, nombre: yo.nombre } });
-        avisar("Ajustes guardados.");
-      } catch (x) { error("No se pudieron guardar: " + x.message); }
+        await setDoc(doc(db, COL_CFG, "ajustes"), { umbrales, tipoCambio: tc, vigenciaDias: Math.round(vig), orsKey: q("#caj-ors").value.trim(), condiciones: q("#caj-cond").value.trim(), actualizadoMs: Date.now() });
+        const ok = q("#caj-exito"); ok.textContent = "Ajustes de Comercial guardados."; ok.classList.remove("oculto"); setTimeout(() => ok.classList.add("oculto"), 5000);
+      } catch (x) { err("No se pudieron guardar: " + x.message); }
     });
-  }
+  };
+  let primera = true;
+  const cancelar = onSnapshot(doc(db, COL_CFG, "ajustes"), (s) => {
+    ajustes = { ...AJUSTES_BASE, ...(s.exists() ? s.data() : {}) };
+    pintarResumen();
+    if (primera) { primera = false; pintar(); } // no se redibuja mientras escribes
+  }, (e) => { caja.innerHTML = `<p class="error">No se pudieron leer los ajustes de Comercial: ${esc(e.message)}</p>`; });
+  const vigilar = setInterval(() => { if (!caja.isConnected) { clearInterval(vigilar); cancelar(); } }, 3000);
 }
