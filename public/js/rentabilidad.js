@@ -207,6 +207,10 @@ function inyectarEstilos() {
     .re-barra { height:7px; border-radius:4px; background:#E8E2D9; overflow:hidden; margin-top:4px; } .re-barra i { display:block; height:100%; background:#2c1e0f; }
     .re-errores { margin-top:8px; font-size:12.5px; color:#7a3e06; background:#FEF6E4; border-radius:8px; padding:8px 10px; }
     .re-km { display:inline-flex; gap:6px; align-items:center; } .re-km input { width:110px; }
+    .re-vbarra { height:10px; border-radius:5px; background:#eee8e0; overflow:hidden; display:flex; min-width:120px; }
+    .re-vbarra span { display:block; height:100%; }
+    .re-v1 { background:#185FA5; } .re-v2 { background:#C68A2E; } .re-v3 { background:#cfc8bf; }
+    .re-rank { width:26px; height:26px; border-radius:50%; background:#f2ede6; display:inline-flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; }
     .re-seg { display:inline-flex; border:1px solid #e2ddd5; border-radius:9px; overflow:hidden; }
     .re-seg button { background:#fff; border:0; border-left:1px solid #e2ddd5; padding:6px 11px; font:inherit; font-size:12.5px; color:#6b5f52; cursor:pointer; }
     .re-seg button:first-child { border-left:0; } .re-seg button.activo { background:#2c1e0f; color:#fff; font-weight:700; }
@@ -481,7 +485,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   const vigilar = setInterval(() => { if (!contenedor.isConnected) { clearInterval(vigilar); cancelar(); cancelarSalidas(); if (cancelarConfig) cancelarConfig(); } }, 3000);
 
   function renderTabs() {
-    $("#re-tabs").innerHTML = [["tarifas", "Tarifas por cliente"], ["cargar", "Cargar facturas"], ["cargarSalidas", "Cargar salidas"], ["zonas", "Zonas y equivalencias"], ["facturas", "Facturas"], ["salidas", "Salidas"]]
+    $("#re-tabs").innerHTML = [["tarifas", "Tarifas por cliente"], ["volumen", "Volumen por cliente"], ["cargar", "Cargar facturas"], ["cargarSalidas", "Cargar salidas"], ["zonas", "Zonas y equivalencias"], ["facturas", "Facturas"], ["salidas", "Salidas"]]
       .map(([k, t]) => `<button type="button" class="re-tab${tab === k ? " activo" : ""}" data-t="${k}">${t}</button>`).join("");
     $("#re-tabs").querySelectorAll(".re-tab").forEach(b => b.addEventListener("click", () => { tab = b.dataset.t; render(); }));
   }
@@ -494,6 +498,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     if (tab === "facturas") return renderFacturas();
     if (tab === "salidas" || tab === "cargarSalidas") return renderSalidas();
     if (tab === "zonas") return renderZonas();
+    if (tab === "volumen") return renderVolumen();
     return renderTarifas();
   }
 
@@ -956,6 +961,106 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       render();
     }));
     enlazarPaginas(renderTarifas);
+  }
+
+  // ============================================================================
+  // Volumen por cliente (2026-11-02, pedido de Ivan). Ranking de clientes (nombre
+  // del Adrematasa, como viene en Salidas) por número de salidas del periodo, con
+  // un desglose de 2 partes a elegir: Seca/Refrigerada, Directo/Con reparto o
+  // Con factura/Sin factura. Mayor a menor por omisión, con botón para invertir.
+  // Tocar un cliente abre Salidas filtrada a ese cliente.
+  // ============================================================================
+  const fv = { desglose: "carga", orden: "desc", mes: "" };
+  const DESGLOSES = {
+    carga: { txt: "Seca / Refrigerada", a: "Seca", b: "Refrigerada", c: "Sin dato",
+      de: (x) => x.tipo === "seca" ? "a" : x.tipo === "refrigerada" ? "b" : "c" },
+    reparto: { txt: "Directo / Con reparto", a: "Directo", b: "Con reparto", c: null,
+      de: (x) => paradasSalida(x).length > 1 ? "b" : "a" },
+    factura: { txt: "Con factura / Sin factura", a: "Con factura", b: "Sin factura", c: null,
+      de: (x) => ligas().facturaDeTaim.has(x.factura) ? "a" : "b" },
+  };
+  const mesDeMs = (ms) => { if (!ms) return ""; const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
+  const NOMBRE_MES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+  const textoMes = (m) => { const [a, n] = m.split("-"); return `${NOMBRE_MES[Number(n) - 1]} ${a}`.replace(/^./, c => c.toUpperCase()); };
+  function datosVolumen() {
+    const todas = [...(salidas || new Map()).values()];
+    const meses = [...new Set(todas.map(x => mesDeMs(x.fechaMs)).filter(Boolean))].sort().reverse();
+    if (fv.mes && !meses.includes(fv.mes)) fv.mes = "";
+    const lista = fv.mes ? todas.filter(x => mesDeMs(x.fechaMs) === fv.mes) : todas;
+    const D = DESGLOSES[fv.desglose];
+    const porCli = new Map();
+    lista.forEach(x => {
+      const k = normTxt(x.cliente) || "SIN CLIENTE";
+      const g = porCli.get(k) || { cliente: k, total: 0, a: 0, b: 0, c: 0, taims: [] };
+      g.total++; g[D.de(x)]++; g.taims.push(x.factura);
+      porCli.set(k, g);
+    });
+    const filas = [...porCli.values()].sort((x, y) => (fv.orden === "desc" ? y.total - x.total : x.total - y.total) || x.cliente.localeCompare(y.cliente, "es"));
+    const ranking = [...porCli.values()].sort((x, y) => y.total - x.total);
+    return { meses, lista, filas, ranking, D };
+  }
+  function renderVolumen() {
+    const { meses, lista, filas, ranking, D } = datosVolumen();
+    const total = lista.length;
+    const top5 = ranking.slice(0, 5).reduce((t, g) => t + g.total, 0);
+    const pct = (n, de) => de ? (100 * n / de).toLocaleString("es-MX", { maximumFractionDigits: 1 }) + " %" : "—";
+    const posicion = new Map(ranking.map((g, i) => [g.cliente, i + 1]));
+    const pg = paginar("volumen", filas, `${fv.desglose}|${fv.orden}|${fv.mes}|${filas.length}`);
+    const ancho = (n, g) => g.total ? (100 * n / g.total) : 0;
+    $("#re-cuerpo").innerHTML = `
+      <div class="re-filtros">
+        <select id="re-v-mes" style="width:auto;"><option value="">Todo el periodo</option>${meses.map(m => `<option value="${m}"${fv.mes === m ? " selected" : ""}>${textoMes(m)}</option>`).join("")}</select>
+        <span class="nota" style="margin:0;">Desglose:</span>
+        <span class="re-seg">${Object.entries(DESGLOSES).map(([k, d]) => `<button type="button" class="${fv.desglose === k ? "activo" : ""}" data-vd="${k}">${d.txt}</button>`).join("")}</span>
+        <span class="re-seg" style="margin-left:auto;"><button type="button" class="${fv.orden === "desc" ? "activo" : ""}" data-vo="desc">Mayor a menor</button><button type="button" class="${fv.orden === "asc" ? "activo" : ""}" data-vo="asc">Menor a mayor</button></span>
+        <button type="button" class="secundario" id="re-v-excel">Descargar Excel</button>
+      </div>
+      <div class="re-kpis">
+        <div class="re-kpi"><b>${total.toLocaleString("es-MX")}</b><small>Salidas${fv.mes ? " en " + textoMes(fv.mes) : " en el periodo"}</small></div>
+        <div class="re-kpi"><b>${ranking.length}</b><small>Clientes</small></div>
+        <div class="re-kpi"><b>${pct(top5, total)}</b><small>Las salidas de los 5 primeros</small></div>
+      </div>
+      ${filas.length ? `<div class="tabla-wrap"><table class="tabla re-tabla">
+        <thead><tr><th>#</th><th>Cliente (Adrematasa)</th><th class="n">Salidas</th><th class="n">% del total</th><th>${esc(D.txt)}</th><th class="n">${esc(D.a)}</th><th class="n">${esc(D.b)}</th>${D.c ? `<th class="n">${esc(D.c)}</th>` : ""}</tr></thead>
+        <tbody>${pg.items.map(g => `<tr class="clic" data-vc="${esc(g.cliente)}">
+          <td><span class="re-rank">${posicion.get(g.cliente)}</span></td>
+          <td><b>${esc(g.cliente)}</b></td>
+          <td class="n"><b>${g.total.toLocaleString("es-MX")}</b></td>
+          <td class="n">${pct(g.total, total)}</td>
+          <td><div class="re-vbarra"><span class="re-v1" style="width:${ancho(g.a, g)}%"></span><span class="re-v2" style="width:${ancho(g.b, g)}%"></span>${D.c ? `<span class="re-v3" style="width:${ancho(g.c, g)}%"></span>` : ""}</div></td>
+          <td class="n">${g.a.toLocaleString("es-MX")} <small class="nota">${pct(g.a, g.total)}</small></td>
+          <td class="n">${g.b.toLocaleString("es-MX")} <small class="nota">${pct(g.b, g.total)}</small></td>
+          ${D.c ? `<td class="n">${g.c ? g.c.toLocaleString("es-MX") : "—"}</td>` : ""}</tr>`).join("")}</tbody>
+      </table></div>${pg.html}
+      <p class="nota"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#185FA5;"></span> ${esc(D.a)} · <span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#C68A2E;"></span> ${esc(D.b)}${D.c ? ` · <span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#cfc8bf;"></span> ${esc(D.c)} (Prog que no es OFF ni temperatura)` : ""}. # es la posición por volumen aunque inviertas el orden. Toca un cliente para ver sus salidas.</p>`
+        : `<p class="nota" style="text-align:center;padding:16px;">${salidas && salidas.size ? "No hay salidas en ese mes." : "Todavía no hay salidas en el periodo. Cárgalas en Cargar salidas."}</p>`}`;
+    $("#re-v-mes").addEventListener("change", (e) => { fv.mes = e.target.value; renderVolumen(); });
+    $("#re-cuerpo").querySelectorAll("[data-vd]").forEach(b => b.addEventListener("click", () => { fv.desglose = b.dataset.vd; renderVolumen(); }));
+    $("#re-cuerpo").querySelectorAll("[data-vo]").forEach(b => b.addEventListener("click", () => { fv.orden = b.dataset.vo; renderVolumen(); }));
+    $("#re-cuerpo").querySelectorAll("tr[data-vc]").forEach(tr => tr.addEventListener("click", () => {
+      const g = filas.find(x => x.cliente === tr.dataset.vc);
+      if (!g) return;
+      grupoSalidas = { taims: new Set(g.taims), txt: `${g.cliente}${fv.mes ? " · " + textoMes(fv.mes) : ""}` };
+      filtroSalidas = "todas"; tab = "salidas"; render();
+    }));
+    $("#re-v-excel").addEventListener("click", async () => {
+      try {
+        const XLSX = await cargarScript(URL_SHEETJS, "XLSX");
+        const hoja = filas.map(g => ({
+          "Posición": posicion.get(g.cliente), "Cliente (Adrematasa)": g.cliente, "Salidas": g.total,
+          "% del total": total ? Math.round(1000 * g.total / total) / 10 : 0,
+          ...Object.fromEntries(Object.values(DESGLOSES).flatMap(d => {
+            const cuenta = { a: 0, b: 0, c: 0 };
+            lista.filter(x => (normTxt(x.cliente) || "SIN CLIENTE") === g.cliente).forEach(x => { cuenta[d.de(x)]++; });
+            return [[d.a, cuenta.a], [d.b, cuenta.b], ...(d.c ? [[d.c, cuenta.c]] : [])];
+          })),
+        }));
+        const libro = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(libro, XLSX.utils.json_to_sheet(hoja), "Volumen por cliente");
+        XLSX.writeFile(libro, `Volumen_clientes_${fv.mes || "periodo"}.xlsx`);
+      } catch (e) { $("#re-error").textContent = "No se pudo generar el Excel: " + e.message; }
+    });
+    enlazarPaginas(renderVolumen);
   }
 
   // ---- Zonas y equivalencias ----
