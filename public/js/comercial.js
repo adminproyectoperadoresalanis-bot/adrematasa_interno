@@ -79,6 +79,15 @@ import { tomarFiltro } from "./navegacion.js"; // 2026-10-31: el Panel abre Come
 // "dólares americanos (USD)" (ya no se agrega el renglón de USD al final);
 // impuestos en condición aparte; aduana "Nuevo Laredo, Tamps."; sin demora Rojo;
 // en escritorio Km y Flete con ancho mínimo y Cruce con ancho máximo.
+// 2026-11-02c: el cruce deja de ir por ruta. Es un dato de TODA la cotización
+// (Importación / Exportación): "Incluye cruce" Sí/No y Aduana NLD/COL. Se
+// cobra en la misma factura, pero solo aparece como condición automática:
+// "No incluye cruce." / "Incluye cruce por la aduana Nuevo Laredo, Tamps.:
+// $3,750.00 MXN." (monto de Configuración según la moneda). Se guarda en
+// cot.cruce. El importe y el ingreso por km son solo flete. Las cotizaciones
+// guardadas con cruce por ruta (versión 14) conservan su PDF; si siguen en
+// borrador, al abrirlas el cruce pasa a la cotización.
+// Condiciones en grupos plegables con interruptores; demoras en tabla corta.
 // ============================================================================
 
 const COL_CLI = "com_clientes";
@@ -122,8 +131,8 @@ const CONDICIONES_BASE = [
   "No incluye seguro de la mercancía.",
 ];
 const CRUCES_BASE = [
-  { id: "nuevo_laredo", nombre: "Nuevo Laredo, Tamps.", mxn: 700, usd: 38 },
-  { id: "colombia", nombre: "Colombia, NL", mxn: 850, usd: 46 },
+  { id: "nuevo_laredo", corto: "NLD", nombre: "Nuevo Laredo, Tamps.", mxn: 700, usd: 38 },
+  { id: "colombia", corto: "COL", nombre: "Colombia, NL", mxn: 850, usd: 46 },
 ];
 // frase: cómo se lee en la condición ("Demoras en destino: …").
 const DEMORAS_BASE = [
@@ -149,7 +158,7 @@ const textoMoneda = (moneda) => moneda === "USD" ? "dólares americanos (USD)" :
 const conMoneda = (texto, moneda) => String(texto || "").split(MARCA_MONEDA).join(textoMoneda(moneda));
 function crucesDe(aj) {
   const g = Array.isArray(aj.cruces) ? aj.cruces : [];
-  return CRUCES_BASE.map(b => ({ ...b, ...(g.find(x => x && x.id === b.id) || {}), nombre: b.nombre }));
+  return CRUCES_BASE.map(b => ({ ...b, ...(g.find(x => x && x.id === b.id) || {}), nombre: b.nombre, corto: b.corto }));
 }
 function demorasDe(aj) {
   const g = Array.isArray(aj.demoras) ? aj.demoras : [];
@@ -159,7 +168,19 @@ const textoDemora = (d) => {
   const cargo = d.moneda === "USD" ? `${dinero(Number(d.cargo), "USD")}` : `${dinero(Number(d.cargo))} MXN`;
   return `Demoras ${d.frase}: ${miles(d.libre)} h libres; después ${cargo} por ${d.por === "hora" ? "hora" : "día"}.`;
 };
-// Cruce de una ruta (solo cuenta en Importación / Exportación).
+// Partes de una demora para la tabla corta del editor.
+const partesDemora = (d) => ({ lugar: d.lugar, libre: `${miles(d.libre)} h`,
+  despues: `${d.moneda === "USD" ? dinero(Number(d.cargo), "USD") : dinero(Number(d.cargo)) + " MXN"} por ${d.por === "hora" ? "hora" : "día"}` });
+// Condición automática del cruce de la cotización (null = no lleva: Nacional o cotización vieja).
+// cruce: { incluye, aduana, aduanaNombre, monto } guardado en la cotización.
+function textoCruce(cot) {
+  if (!conCruce(cot.tipoServicio) || cot.cruce === undefined) return null;
+  const c = cot.cruce;
+  if (!c || !c.incluye) return "No incluye cruce.";
+  const monto = cot.moneda === "USD" ? dinero(num(c.monto), "USD") : `${dinero(num(c.monto))} MXN`;
+  return `Incluye cruce por la aduana ${c.aduanaNombre}: ${monto}.`;
+}
+// Cruce de una ruta (versión 14; solo cotizaciones guardadas así).
 const conCruce = (servicio) => servicio === "importacion" || servicio === "exportacion";
 const cruceDe = (r, servicio) => {
   const c = r && r.cruce;
@@ -296,13 +317,24 @@ function inyectarEstilos() {
     .co-rutas select { width:100%; min-width:0; }
     .co-rutas .co-c-km { min-width:80px; } .co-rutas .co-c-im { min-width:120px; }
     .co-rutas .co-c-cr { width:170px; max-width:170px; }
-    .co-conds { border:1px solid #e2ddd5; border-radius:12px; padding:10px 12px; background:#fbfaf8; }
-    .co-cond, .co-campo label.co-cond { display:flex; gap:8px; align-items:flex-start; font-size:13px; font-weight:400; color:#1f1a14; margin:0; padding:4px 0; line-height:1.4; cursor:pointer; }
-    .co-cond input[type=checkbox] { width:auto; margin-top:2px; flex:none; }
-    .co-cond input[type=text] { flex:1; min-width:0; padding:5px 8px; font-size:13px; }
-    .co-cond > span:first-of-type { flex:1; }
-    .co-cond-off > span:first-of-type, .co-cond-off input[type=text] { color:#a69c90; text-decoration:line-through; }
-    .co-cond-tit { font-size:11px; font-weight:700; color:#6b5f52; text-transform:uppercase; letter-spacing:.4px; margin:10px 0 2px; }
+    .co-conds { border:1px solid #e2ddd5; border-radius:12px; overflow:hidden; background:#fff; }
+    .co-g { border-top:1px solid #e2ddd5; } .co-g:first-child { border-top:0; }
+    .co-g-h { display:flex; align-items:center; gap:10px; padding:10px 14px; background:#fbfaf8; cursor:pointer; user-select:none; font-size:13.5px; }
+    .co-g-f { color:#6b5f52; font-size:10px; width:12px; } .co-g-n { margin-left:auto; font-size:12px; color:#6b5f52; }
+    .co-cf { display:flex; align-items:center; gap:12px; padding:8px 14px; border-top:1px solid #f0ece6; font-size:13px; line-height:1.4; }
+    .co-cf-t { flex:1; } .co-cf.off .co-cf-t, .co-dem tr.off td { color:#a69c90; }
+    .co-cf input[type=text] { flex:1; min-width:0; width:auto; padding:6px 9px; font-size:13px; }
+    .co-dem { width:100%; border-collapse:collapse; font-size:13px; }
+    .co-dem th, .co-dem td { padding:7px 14px; border-top:1px solid #f0ece6; text-align:left; background:#fff; }
+    .co-dem th { font-size:10.5px; color:#6b5f52; text-transform:uppercase; font-weight:700; }
+    .co-dem td:last-child, .co-dem th:last-child { width:50px; text-align:right; }
+    .co-conds button.co-sw { all:unset; box-sizing:border-box; flex:none; display:inline-block; width:34px; height:20px; border-radius:10px; background:#cfc8bf; position:relative; cursor:pointer; transition:background .15s; }
+    .co-conds button.co-sw::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.25); transition:left .15s; }
+    .co-conds button.co-sw.on { background:#3B7A1E; } .co-conds button.co-sw.on::after { left:16px; }
+    .co-conds button.co-sw:focus-visible { outline:2px solid #185FA5; outline-offset:2px; }
+    .co-conds button.co-x { all:unset; cursor:pointer; color:#A32D2D; font-size:14px; padding:0 2px; }
+    .co-auto { font-size:10px; font-weight:800; padding:2px 7px; border-radius:9px; background:#EAF1FB; color:#185FA5; }
+    .co-conds-ro { border:1px solid #e2ddd5; border-radius:12px; padding:10px 14px; background:#fbfaf8; font-size:13px; line-height:1.6; }
     .co-ing.co-s-v { color:#3B7A1E; } .co-ing.co-s-a { color:#B7790B; } .co-ing.co-s-r { color:#B83227; } .co-ing.co-s-n { color:#8a7f73; }
     @media (max-width:700px) {
       .co-contacto { grid-template-columns:1fr 1fr; } .co-campos { grid-template-columns:1fr; }
@@ -317,7 +349,8 @@ function inyectarEstilos() {
       .co-rutas .co-c-or, .co-rutas .co-c-de, .co-rutas .co-c-ing, .co-rutas .co-c-cr { grid-column:1 / -1; }
       .co-rutas select { font-size:16px; padding:9px 10px; }
       .co-rutas .co-c-km, .co-rutas .co-c-im, .co-rutas .co-c-cr { min-width:0; width:auto; max-width:none; }
-      .co-cond input[type=text] { font-size:16px; }
+      .co-cf input[type=text] { font-size:16px; }
+      .co-dem th, .co-dem td { padding:7px 10px; }
       .co-rutas .co-c-or { padding-right:40px !important; }
       .co-rutas .co-c-ing { display:flex; justify-content:space-between; align-items:center; border-top:1px solid #f0ece6 !important; padding-top:8px !important; }
       .co-rutas .co-c-ing::before { margin:0; }
@@ -341,14 +374,14 @@ function inyectarEstilos() {
 // Las nuevas guardan condicionesSel; las de antes del 2026-11-02 usan el texto
 // viejo de Ajustes + sus notas (así su PDF no cambia).
 export function condicionesDeCot(cot, ajustes) {
-  if (Array.isArray(cot.condicionesSel)) return cot.condicionesSel.map(c => ({ texto: String(c.texto || ""), tipo: c.tipo || "propia", on: c.on !== false })).filter(c => c.texto.trim());
+  if (Array.isArray(cot.condicionesSel)) return cot.condicionesSel.map(c => ({ ...c, texto: String(c.texto || ""), tipo: c.tipo || "propia", on: c.on !== false })).filter(c => c.texto.trim());
   const lineas = (s) => String(s || "").split(/\n+/).map(x => x.trim()).filter(Boolean);
   return [...lineas(ajustes.condiciones).map(texto => ({ texto, tipo: "cat", on: true })), ...lineas(cot.notas).map(texto => ({ texto, tipo: "propia", on: true }))];
 }
 // Condiciones de una cotización nueva: catálogo + demoras, todas marcadas.
 function condicionesNuevas(ajustes) {
   return [...catalogoCondiciones(ajustes).map(c => ({ texto: c.texto, tipo: "cat", on: true })),
-    ...demorasDe(ajustes).map(d => ({ texto: textoDemora(d), tipo: "demora", on: true }))];
+    ...demorasDe(ajustes).map(d => ({ texto: textoDemora(d), tipo: "demora", on: true, ...partesDemora(d) }))];
 }
 
 // ---- PDF ----------------------------------------------------------------------
@@ -423,6 +456,8 @@ export async function generarPdf(cot, cliente, ajustes, firma, opciones = {}) {
   y += 4;
   const marcadas = condicionesDeCot(cot, ajustes).filter(c => c.on);
   const condiciones = marcadas.map(c => conMoneda(c.texto, cot.moneda));
+  const tCruce = textoCruce(cot);
+  if (tCruce) condiciones.splice(marcadas.filter(c => c.tipo === "cat").length, 0, tCruce); // después del catálogo
   condiciones.push(cot.vencimientoMs ? `Vigencia: ${textoVigencia(cot.vigenciaDias)} (hasta el ${fechaLarga(cot.vencimientoMs)}).` : "Vigencia: único evento (tarifa válida para un solo servicio).");
   // Solo si ninguna condición ya dice la moneda (las de antes del catálogo).
   if (cot.moneda === "USD" && !marcadas.some(c => c.texto.includes(MARCA_MONEDA))) condiciones.push("Importes en dólares americanos (USD).");
@@ -770,13 +805,23 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       if (!c) return;
       editor = JSON.parse(JSON.stringify(c));
       editor._id = id;
-      editor.rutas = (editor.rutas || []).map(r => ({ ...r, cruce: r.cruce ? { ...r.cruce } : { modo: "no", aduana: CRUCES_BASE[0].id } }));
+      editor.rutas = (editor.rutas || []).map(r => ({ ...r }));
       editor.condiciones = condicionesDeCot(c, ajustes);
+      Object.assign(editor, cruceEditor(c));
+      // Borrador hecho con cruce por ruta (versión 14): el cruce pasa a la cotización.
+      if (c.estado === "borrador") {
+        editor.rutas.forEach(r => { delete r.cruce; });
+        // Borrador de la versión 14: moneda e impuestos en dos condiciones y sin la demora Rojo.
+        editor.condiciones = editor.condiciones
+          .flatMap(x => x.texto.trim() === COND_VIEJA ? CONDICIONES_BASE.slice(0, 2).map(texto => ({ texto, tipo: "cat", on: x.on })) : [x])
+          .filter(x => !(x.tipo === "demora" && /^Demoras por rojo/.test(x.texto)));
+      }
     } else {
       editor = {
         _nueva: true, clienteId: clienteId || "", contacto: null, moneda: "MXN", tipoCambio: ajustes.tipoCambio,
         vigenciaDias: ajustes.vigenciaDias, tipoCarga: "refrigerada", tipoServicio: "nacional", estado: "borrador",
         rutas: [rutaVacia()], condiciones: condicionesNuevas(ajustes),
+        cruceSi: "no", cruceAduana: CRUCES_BASE[0].id,
       };
     }
     render();
@@ -788,59 +833,65 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     Object.assign(editor, {
       contacto: c.contacto || null, moneda: c.moneda, tipoCambio: c.moneda === "USD" ? ajustes.tipoCambio : c.tipoCambio,
       vigenciaDias: c.vigenciaDias, tipoCarga: c.tipoCarga, tipoServicio: c.tipoServicio,
-      condiciones: condicionesDeCot(c, ajustes),
-      rutas: (c.rutas || []).map(r => ({ origen: r.origen, destino: r.destino, km: r.km, importe: r.importe, origenCoord: r.origenCoord || undefined, destinoCoord: r.destinoCoord || undefined, vias: r.vias || undefined, kmOrs: r.kmOrs || undefined,
-        cruce: r.cruce ? { modo: r.cruce.modo, aduana: r.cruce.aduana, monto: r.cruce.monto } : { modo: "no", aduana: CRUCES_BASE[0].id } })),
+      condiciones: condicionesDeCot(c, ajustes), ...cruceEditor(c),
+      rutas: (c.rutas || []).map(r => ({ origen: r.origen, destino: r.destino, km: r.km, importe: r.importe, origenCoord: r.origenCoord || undefined, destinoCoord: r.destinoCoord || undefined, vias: r.vias || undefined, kmOrs: r.kmOrs || undefined })),
     });
     avisar(`Copia de ${c.folio}: revisa y guarda para darle folio nuevo.`);
     render();
   }
 
-  const rutaVacia = () => ({ origen: "", destino: "", km: "", importe: "", cruce: { modo: "no", aduana: CRUCES_BASE[0].id } });
+  const rutaVacia = () => ({ origen: "", destino: "", km: "", importe: "" });
   // Monto de cruce de Configuración para una aduana, en la moneda de la cotización.
-  const montoCruce = (aduana, moneda) => { const a = crucesDe(ajustes).find(x => x.id === aduana) || crucesDe(ajustes)[0]; return num(moneda === "USD" ? a.usd : a.mxn); };
-  const nombreAduana = (aduana) => (crucesDe(ajustes).find(x => x.id === aduana) || {}).nombre || "";
-  // Deja el monto del cruce al día: incluido = siempre el de Configuración; desglosado = el
-  // de Configuración mientras no lo escribas tú.
-  function ajustarCruce(r) {
-    const c = r.cruce || (r.cruce = { modo: "no", aduana: CRUCES_BASE[0].id });
-    if (!c.aduana) c.aduana = CRUCES_BASE[0].id;
-    if (c.modo === "incluido" || (c.modo === "desglosado" && (c.montoAuto || num(c.monto) == null))) { c.monto = montoCruce(c.aduana, editor.moneda); if (c.modo === "desglosado") c.montoAuto = true; }
+  const aduanaDe = (id) => crucesDe(ajustes).find(x => x.id === id) || crucesDe(ajustes)[0];
+  const montoCruce = (id, moneda) => { const a = aduanaDe(id); return num(moneda === "USD" ? a.usd : a.mxn); };
+  // Sí/No y aduana del editor a partir de lo guardado (cot.cruce, o el cruce por ruta de la versión 14).
+  function cruceEditor(c) {
+    if (c.cruce) return { cruceSi: c.cruce.incluye ? "si" : "no", cruceAduana: c.cruce.aduana || CRUCES_BASE[0].id };
+    const vieja = (c.rutas || []).map(r => cruceDe(r, c.tipoServicio)).find(Boolean);
+    return { cruceSi: vieja ? "si" : "no", cruceAduana: (vieja && vieja.aduana) || CRUCES_BASE[0].id };
   }
-  // Importe sugerido de una ruta: km × verde; si el cruce va incluido, más el cruce.
-  const sugeridaRuta = (r) => {
-    const s = sugerida(editor.tipoServicio, r.km, editor.moneda, editor.tipoCambio);
-    const c = cruceDe(r, editor.tipoServicio);
-    return s == null ? null : Math.round((s + (c && c.modo === "incluido" ? (c.monto || 0) : 0)) * 100) / 100;
+  // Cruce de la cotización en edición, como se guarda.
+  const cruceDelEditor = (e) => {
+    if (!conCruce(e.tipoServicio)) return null;
+    if (e.cruceSi !== "si") return { incluye: false };
+    const a = aduanaDe(e.cruceAduana);
+    return { incluye: true, aduana: a.id, aduanaNombre: a.nombre, monto: montoCruce(a.id, e.moneda) };
   };
+  const sugeridaRuta = (r) => sugerida(editor.tipoServicio, r.km, editor.moneda, editor.tipoCambio);
 
   // Catálogo de rutas: buscar por origen + destino.
   const claveRuta = (o, d) => `${normTxt(o)}|${normTxt(d)}`;
   function rutaDelCatalogo(o, d) { const k = claveRuta(o, d); return [...rutas.values()].find(r => claveRuta(r.origen, r.destino) === k) || null; }
 
-  function celdaCruce(r, i, dis, aduanas) {
-    const c = r.cruce || { modo: "no" };
-    return `<select data-cr="modo" data-i="${i}"${dis}>${Object.entries(MODOS_CRUCE).map(([k, v]) => `<option value="${k}"${c.modo === k ? " selected" : ""}>${v}</option>`).join("")}</select>
-      ${c.modo === "no" ? "" : `<select data-cr="aduana" data-i="${i}"${dis} style="margin-top:4px;">${aduanas.map(a => `<option value="${esc(a.id)}"${c.aduana === a.id ? " selected" : ""}>${esc(a.nombre)}</option>`).join("")}</select>`}
-      ${c.modo === "desglosado" ? `<input type="number" min="0" step="0.01" data-cr="monto" data-i="${i}" value="${esc(c.monto == null ? "" : c.monto)}"${dis} style="margin-top:4px;" title="Monto del cruce (${esc(editor.moneda)})">` : ""}
-      <small class="nota" data-total="${i}" style="display:block;margin-top:3px;"></small>`;
-  }
-  // Condiciones con casillas: catálogo, demoras y las de esta cotización.
-  function bloqueCondiciones(bloqueada) {
+  // Condiciones en grupos plegables (Generales, Cruce, Demoras, Solo para esta
+  // cotización) con un interruptor por renglón; demoras en tabla corta.
+  function bloqueCondiciones(bloqueada, original) {
     const e = editor, cs = e.condiciones || [];
-    const fila = (c, k) => `<label class="co-cond${c.on ? "" : " co-cond-off"}"><input type="checkbox" data-cond="${k}"${c.on ? " checked" : ""}${bloqueada ? " disabled" : ""}>
-      ${c.tipo === "propia" && !bloqueada ? `<input type="text" data-cond-txt="${k}" value="${esc(c.texto)}" placeholder="Escribe la condición…"><button type="button" class="co-link" data-cond-x="${k}" style="color:#A32D2D;text-decoration:none;" title="Quitar">✕</button>` : `<span>${esc(conMoneda(c.texto, e.moneda))}</span>`}
-      ${c.tipo === "demora" ? `<span class="co-chip co-gris" style="font-size:9.5px;">DEMORA</span>` : ""}</label>`;
-    const grupo = (tipo, titulo) => { const xs = cs.map((c, k) => [c, k]).filter(([c]) => c.tipo === tipo); return xs.length ? `${titulo ? `<div class="co-cond-tit">${titulo}</div>` : ""}${xs.map(([c, k]) => fila(c, k)).join("")}` : ""; };
+    const tCruce = bloqueada ? textoCruce(original || {}) : textoCruce({ ...e, cruce: cruceDelEditor(e) });
     if (bloqueada) {
-      const on = cs.filter(c => c.on);
-      return `<div class="co-conds">${on.length ? on.map(c => `<div class="co-cond"><span>•</span><span>${esc(conMoneda(c.texto, e.moneda))}</span></div>`).join("") : `<p class="nota">Sin condiciones.</p>`}
-        <p class="nota" style="margin:6px 0 0;">Ya enviada: las condiciones no cambian. Para cambiarlas, usa "Duplicar".</p></div>`;
+      const on = cs.filter(c => c.on).map(c => conMoneda(c.texto, e.moneda));
+      if (tCruce) on.splice(cs.filter(c => c.on && c.tipo === "cat").length, 0, tCruce);
+      return `<div class="co-conds-ro">${on.length ? on.map(t => `<div>• ${esc(t)}</div>`).join("") : `<p class="nota">Sin condiciones.</p>`}
+        <p class="nota" style="margin:8px 0 0;">Ya enviada: las condiciones no cambian. Para cambiarlas, usa "Duplicar".</p></div>`;
     }
-    return `<div class="co-conds"><p class="nota" style="margin:0 0 6px;">Todas vienen marcadas. Desmarca las que no aplican.</p>
-      ${grupo("cat", "")}${grupo("demora", "Demoras")}${grupo("propia", "Solo para esta cotización")}
-      <button type="button" class="co-link" id="co-cond-mas" style="font-size:13px;margin-top:6px;">+ Agregar condición solo para esta cotización</button>
-      <p class="nota" style="margin:6px 0 0;">La vigencia se agrega sola al final.</p></div>`;
+    if (!e._pleg) { const cel = window.innerWidth <= 700; e._pleg = { cat: cel, demora: cel, propia: false, cruce: false }; }
+    const de = (tipo) => cs.map((c, k) => [c, k]).filter(([c]) => c.tipo === tipo);
+    const sw = (c, k) => `<button type="button" class="co-sw${c.on ? " on" : ""}" data-cond="${k}" role="switch" aria-checked="${c.on}" title="${c.on ? "Sale en el PDF" : "No sale en el PDF"}"></button>`;
+    const grupo = (id, titulo, cuenta, cuerpo) => `<div class="co-g">
+      <div class="co-g-h" data-pleg="${id}"><span class="co-g-f">${e._pleg[id] ? "▶" : "▼"}</span><b>${titulo}</b><span class="co-g-n">${cuenta}</span></div>
+      ${e._pleg[id] ? "" : cuerpo}</div>`;
+    const cuenta = (xs) => `${xs.filter(([c]) => c.on).length} de ${xs.length}`;
+    const cat = de("cat"), dem = de("demora"), pro = de("propia");
+    let html = grupo("cat", "Generales", cuenta(cat),
+      cat.map(([c, k]) => `<div class="co-cf${c.on ? "" : " off"}"><span class="co-cf-t">${esc(conMoneda(c.texto, e.moneda))}</span>${sw(c, k)}</div>`).join(""));
+    if (tCruce) html += grupo("cruce", "Cruce", `<span class="co-auto">AUTOMÁTICA</span>`,
+      `<div class="co-cf"><span class="co-cf-t">${esc(tCruce)}</span></div>`);
+    if (dem.length) html += grupo("demora", "Demoras", cuenta(dem), `<table class="co-dem"><thead><tr><th>Lugar</th><th>Libre</th><th>Después</th><th></th></tr></thead><tbody>
+      ${dem.map(([c, k]) => `<tr class="${c.on ? "" : "off"}">${c.lugar ? `<td>${esc(c.lugar)}</td><td>${esc(c.libre)}</td><td>${esc(c.despues)}</td>` : `<td colspan="3">${esc(c.texto)}</td>`}<td>${sw(c, k)}</td></tr>`).join("")}</tbody></table>`);
+    html += grupo("propia", "Solo para esta cotización", String(pro.length),
+      pro.map(([c, k]) => `<div class="co-cf${c.on ? "" : " off"}"><input type="text" data-cond-txt="${k}" value="${esc(c.texto)}" placeholder="Escribe la condición…">${sw(c, k)}<button type="button" class="co-x" data-cond-x="${k}" title="Quitar">✕</button></div>`).join("")
+      + `<div class="co-cf"><button type="button" class="co-link" id="co-cond-mas" style="font-size:13px;">+ Agregar condición</button></div>`);
+    return `<div class="co-conds">${html}</div><p class="nota" style="margin:6px 0 0;">Toca el interruptor para quitar o poner una condición. La vigencia se agrega sola al final.</p>`;
   }
 
   function renderEditor() {
@@ -853,9 +904,6 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const lugares = [...new Set([...rutas.values()].flatMap(r => [r.origen, r.destino]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
     const seg = (campo, opciones, deshab) => `<span class="co-seg">${opciones.map(([v, t]) => `<button type="button" class="${String(e[campo]) === String(v) ? "activo" : ""}" data-campo="${campo}" data-valor="${v}"${deshab ? " disabled" : ""}>${t}</button>`).join("")}</span>`;
     const vigOpc = opcionesVigencia(e.vigenciaDias);
-    const cc = conCruce(e.tipoServicio);
-    const esFija = (r) => bloqueada && r.agregadaMs && original && (original.rutas || []).some(x => x.agregadaMs === r.agregadaMs && x.origen === r.origen && x.destino === r.destino);
-    if (cc) e.rutas.forEach(r => { if (!esFija(r)) ajustarCruce(r); });
     const aduanas = crucesDe(ajustes);
     $("#co-cuerpo").innerHTML = `
       <button type="button" class="co-link" id="co-e-volver">‹ Volver</button>
@@ -872,11 +920,14 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
         <div><label>Vigencia</label><select id="co-e-vig"${bloqueada ? " disabled" : ""} style="width:auto;min-width:140px;">${vigOpc.map(d => `<option value="${d}"${d === Number(e.vigenciaDias) ? " selected" : ""}>${textoVigencia(d)}</option>`).join("")}</select></div>
         <div><label>Tipo de carga</label>${seg("tipoCarga", Object.entries(CARGAS), bloqueada)}</div>
         <div><label>Servicio</label>${seg("tipoServicio", Object.entries(SERVICIOS), bloqueada)}</div>
+        ${conCruce(e.tipoServicio) ? `<div><label>Incluye cruce</label>${seg("cruceSi", [["no", "No"], ["si", "Sí"]], bloqueada)}</div>
+        ${e.cruceSi === "si" ? `<div><label>Aduana</label>${seg("cruceAduana", aduanas.map(a => [a.id, a.corto]), bloqueada)}
+          <small class="nota" style="display:block;margin-top:4px;">${esc(aduanas.find(a => a.id === e.cruceAduana)?.nombre || "")} · ${(() => { const m = montoCruce(e.cruceAduana, e.moneda); return m ? (e.moneda === "USD" ? dinero(m, "USD") : dinero(m) + " MXN") : "sin monto en Configuración"; })()}</small></div>` : ""}` : ""}
       </div>
       <div class="co-h3">Rutas</div>
       ${ajustes.orsKey ? "" : `<datalist id="co-lugares">${lugares.map(l => `<option value="${esc(l)}">`).join("")}</datalist>`}
       <div class="tabla-wrap"><table class="tabla co-tabla co-rutas">
-        <thead><tr><th style="min-width:170px;">Origen</th><th style="min-width:170px;">Destino</th><th class="n" style="width:90px;">Km</th><th class="n" style="width:130px;">${cc ? "Flete" : "Importe"} (${esc(e.moneda)})</th>${cc ? `<th style="min-width:150px;">Cruce</th>` : ""}<th class="n">Ing./km MXN</th><th></th></tr></thead>
+        <thead><tr><th style="min-width:170px;">Origen</th><th style="min-width:170px;">Destino</th><th class="n" style="width:90px;">Km</th><th class="n" style="width:130px;">Importe (${esc(e.moneda)})</th><th class="n">Ing./km MXN</th><th></th></tr></thead>
         <tbody>${e.rutas.map((r, i) => {
           const fija = bloqueada && r.agregadaMs && original && (original.rutas || []).some(x => x.agregadaMs === r.agregadaMs && x.origen === r.origen && x.destino === r.destino);
           const dis = fija ? " disabled" : "";
@@ -890,8 +941,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
               <button type="button" class="co-link" data-mapa="${i}" style="font-size:12px;${r.origenCoord && r.destinoCoord ? "" : "display:none;"}">Ver ruta</button>
               ${fija && r.agregadaMs - (original.emisionMs || 0) > DIA / 2 ? `<br><small class="nota">agregada ${fecha(r.agregadaMs)}</small>` : ""}</td>
             <td class="n co-c-km" data-et="Km"><input type="number" min="1" data-r="km" value="${esc(r.km)}"${dis}><br><small class="nota" data-tipo="${i}">${tipoRutaTxt(num(r.km))}</small></td>
-            <td class="n co-c-im" data-et="${cc ? "Flete" : "Importe"} (${esc(e.moneda)})"><input type="number" min="0" step="0.01" data-r="importe" value="${esc(r.importe)}"${dis}>${fija ? "" : `<br><small class="nota" data-sug="${i}"></small>`}</td>
-            ${cc ? `<td class="co-c-cr" data-et="Cruce">${celdaCruce(r, i, dis, aduanas)}</td>` : ""}
+            <td class="n co-c-im" data-et="Importe (${esc(e.moneda)})"><input type="number" min="0" step="0.01" data-r="importe" value="${esc(r.importe)}"${dis}>${fija ? "" : `<br><small class="nota" data-sug="${i}"></small>`}</td>
             <td class="n co-c-ing" data-et="Ingreso por km" data-ing="${i}">${celdaIng(v, e.tipoServicio, r.km)}</td>
             <td class="co-c-x">${fija ? "" : `<button type="button" class="secundario co-mini" data-qr="${i}" title="Quitar ruta">✕</button>`}</td></tr>`;
         }).join("")}</tbody></table></div>
@@ -899,7 +949,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       ${original && !bloqueada ? `<p class="nota">Está en borrador: puedes cambiar todo. Al pasarla a Enviada, las rutas guardadas quedan fijas.</p>` : ""}
       ${bloqueada && vigente ? `<p class="nota">Ya tiene folio: las rutas guardadas no cambian; puedes agregar rutas nuevas mientras siga vigente (salen en el PDF con su fecha). Para cambiar importes, usa "Duplicar".</p>` : ""}
       <div class="co-grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-top:14px;">
-        <div class="co-campo" style="grid-column:1/-1;"><label>Condiciones de esta cotización (salen en el PDF)</label>${bloqueCondiciones(bloqueada)}</div>
+        <div class="co-campo" style="grid-column:1/-1;"><label>Condiciones de esta cotización (salen en el PDF)</label>${bloqueCondiciones(bloqueada, original)}</div>
         <div>
           ${e.moneda === "USD" ? `<div class="nota" style="margin:0 0 8px;">El ingreso por km se calcula en MXN con el tipo de cambio de esta cotización.</div>` : ""}
           ${original ? `<div><label>Estado</label><span class="co-seg co-seg-estado">${["borrador", "enviada", "aceptada", "rechazada"].map(k => `<button type="button" class="${e.estado === k ? "activo" : ""}" data-estado="${k}"${puedeEditar ? "" : " disabled"}>${ESTADOS[k].txt.charAt(0) + ESTADOS[k].txt.slice(1).toLowerCase()}</button>`).join("")}</span>
@@ -933,7 +983,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     $("#co-e-vig").addEventListener("change", (ev) => { e.vigenciaDias = Number(ev.target.value); });
     $("#co-cuerpo").querySelectorAll("[data-campo]").forEach(b => b.addEventListener("click", () => {
       const c = b.dataset.campo; e[c] = c === "vigenciaDias" ? Number(b.dataset.valor) : b.dataset.valor; leerFormulario();
-      if (c === "tipoServicio" || c === "moneda") e.rutas.forEach(r => { if (conCruce(e.tipoServicio)) ajustarCruce(r); if (r.importeAuto) { r.importe = ""; autoImporte(r); } });
+      if (c === "tipoServicio" || c === "moneda") e.rutas.forEach(r => { if (r.importeAuto) { r.importe = ""; autoImporte(r); } });
       renderEditor();
     }));
     const tc = $("#co-e-tc"); if (tc) tc.addEventListener("input", () => {
@@ -970,27 +1020,19 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       renderEditor();
     }));
     const mas = $("#co-e-mas"); if (mas) mas.addEventListener("click", () => { leerFormulario(); e.rutas.push(rutaVacia()); renderEditor(); });
-    // Cruce por ruta
-    $("#co-cuerpo").querySelectorAll("select[data-cr]").forEach(s => s.addEventListener("change", () => {
-      const r = e.rutas[Number(s.dataset.i)]; leerFormulario();
-      r.cruce = r.cruce || { modo: "no", aduana: CRUCES_BASE[0].id };
-      r.cruce[s.dataset.cr] = s.value;
-      if (s.dataset.cr === "aduana" || s.dataset.cr === "modo") r.cruce.montoAuto = true;
-      ajustarCruce(r);
-      if (r.importeAuto) { r.importe = ""; autoImporte(r); }
-      renderEditor();
-    }));
-    $("#co-cuerpo").querySelectorAll("input[data-cr=monto]").forEach(inp => inp.addEventListener("input", () => {
-      const r = e.rutas[Number(inp.dataset.i)]; r.cruce.monto = inp.value; r.cruce.montoAuto = false; pintarIngresos();
-    }));
     // Condiciones
-    $("#co-cuerpo").querySelectorAll("[data-cond]").forEach(ch => ch.addEventListener("change", () => {
-      const c = e.condiciones[Number(ch.dataset.cond)]; c.on = ch.checked; ch.closest(".co-cond").classList.toggle("co-cond-off", !c.on);
+    $("#co-cuerpo").querySelectorAll("[data-cond]").forEach(b => b.addEventListener("click", () => {
+      const c = e.condiciones[Number(b.dataset.cond)]; c.on = !c.on;
+      b.classList.toggle("on", c.on); b.setAttribute("aria-checked", c.on); b.title = c.on ? "Sale en el PDF" : "No sale en el PDF";
+      b.closest(".co-cf, tr").classList.toggle("off", !c.on);
+      const g = b.closest(".co-g"), n = g && g.querySelector(".co-g-n"), bs = g ? [...g.querySelectorAll("[data-cond]")] : [];
+      if (n && g.querySelector("[data-pleg]").dataset.pleg !== "propia") n.textContent = `${bs.filter(x => x.classList.contains("on")).length} de ${bs.length}`;
     }));
+    $("#co-cuerpo").querySelectorAll("[data-pleg]").forEach(h => h.addEventListener("click", () => { leerFormulario(); e._pleg[h.dataset.pleg] = !e._pleg[h.dataset.pleg]; renderEditor(); }));
     $("#co-cuerpo").querySelectorAll("[data-cond-txt]").forEach(inp => inp.addEventListener("input", () => { e.condiciones[Number(inp.dataset.condTxt)].texto = inp.value; }));
     $("#co-cuerpo").querySelectorAll("[data-cond-x]").forEach(b => b.addEventListener("click", () => { leerFormulario(); e.condiciones.splice(Number(b.dataset.condX), 1); renderEditor(); }));
     const cm = $("#co-cond-mas"); if (cm) cm.addEventListener("click", () => {
-      leerFormulario(); e.condiciones.push({ texto: "", tipo: "propia", on: true }); renderEditor();
+      leerFormulario(); e.condiciones.push({ texto: "", tipo: "propia", on: true }); e._pleg.propia = false; renderEditor();
       const ins = $("#co-cuerpo").querySelectorAll("[data-cond-txt]"); if (ins.length) ins[ins.length - 1].focus();
     });
     $("#co-cuerpo").querySelectorAll("[data-estado]").forEach(b => b.addEventListener("click", () => { leerFormulario(); e.estado = b.dataset.estado; renderEditor(); }));
@@ -1182,21 +1224,14 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       const sg = $(`[data-sug="${i}"]`);
       if (sg) {
         const sug = sugeridaRuta(r);
-        const inc = (cruceDe(r, editor.tipoServicio) || {}).modo === "incluido";
         if (sug == null) sg.innerHTML = "";
-        else if (r.importeAuto || num(r.importe) === sug) sg.textContent = inc ? "sugerida (verde + cruce)" : "sugerida (umbral verde)";
+        else if (r.importeAuto || num(r.importe) === sug) sg.textContent = "sugerida (umbral verde)";
         else {
           sg.innerHTML = `sugerida ${dinero(sug, editor.moneda)} <button type="button" class="co-link" style="font-size:12px;">usar</button>`;
           sg.querySelector("button").addEventListener("click", () => { r.importe = sug; r.importeAuto = true; const inp = $(`tr[data-i="${i}"] [data-r="importe"]`); if (inp) inp.value = sug; pintarIngresos(); });
         }
       }
       const t = $(`[data-tipo="${i}"]`); if (t) t.textContent = tipoRutaTxt(num(r.km));
-      const tv = $(`[data-total="${i}"]`);
-      if (tv) {
-        const c = cruceDe(r, editor.tipoServicio);
-        tv.textContent = !c ? "" : c.modo === "incluido" ? `incluido: ${dinero(c.monto, editor.moneda)} · el ing./km lo descuenta`
-          : `total por viaje ${dinero(totalViaje(r, editor.tipoServicio), editor.moneda)}`;
-      }
     });
   }
 
@@ -1212,18 +1247,19 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       if (!String(r.origen).trim() || !String(r.destino).trim()) { err.textContent = "Cada ruta necesita origen y destino."; return; }
       if (!num(r.km) || num(r.km) <= 0) { err.textContent = `Faltan los km de ${r.origen} → ${r.destino}.`; return; }
       if (num(r.importe) == null || num(r.importe) <= 0) { err.textContent = `Falta el importe de ${r.origen} → ${r.destino}.`; return; }
-      const c = cruceDe(r, e.tipoServicio);
-      if (c && !(c.monto > 0)) { err.textContent = `Falta el monto del cruce de ${r.origen} → ${r.destino}.`; return; }
     }
+    const cruce = cruceDelEditor(e);
+    if (cruce && cruce.incluye && !(cruce.monto > 0)) { err.textContent = `Falta el monto del cruce de ${cruce.aduanaNombre} en ${e.moneda} (Configuración → Comercial).`; return; }
     if (e.moneda === "USD" && !(num(e.tipoCambio) > 0)) { err.textContent = "Escribe el tipo de cambio."; return; }
     const ahora = Date.now();
     const limpias = rs.map(r => ({
       origen: String(r.origen).trim(), destino: String(r.destino).trim(), km: num(r.km), importe: num(r.importe),
       agregadaMs: r.agregadaMs || ahora,
       origenCoord: r.origenCoord || null, destinoCoord: r.destinoCoord || null, vias: r.vias || [], kmOrs: r.kmOrs || null,
-      cruce: (() => { const c = cruceDe(r, e.tipoServicio); return c ? { modo: c.modo, aduana: c.aduana, aduanaNombre: nombreAduana(c.aduana), monto: c.monto } : null; })(),
+      ...(r.cruce ? { cruce: r.cruce } : {}), // solo rutas ya enviadas de la versión 14
     }));
-    const condicionesSel = (e.condiciones || []).map(c => ({ texto: String(c.texto || "").trim(), tipo: c.tipo, on: !!c.on })).filter(c => c.texto);
+    const condicionesSel = (e.condiciones || []).map(c => ({ texto: String(c.texto || "").trim(), tipo: c.tipo, on: !!c.on,
+      ...(c.tipo === "demora" && c.lugar ? { lugar: c.lugar, libre: c.libre, despues: c.despues } : {}) })).filter(c => c.texto);
     const botones = $("#co-cuerpo").querySelectorAll(".co-acciones button");
     botones.forEach(b => b.disabled = true);
     try {
@@ -1238,7 +1274,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
             tipoCarga: e.tipoCarga, tipoServicio: e.tipoServicio, moneda: e.moneda, tipoCambio: e.moneda === "USD" ? num(e.tipoCambio) : 1,
             vigenciaDias: Number(e.vigenciaDias), vencimientoMs: venceEn(antes.emisionMs, e.vigenciaDias),
             rutas: limpias.map(r => ({ ...r, agregadaMs: antes.emisionMs })),
-            condicionesSel, notas: null,
+            condicionesSel, notas: null, cruce,
           };
         }
         await updateDoc(doc(db, COL_COT, e._id), cambios);
@@ -1249,7 +1285,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
           estado: "borrador", clienteId: cli.id, clienteNombre: cli.nombre, clienteRfc: cli.rfc || null, contacto: e.contacto || null,
           tipoCarga: e.tipoCarga, tipoServicio: e.tipoServicio, moneda: e.moneda, tipoCambio: e.moneda === "USD" ? num(e.tipoCambio) : 1,
           vigenciaDias: Number(e.vigenciaDias), emisionMs: ahora, vencimientoMs: venceEn(ahora, e.vigenciaDias),
-          rutas: limpias, condicionesSel,
+          rutas: limpias, condicionesSel, cruce,
           creadoPorUid: uid, creadoPor: { uid, nombre: yo.nombre, puesto: yo.puesto, correo: yo.correo }, creadoMs: ahora, anio,
         };
         // Folio: consecutivo único para todos, en transacción.
@@ -1491,7 +1527,7 @@ export function iniciarAjustesComercial(caja, resumen) {
         <thead><tr><th>Concepto</th><th>Aduana</th><th class="n">Monto MXN</th><th class="n">Monto USD</th></tr></thead>
         <tbody>${crucesDe(ajustes).map(a => `<tr><td>Cruce</td><td><b>${esc(a.nombre)}</b></td><td class="n"><input type="number" min="0" step="0.01" data-cruce="${esc(a.id)}" data-mon="mxn" value="${esc(a.mxn)}" style="width:110px;"></td><td class="n"><input type="number" min="0" step="0.01" data-cruce="${esc(a.id)}" data-mon="usd" value="${esc(a.usd)}" style="width:110px;"></td></tr>`).join("")}</tbody>
       </table></div>
-      <small class="nota">Solo en cotizaciones de Importación y Exportación. Cada ruta empieza en "No aplica"; quien cotiza lo cambia a Incluido o Desglosado y elige la aduana.</small>
+      <small class="nota">Solo en Importación y Exportación. En la cotización se elige "Incluye cruce" Sí/No y la aduana (NLD / COL); el monto sale en las condiciones, en la moneda de la cotización.</small>
       <div class="co-h3">Demoras</div>
       <div class="tabla-wrap"><table class="tabla co-tabla" style="max-width:720px;">
         <thead><tr><th>Lugar</th><th class="n">Tiempo libre (h)</th><th class="n">Cargo después</th><th>Por</th><th>Moneda</th></tr></thead>
@@ -1501,7 +1537,7 @@ export function iniciarAjustesComercial(caja, resumen) {
           <td><select data-d="por" style="width:auto;"><option value="hora"${d.por === "hora" ? " selected" : ""}>hora</option><option value="dia"${d.por !== "hora" ? " selected" : ""}>día</option></select></td>
           <td><select data-d="moneda" style="width:auto;"><option value="MXN"${d.moneda !== "USD" ? " selected" : ""}>MXN</option><option value="USD"${d.moneda === "USD" ? " selected" : ""}>USD</option></select></td></tr>`).join("")}</tbody>
       </table></div>
-      <small class="nota">Cada lugar sale como condición (con casilla) en la cotización, p. ej.: "${esc(textoDemora(demorasDe(ajustes).find(d => d.id === "aduana")))}"</small>
+      <small class="nota">Cada lugar sale como condición (con interruptor) en la cotización, p. ej.: "${esc(textoDemora(demorasDe(ajustes).find(d => d.id === "aduana")))}"</small>
       <div class="acciones-form" style="margin-top:14px;"><button type="button" id="caj-ok">Guardar</button></div>`;
     const q = (sel) => caja.querySelector(sel);
     const err = (t) => { q("#caj-error").textContent = t || ""; };
