@@ -88,6 +88,9 @@ import { tomarFiltro } from "./navegacion.js"; // 2026-10-31: el Panel abre Come
 // guardadas con cruce por ruta (versión 14) conservan su PDF; si siguen en
 // borrador, al abrirlas el cruce pasa a la cotización.
 // Condiciones en grupos plegables con interruptores; demoras en tabla corta.
+// 2026-11-02d: demoras por día dicen "por día o fracción"; la demora en ADUANA
+// solo sale si la cotización incluye cruce; en borrador las demoras se toman
+// SIEMPRE de Configuración (se conserva qué estaba encendido). Ya enviada, no cambian.
 // ============================================================================
 
 const COL_CLI = "com_clientes";
@@ -166,11 +169,26 @@ function demorasDe(aj) {
 }
 const textoDemora = (d) => {
   const cargo = d.moneda === "USD" ? `${dinero(Number(d.cargo), "USD")}` : `${dinero(Number(d.cargo))} MXN`;
-  return `Demoras ${d.frase}: ${miles(d.libre)} h libres; después ${cargo} por ${d.por === "hora" ? "hora" : "día"}.`;
+  return `Demoras ${d.frase}: ${miles(d.libre)} h libres; después ${cargo} por ${d.por === "hora" ? "hora" : "día o fracción"}.`;
 };
-// Partes de una demora para la tabla corta del editor.
-const partesDemora = (d) => ({ lugar: d.lugar, libre: `${miles(d.libre)} h`,
-  despues: `${d.moneda === "USD" ? dinero(Number(d.cargo), "USD") : dinero(Number(d.cargo)) + " MXN"} por ${d.por === "hora" ? "hora" : "día"}` });
+// Demoras de Configuración como condiciones. previas: las que ya tenía la cotización
+// (se respeta si estaban apagadas; se reconocen por id o por el inicio del texto).
+function demorasComoCondiciones(ajustes, previas = []) {
+  return demorasDe(ajustes).map(d => {
+    const antes = previas.find(x => x.tipo === "demora" && (x.id === d.id || String(x.texto).startsWith(`Demoras ${d.frase}:`)));
+    return { id: d.id, texto: textoDemora(d), tipo: "demora", on: antes ? antes.on !== false : true };
+  });
+}
+// En borrador: catálogo y propias como estaban; demoras al día con Configuración.
+function refrescarDemoras(conds, ajustes) {
+  const dem = demorasComoCondiciones(ajustes, conds);
+  const i = conds.findIndex(x => x.tipo === "demora");
+  const resto = conds.filter(x => x.tipo !== "demora");
+  const pos = i >= 0 ? conds.slice(0, i).filter(x => x.tipo !== "demora").length : resto.filter(x => x.tipo === "cat").length;
+  return [...resto.slice(0, pos), ...dem, ...resto.slice(pos)];
+}
+// La demora en aduana solo aplica cuando la cotización incluye cruce.
+const demoraAplica = (c, incluyeCruce) => !(c.tipo === "demora" && (c.id === "aduana" || /^Demoras en aduana:/.test(c.texto)) && !incluyeCruce);
 // Condición automática del cruce de la cotización (null = no lleva: Nacional o cotización vieja).
 // cruce: { incluye, aduana, aduanaNombre, monto } guardado en la cotización.
 function textoCruce(cot) {
@@ -381,7 +399,7 @@ export function condicionesDeCot(cot, ajustes) {
 // Condiciones de una cotización nueva: catálogo + demoras, todas marcadas.
 function condicionesNuevas(ajustes) {
   return [...catalogoCondiciones(ajustes).map(c => ({ texto: c.texto, tipo: "cat", on: true })),
-    ...demorasDe(ajustes).map(d => ({ texto: textoDemora(d), tipo: "demora", on: true, ...partesDemora(d) }))];
+    ...demorasComoCondiciones(ajustes)];
 }
 
 // ---- PDF ----------------------------------------------------------------------
@@ -815,6 +833,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
         editor.condiciones = editor.condiciones
           .flatMap(x => x.texto.trim() === COND_VIEJA ? CONDICIONES_BASE.slice(0, 2).map(texto => ({ texto, tipo: "cat", on: x.on })) : [x])
           .filter(x => !(x.tipo === "demora" && /^Demoras por rojo/.test(x.texto)));
+        editor.condiciones = refrescarDemoras(editor.condiciones, ajustes);
       }
     } else {
       editor = {
@@ -833,7 +852,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     Object.assign(editor, {
       contacto: c.contacto || null, moneda: c.moneda, tipoCambio: c.moneda === "USD" ? ajustes.tipoCambio : c.tipoCambio,
       vigenciaDias: c.vigenciaDias, tipoCarga: c.tipoCarga, tipoServicio: c.tipoServicio,
-      condiciones: condicionesDeCot(c, ajustes), ...cruceEditor(c),
+      condiciones: refrescarDemoras(condicionesDeCot(c, ajustes), ajustes), ...cruceEditor(c),
       rutas: (c.rutas || []).map(r => ({ origen: r.origen, destino: r.destino, km: r.km, importe: r.importe, origenCoord: r.origenCoord || undefined, destinoCoord: r.destinoCoord || undefined, vias: r.vias || undefined, kmOrs: r.kmOrs || undefined })),
     });
     avisar(`Copia de ${c.folio}: revisa y guarda para darle folio nuevo.`);
@@ -881,13 +900,14 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       <div class="co-g-h" data-pleg="${id}"><span class="co-g-f">${e._pleg[id] ? "▶" : "▼"}</span><b>${titulo}</b><span class="co-g-n">${cuenta}</span></div>
       ${e._pleg[id] ? "" : cuerpo}</div>`;
     const cuenta = (xs) => `${xs.filter(([c]) => c.on).length} de ${xs.length}`;
-    const cat = de("cat"), dem = de("demora"), pro = de("propia");
+    const incluye = !!(cruceDelEditor(e) || {}).incluye;
+    const cat = de("cat"), dem = de("demora").filter(([c]) => demoraAplica(c, incluye)), pro = de("propia");
     let html = grupo("cat", "Generales", cuenta(cat),
       cat.map(([c, k]) => `<div class="co-cf${c.on ? "" : " off"}"><span class="co-cf-t">${esc(conMoneda(c.texto, e.moneda))}</span>${sw(c, k)}</div>`).join(""));
     if (tCruce) html += grupo("cruce", "Cruce", `<span class="co-auto">AUTOMÁTICA</span>`,
       `<div class="co-cf"><span class="co-cf-t">${esc(tCruce)}</span></div>`);
-    if (dem.length) html += grupo("demora", "Demoras", cuenta(dem), `<table class="co-dem"><thead><tr><th>Lugar</th><th>Libre</th><th>Después</th><th></th></tr></thead><tbody>
-      ${dem.map(([c, k]) => `<tr class="${c.on ? "" : "off"}">${c.lugar ? `<td>${esc(c.lugar)}</td><td>${esc(c.libre)}</td><td>${esc(c.despues)}</td>` : `<td colspan="3">${esc(c.texto)}</td>`}<td>${sw(c, k)}</td></tr>`).join("")}</tbody></table>`);
+    if (dem.length) html += grupo("demora", "Demoras", cuenta(dem),
+      dem.map(([c, k]) => `<div class="co-cf${c.on ? "" : " off"}"><span class="co-cf-t">${esc(c.texto)}</span>${sw(c, k)}</div>`).join(""));
     html += grupo("propia", "Solo para esta cotización", String(pro.length),
       pro.map(([c, k]) => `<div class="co-cf${c.on ? "" : " off"}"><input type="text" data-cond-txt="${k}" value="${esc(c.texto)}" placeholder="Escribe la condición…">${sw(c, k)}<button type="button" class="co-x" data-cond-x="${k}" title="Quitar">✕</button></div>`).join("")
       + `<div class="co-cf"><button type="button" class="co-link" id="co-cond-mas" style="font-size:13px;">+ Agregar condición</button></div>`);
@@ -1258,8 +1278,9 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       origenCoord: r.origenCoord || null, destinoCoord: r.destinoCoord || null, vias: r.vias || [], kmOrs: r.kmOrs || null,
       ...(r.cruce ? { cruce: r.cruce } : {}), // solo rutas ya enviadas de la versión 14
     }));
-    const condicionesSel = (e.condiciones || []).map(c => ({ texto: String(c.texto || "").trim(), tipo: c.tipo, on: !!c.on,
-      ...(c.tipo === "demora" && c.lugar ? { lugar: c.lugar, libre: c.libre, despues: c.despues } : {}) })).filter(c => c.texto);
+    const incluyeCruce = !!(cruceDelEditor(e) || {}).incluye;
+    const condicionesSel = (e.condiciones || []).filter(c => demoraAplica(c, incluyeCruce))
+      .map(c => ({ texto: String(c.texto || "").trim(), tipo: c.tipo, on: !!c.on, ...(c.id ? { id: c.id } : {}) })).filter(c => c.texto);
     const botones = $("#co-cuerpo").querySelectorAll(".co-acciones button");
     botones.forEach(b => b.disabled = true);
     try {
@@ -1537,7 +1558,7 @@ export function iniciarAjustesComercial(caja, resumen) {
           <td><select data-d="por" style="width:auto;"><option value="hora"${d.por === "hora" ? " selected" : ""}>hora</option><option value="dia"${d.por !== "hora" ? " selected" : ""}>día</option></select></td>
           <td><select data-d="moneda" style="width:auto;"><option value="MXN"${d.moneda !== "USD" ? " selected" : ""}>MXN</option><option value="USD"${d.moneda === "USD" ? " selected" : ""}>USD</option></select></td></tr>`).join("")}</tbody>
       </table></div>
-      <small class="nota">Cada lugar sale como condición (con interruptor) en la cotización, p. ej.: "${esc(textoDemora(demorasDe(ajustes).find(d => d.id === "aduana")))}"</small>
+      <small class="nota">Cada lugar sale como condición (con interruptor) en la cotización, p. ej.: "${esc(textoDemora(demorasDe(ajustes).find(d => d.id === "patio")))}" Por día se cobra por día o fracción. Aduana solo sale cuando la cotización incluye cruce. Los borradores toman estos valores al abrirlos; las enviadas no cambian.</small>
       <div class="acciones-form" style="margin-top:14px;"><button type="button" id="caj-ok">Guardar</button></div>`;
     const q = (sel) => caja.querySelector(sel);
     const err = (t) => { q("#caj-error").textContent = t || ""; };
