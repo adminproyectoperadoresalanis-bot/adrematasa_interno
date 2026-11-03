@@ -96,6 +96,9 @@ import { tomarFiltro } from "./navegacion.js"; // 2026-10-31: el Panel abre Come
 // resumen, guardar ruta en catálogo y convertir en cotización.
 // 2026-11-02f: en la calculadora, el ing./km va en píldora bajo cada tarifa
 // (verde bajo la sugerida, ámbar bajo la mínima); se quita la columna Verde / km.
+// 2026-11-03: "Copiar resumen" en líneas (ruta · km/tramo/vía · servicio y carga ·
+// sugerida · mínima · propuesta · cruce), sin ", México", con negritas para
+// WhatsApp (*…*) y para Outlook/Teams (HTML).
 // ============================================================================
 
 const COL_CLI = "com_clientes";
@@ -773,13 +776,31 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       const km = num(c.km);
       if (!c.origen || !c.destino || !km) { errC("Falta la ruta o los km."); return; }
       const u = umbralDe(ajustes, c.servicio, km);
-      const lineas = [`${c.origen} → ${c.destino} · ${miles(km)} km (${tipoRutaTxt(km)})${c.vias.length ? " · vía " + c.vias.map(v => v.label.split(",")[0]).join(", ") : ""}`,
-        `${SERVICIOS[c.servicio]} · ${CARGAS[c.carga]}: sugerida ${fmt(enMoneda(km * u.verde))} · mínima ${fmt(enMoneda(km * u.ambar))}`];
-      if (conCruce(c.servicio)) lineas.push(c.cruceSi === "si" ? `Cruce ${aduanaDe(c.aduana).corto}: ${fmt(montoCruceC())}` : "Sin cruce");
-      if (num(c.prueba) != null) { const ing = (c.moneda === "USD" ? num(c.prueba) * (num(c.tc) || 0) : num(c.prueba)) / km; lineas.push(`Propuesta: ${fmt(num(c.prueba))} (ing./km ${dinero(ing)})`); }
-      const texto = lineas.join("\n");
-      try { await navigator.clipboard.writeText(texto); }
-      catch (x) { const ta = document.createElement("textarea"); ta.value = texto; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); } catch (y) {} ta.remove(); }
+      // 2026-11-03: una idea por línea. Negritas en dos versiones: *texto* para
+      // WhatsApp (texto simple) y <b> para Outlook/Teams (HTML); cada app toma la suya.
+      const sinPais = (t) => String(t || "").replace(/,\s*(México|Mexico|Estados Unidos|EE\.?\s*UU\.?|USA|United States)\s*$/i, "").trim();
+      const ingKm = (imp) => (c.moneda === "USD" ? imp * (num(c.tc) || 0) : imp) / km;
+      const semTxt = (ing) => ing >= u.verde ? "verde" : ing >= u.ambar ? "ámbar" : "rojo";
+      // Cada línea: lista de partes [texto, negrita?]
+      const lineas = [
+        [[`${sinPais(c.origen)} → ${sinPais(c.destino)}`]],
+        [[`${miles(km)} km`, 1], [` · ${tipoRutaTxt(km)}${c.vias.length ? " · vía " + c.vias.map(v => v.label.split(",")[0]).join(", ") : ""}`]],
+        [[`${SERVICIOS[c.servicio]} ${CARGAS[c.carga].toLowerCase()}`]],
+        [["Sugerida: "], [fmt(enMoneda(km * u.verde)), 1], [" · "], [`${dinero(u.verde)}/km`, 1]],
+        [["Mínima: "], [fmt(enMoneda(km * u.ambar)), 1], [" · "], [`${dinero(u.ambar)}/km`, 1]],
+      ];
+      if (num(c.prueba) != null) { const ing = ingKm(num(c.prueba)); lineas.push([["Propuesta: "], [fmt(num(c.prueba)), 1], [" · "], [`${dinero(ing)}/km`, 1], [` (${semTxt(ing)})`]]); }
+      if (conCruce(c.servicio)) lineas.push([[c.cruceSi === "si" ? `Cruce ${aduanaDe(c.aduana).corto}: ${fmt(montoCruceC())}` : "Sin cruce", 1]]);
+      const texto = lineas.map(l => l.map(([s, n]) => n ? `*${s}*` : s).join("")).join("\n");
+      const html = `<div style="font-family:Calibri,Arial,sans-serif;font-size:14px;">${lineas.map(l => l.map(([s, n]) => n ? `<b>${esc(s)}</b>` : esc(s)).join("")).join("<br>")}</div>`;
+      try {
+        if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+          await navigator.clipboard.write([new ClipboardItem({ "text/plain": new Blob([texto], { type: "text/plain" }), "text/html": new Blob([html], { type: "text/html" }) })]);
+        } else await navigator.clipboard.writeText(texto);
+      } catch (x) {
+        try { await navigator.clipboard.writeText(texto); }
+        catch (y) { const ta = document.createElement("textarea"); ta.value = texto; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); } catch (z) {} ta.remove(); }
+      }
       const b = q("#ca-copiar"); b.textContent = "Copiado ✓"; setTimeout(() => { b.textContent = "Copiar resumen"; }, 2000);
     });
     q("#ca-cat").addEventListener("click", async () => {

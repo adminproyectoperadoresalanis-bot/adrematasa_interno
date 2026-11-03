@@ -9,6 +9,10 @@
 // ella. Si cambió, sale una cinta con "Actualizar" (recarga la página).
 // firebase.json manda los .js/.css/.html/.json con Cache-Control: no-cache,
 // así que la recarga trae lo más nuevo.
+// 2026-11-03: es la ÚNICA cinta de versión (se quitó la vieja de
+// escaneoOrigen.js, que comparaba contra una versión escrita a mano y salía
+// siempre en Validación de QR). También pone en el menú de cuenta la versión
+// publicada ("v2026.11.03 12:31", hora del Codespace).
 
 const URL_VERSION = "/version.json";
 const CADA_MS = 10 * 60 * 1000;
@@ -45,10 +49,18 @@ function mostrarCinta() {
   document.body.appendChild(c);
 }
 
+// "20261103123100" → "2026.11.03 12:31"
+const textoVersion = (v) => /^\d{14}$/.test(v) ? `${v.slice(0, 4)}.${v.slice(4, 6)}.${v.slice(6, 8)} ${v.slice(8, 10)}:${v.slice(10, 12)}` : v;
+function pintarVersionMenu(intentos = 20) {
+  const s = document.getElementById("version-usuario");
+  if (s && versionCargada) { s.textContent = `v${textoVersion(versionCargada)}`; return; }
+  if (intentos > 0) setTimeout(() => pintarVersionMenu(intentos - 1), 500); // el menú se arma después del inicio de sesión
+}
+
 async function revisar() {
   const v = await leerVersion();
   if (!v) return;
-  if (!versionCargada) { versionCargada = v; return; }
+  if (!versionCargada) { versionCargada = v; pintarVersionMenu(); return; }
   if (v !== versionCargada) mostrarCinta();
 }
 

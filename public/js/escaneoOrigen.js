@@ -96,22 +96,23 @@ function badgeSinFactura_(f, conSeparacion = true) {
 export const APP_VERSION = "2026.09.14-13";
 
 async function verificarActualizacionYReportarVersion(uid) {
-  // Reporta la versión actual — no bloqueante, no crítico si falla.
-  setDoc(doc(db, "usuarios", uid), {
-    appVersion: APP_VERSION,
-    appVersionFecha: serverTimestamp()
-  }, { merge: true }).catch(() => {});
-
-  // Compara contra version.json (sin caché) para avisar si hay algo más
-  // nuevo publicado que lo que el navegador tiene cargado ahora mismo.
+  // 2026-11-03: la cinta de versión ahora es solo la de actualizacion.js (toda
+  // la app). Aquí ya no se muestra la vieja; solo se reporta la versión
+  // publicada (version.json, la escribe publicar.sh) — no crítico si falla.
+  let version = APP_VERSION;
   try {
     const resp = await fetch("./version.json?t=" + Date.now(), { cache: "no-store" });
-    if (!resp.ok) return;
-    const datos = await resp.json();
-    if (datos.version && datos.version !== APP_VERSION) mostrarBannerActualizacion();
+    if (resp.ok) {
+      const datos = await resp.json();
+      if (datos && datos.version) version = String(datos.version);
+    }
   } catch (e) {
-    // Sin conexión o archivo no publicado todavía — no es crítico.
+    // Sin conexión o archivo no publicado todavía.
   }
+  setDoc(doc(db, "usuarios", uid), {
+    appVersion: version,
+    appVersionFecha: serverTimestamp()
+  }, { merge: true }).catch(() => {});
 }
 
 function mostrarBannerActualizacion() {
