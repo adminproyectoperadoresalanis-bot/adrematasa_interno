@@ -91,6 +91,9 @@ import { tomarFiltro } from "./navegacion.js"; // 2026-10-31: el Panel abre Come
 // 2026-11-02d: demoras por día dicen "por día o fracción"; la demora en ADUANA
 // solo sale si la cotización incluye cruce; en borrador las demoras se toman
 // SIEMPRE de Configuración (se conserva qué estaba encendido). Ya enviada, no cambian.
+// 2026-11-02e: botón "Calculadora" junto a "+ Nueva cotización" (abrirCalculadora):
+// una ruta a la vez, mapa fijo, los tres servicios, "¿y si cobro…?", copiar
+// resumen, guardar ruta en catálogo y convertir en cotización.
 // ============================================================================
 
 const COL_CLI = "com_clientes";
@@ -351,6 +354,22 @@ function inyectarEstilos() {
     .co-conds button.co-sw.on { background:#3B7A1E; } .co-conds button.co-sw.on::after { left:16px; }
     .co-conds button.co-sw:focus-visible { outline:2px solid #185FA5; outline-offset:2px; }
     .co-conds button.co-x { all:unset; cursor:pointer; color:#A32D2D; font-size:14px; padding:0 2px; }
+    .ca-g2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .ca-g4 { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; align-items:start; }
+    .ca label { font-size:11.5px; color:#6b5f52; display:block; margin-bottom:4px; font-weight:600; }
+    .ca-mapa { height:260px; margin-top:6px; }
+    .ca-res { border:1px solid #e2ddd5; border-radius:12px; overflow:hidden; margin-top:14px; }
+    .ca-res table { width:100%; border-collapse:collapse; font-size:13.5px; }
+    .ca-res th { text-align:left; font-size:10.5px; color:#6b5f52; text-transform:uppercase; padding:8px 12px; background:#fbfaf8; border-bottom:1px solid #e2ddd5; }
+    .ca-res td { padding:9px 12px; border-top:1px solid #f0ece6; cursor:pointer; }
+    .ca-res th.n, .ca-res td.n { text-align:right; white-space:nowrap; }
+    .ca-res td.ca-v { color:#3B7A1E; } .ca-res td.ca-a { color:#B7790B; }
+    .ca-res tr.sel td { background:#FFF8EC; } .ca-big { font-size:18px; }
+    .ca-prueba { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; margin-top:14px; padding:12px 14px; border-radius:12px; background:#fbfaf8; border:1px solid #e2ddd5; }
+    .ca-barra { height:10px; border-radius:6px; position:relative; }
+    .ca-barra i { position:absolute; top:-5px; width:4px; height:20px; border-radius:2px; background:#2C1E0F; }
+    .ca-sem { font-size:10px; font-weight:800; padding:2px 7px; border-radius:9px; }
+    .ca-sem.co-s-v { background:#EAF3DE; color:#3B7A1E; } .ca-sem.co-s-a { background:#FBE3A8; color:#7a3e06; } .ca-sem.co-s-r { background:#FBE4E1; color:#A32D2D; }
     .co-auto { font-size:10px; font-weight:800; padding:2px 7px; border-radius:9px; background:#EAF1FB; color:#185FA5; }
     .co-conds-ro { border:1px solid #e2ddd5; border-radius:12px; padding:10px 14px; background:#fbfaf8; font-size:13px; line-height:1.6; }
     .co-ing.co-s-v { color:#3B7A1E; } .co-ing.co-s-a { color:#B7790B; } .co-ing.co-s-r { color:#B83227; } .co-ing.co-s-n { color:#8a7f73; }
@@ -368,6 +387,10 @@ function inyectarEstilos() {
       .co-rutas select { font-size:16px; padding:9px 10px; }
       .co-rutas .co-c-km, .co-rutas .co-c-im, .co-rutas .co-c-cr { min-width:0; width:auto; max-width:none; }
       .co-cf input[type=text] { font-size:16px; }
+      .ca-g2 { grid-template-columns:1fr; } .ca-g4 { grid-template-columns:1fr 1fr; }
+      .ca input { font-size:16px; } .ca-res th, .ca-res td { padding:8px 6px; font-size:12.5px; }
+      .ca-res .ca-um { display:none; } .ca-res th.n, .ca-res td.n { white-space:normal; } .ca-big { font-size:15px; }
+      .ca-mapa { height:220px; }
       .co-dem th, .co-dem td { padding:7px 10px; }
       .co-rutas .co-c-or { padding-right:40px !important; }
       .co-rutas .co-c-ing { display:flex; justify-content:space-between; align-items:center; border-top:1px solid #f0ece6 !important; padding-top:8px !important; }
@@ -512,7 +535,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     <section class="panel">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
         <div><h2 style="margin:0;">Comercial</h2><p class="nota" style="margin:3px 0 0;">Clientes, cotizaciones y rutas.${esAdmin ? "" : " Ves solo tus cotizaciones."}</p></div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;"><button type="button" class="secundario" id="co-firma">Mi firma</button><button type="button" id="co-nueva">+ Nueva cotización</button></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;"><button type="button" class="secundario" id="co-firma">Mi firma</button><button type="button" class="secundario" id="co-calc">Calculadora</button><button type="button" id="co-nueva">+ Nueva cotización</button></div>
       </div>
       <div class="co-tabs" id="co-tabs"></div>
       <div id="co-error" class="error"></div>
@@ -584,6 +607,206 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     if (tab === "rutas") return renderRutas();
     return renderClientes();
   }
+  // ---- Calculadora (2026-11-02): tarifa de una ruta sin cliente ni cotización ----
+  // Misma lógica que el editor: catálogo, km de camión por ORS, mapa con puntos vía,
+  // tramo RC/RL y umbrales de Configuración. Muestra Nacional, Importación y
+  // Exportación a la vez. No guarda nada (salvo "Guardar ruta en catálogo").
+  // El último cálculo se conserva mientras la página siga abierta.
+  let calc = null;
+  function abrirCalculadora() {
+    if (!calc) calc = { origen: "", destino: "", km: "", vias: [], servicio: "importacion", moneda: "MXN", tc: ajustes.tipoCambio, carga: "refrigerada", cruceSi: "no", aduana: CRUCES_BASE[0].id, prueba: "" };
+    const c = calc, celular = window.innerWidth <= 700;
+    let linea = null, mapa = null, capa = null;
+    const ov = document.createElement("div");
+    ov.className = "modal-overlay";
+    const lugares = [...new Set([...rutas.values()].flatMap(r => [r.origen, r.destino]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
+    ov.innerHTML = `<div class="modal-tarjeta ca" style="max-width:860px;width:100%;max-height:94vh;overflow:auto;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><h2 style="margin:0;font-size:18px;">Calculadora</h2><button type="button" class="secundario co-mini" data-cerrar>✕</button></div>
+      <p class="nota" style="margin:4px 0 12px;">Tarifa de una ruta con los umbrales de Configuración. No pide cliente ni guarda cotización.</p>
+      ${ajustes.orsKey ? "" : `<datalist id="ca-lugares">${lugares.map(l => `<option value="${esc(l)}">`).join("")}</datalist>`}
+      <div class="ca-g2">
+        <div><label>Origen</label><div class="co-ac"><input type="text" id="ca-or" list="ca-lugares" value="${esc(c.origen)}" placeholder="${ajustes.orsKey ? "Escribe la ciudad…" : "Ciudad, estado"}" autocomplete="off"></div></div>
+        <div><label>Destino</label><div class="co-ac"><input type="text" id="ca-de" list="ca-lugares" value="${esc(c.destino)}" placeholder="${ajustes.orsKey ? "Escribe la ciudad…" : "Ciudad, estado"}" autocomplete="off"></div></div>
+      </div>
+      <div class="nota" id="ca-hint" style="margin-top:6px;min-height:16px;"></div>
+      ${celular ? `<details id="ca-det"><summary class="co-link" style="font-size:13px;margin:4px 0;">Ver mapa</summary>` : ""}
+      <div class="co-mapa ca-mapa" id="ca-mapa"><p class="nota" style="padding:12px;">El mapa aparece cuando hay origen y destino.</p></div>
+      <div id="ca-vias" style="margin-top:6px;"></div>
+      ${ajustes.orsKey ? `<div class="co-ac" style="margin-top:6px;"><input type="text" id="ca-via" placeholder="Agregar punto vía (ciudad intermedia)…" autocomplete="off"></div>` : ""}
+      ${celular ? `</details>` : ""}
+      <div class="ca-g4" style="margin-top:12px;">
+        <div><label>Km (camión)</label><input type="number" min="1" id="ca-km" value="${esc(c.km)}"><small class="nota" id="ca-tramo"></small></div>
+        <div><label>Moneda</label><span class="co-seg" id="ca-mon"></span></div>
+        <div id="ca-tc-caja"><label>Tipo de cambio</label><input type="number" step="0.01" id="ca-tc" value="${esc(c.tc)}"></div>
+        <div><label>Tipo de carga</label><span class="co-seg" id="ca-carga"></span></div>
+      </div>
+      <div class="ca-res" id="ca-res"></div>
+      <div id="ca-cruce" style="margin-top:10px;"></div>
+      <div class="ca-prueba">
+        <div style="min-width:190px;"><label>¿Y si cobro…? (flete)</label><input type="number" min="0" step="0.01" id="ca-prueba" value="${esc(c.prueba)}" placeholder="Importe"></div>
+        <div id="ca-prueba-res" style="flex:1;min-width:220px;"></div>
+      </div>
+      <div class="error" id="ca-err"></div>
+      <div class="co-acciones">
+        <button type="button" class="secundario" id="ca-copiar">Copiar resumen</button>
+        <button type="button" class="secundario" id="ca-cat">Guardar ruta en catálogo</button>
+        <button type="button" id="ca-conv">Convertir en cotización →</button>
+      </div></div>`;
+    document.body.appendChild(ov);
+    const q = (s) => ov.querySelector(s);
+    const errC = (t) => { q("#ca-err").textContent = t || ""; };
+    const hintC = (t) => { q("#ca-hint").innerHTML = t || ""; };
+    const cerrar = () => { if (mapa) mapa.remove(); ov.remove(); };
+    ov.querySelectorAll("[data-cerrar]").forEach(b => b.addEventListener("click", cerrar));
+    const segC = (caja, campo, opciones) => {
+      caja.innerHTML = opciones.map(([v, t]) => `<button type="button" class="${String(c[campo]) === String(v) ? "activo" : ""}" data-v="${esc(v)}">${t}</button>`).join("");
+      caja.querySelectorAll("button").forEach(b => b.addEventListener("click", () => { c[campo] = b.dataset.v; pintar(); }));
+    };
+    const fmt = (n) => c.moneda === "USD" ? dinero(n, "USD") : `${dinero(n)} MXN`;
+    const enMoneda = (mxn) => mxn == null ? null : Math.round((c.moneda === "USD" ? mxn / (num(c.tc) || 1) : mxn) * 100) / 100;
+    const montoCruceC = () => montoCruce(c.aduana, c.moneda);
+    // Resultado: los tres servicios, el cruce y el "¿y si cobro…?".
+    function pintar() {
+      const km = num(c.km);
+      segC(q("#ca-mon"), "moneda", [["MXN", "MXN"], ["USD", "USD"]]);
+      segC(q("#ca-carga"), "carga", Object.entries(CARGAS));
+      q("#ca-tc-caja").style.display = c.moneda === "USD" ? "" : "none";
+      q("#ca-tramo").textContent = km ? `${tipoRutaTxt(km)}${c.kmOrs && c.kmOrs !== km ? ` · ORS ${miles(c.kmOrs)}` : ""}` : "";
+      q("#ca-res").innerHTML = `<table><thead><tr><th>Servicio</th><th class="n ca-um">Verde / km</th><th class="n">Tarifa sugerida</th><th class="n">Mínima (ámbar)</th></tr></thead><tbody>
+        ${Object.entries(SERVICIOS).map(([s, nombre]) => {
+          const u = umbralDe(ajustes, s, km);
+          return `<tr data-s="${s}" class="${c.servicio === s ? "sel" : ""}"><td>${esc(nombre)}${c.servicio === s ? ` <span class="co-chip co-gris" style="font-size:9.5px;">ELEGIDO</span>` : ""}</td>
+            <td class="n ca-um">${km ? `${dinero(u.verde)} <small class="nota">${u.tramo}</small>` : "—"}</td>
+            <td class="n ca-v"><b class="${c.servicio === s ? "ca-big" : ""}">${km ? fmt(enMoneda(km * u.verde)) : "—"}</b></td>
+            <td class="n ca-a">${km ? fmt(enMoneda(km * u.ambar)) : "—"}</td></tr>`;
+        }).join("")}</tbody></table>`;
+      q("#ca-res").querySelectorAll("tr[data-s]").forEach(tr => tr.addEventListener("click", () => { c.servicio = tr.dataset.s; pintar(); }));
+      // Cruce (solo Importación / Exportación)
+      const cc = q("#ca-cruce");
+      if (conCruce(c.servicio)) {
+        const aduanas = crucesDe(ajustes);
+        cc.innerHTML = `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;"><label style="margin:0;">Incluye cruce</label><span class="co-seg" id="ca-cr"></span>
+          ${c.cruceSi === "si" ? `<span class="co-seg" id="ca-ad"></span><span style="font-size:13px;">Cruce: <b>${montoCruceC() ? fmt(montoCruceC()) : "sin monto en Configuración"}</b> <small class="nota">(aparte del flete)</small></span>` : ""}</div>`;
+        segC(q("#ca-cr"), "cruceSi", [["no", "No"], ["si", "Sí"]]);
+        if (q("#ca-ad")) segC(q("#ca-ad"), "aduana", aduanas.map(a => [a.id, a.corto]));
+      } else cc.innerHTML = "";
+      pintarPrueba();
+    }
+    function pintarPrueba() {
+      const km = num(c.km), imp = num(c.prueba), caja = q("#ca-prueba-res");
+      if (!km || imp == null) { caja.innerHTML = `<span class="nota">Escribe un importe para ver su ingreso por km.</span>`; return; }
+      const ing = (c.moneda === "USD" ? imp * (num(c.tc) || 0) : imp) / km;
+      const u = umbralDe(ajustes, c.servicio, km), cls = ing >= u.verde ? "co-s-v" : ing >= u.ambar ? "co-s-a" : "co-s-r";
+      const txt = { "co-s-v": "VERDE", "co-s-a": "ÁMBAR", "co-s-r": "ROJO" }[cls];
+      const sug = enMoneda(km * u.verde), dif = imp - sug;
+      const tope = Math.max(u.verde * 1.3, ing * 1.05, 1), pos = (x) => Math.min(100, Math.max(0, x / tope * 100));
+      caja.innerHTML = `<div style="font-size:13px;margin-bottom:8px;">Ingreso por km <span class="co-ing ${cls}" style="font-size:18px;">${dinero(ing)}</span> <span class="ca-sem ${cls}">${txt}</span>
+          <span class="nota"> · ${Math.abs(dif) < 0.005 ? "igual a la sugerida" : `${fmt(Math.abs(dif))} ${dif > 0 ? "arriba" : "abajo"} de la sugerida`}</span></div>
+        <div class="ca-barra" style="background:linear-gradient(90deg,#F6D2CD 0 ${pos(u.ambar)}%,#FBE3A8 ${pos(u.ambar)}% ${pos(u.verde)}%,#DCEBCB ${pos(u.verde)}%);"><i style="left:calc(${pos(ing)}% - 2px);"></i></div>
+        <div class="nota" style="display:flex;justify-content:space-between;margin-top:3px;"><span>rojo</span><span>ámbar ${dinero(u.ambar)}</span><span>verde ${dinero(u.verde)}</span></div>`;
+    }
+    // ---- Ruta: catálogo, ORS y mapa ----
+    const pintarVias = () => {
+      q("#ca-vias").innerHTML = c.vias.length ? `<small class="nota">Pasa por:</small> ${c.vias.map((v, k) => `<span class="co-via">${esc(v.label)} <button type="button" class="co-link" data-qv="${k}" style="text-decoration:none;color:#A32D2D;">✕</button></span>`).join("")}` : "";
+      q("#ca-vias").querySelectorAll("[data-qv]").forEach(b => b.addEventListener("click", () => { c.vias.splice(Number(b.dataset.qv), 1); pintarVias(); calcular(); }));
+    };
+    async function dibujar() {
+      if (!linea || !c.origenCoord || !c.destinoCoord) return;
+      try { cargarCss(URL_LEAFLET_CSS); await cargarScript(URL_LEAFLET_JS, "L"); } catch (x) { errC("No se pudo cargar el mapa."); return; }
+      const L = window.L, div = q("#ca-mapa");
+      if (!mapa) { div.innerHTML = ""; mapa = L.map(div); L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap", maxZoom: 18 }).addTo(mapa); }
+      if (capa) capa.remove();
+      capa = L.layerGroup().addTo(mapa);
+      const trazo = L.polyline(linea, { color: "#2C1E0F", weight: 4 }).addTo(capa);
+      const punto = (p, txt, color) => L.circleMarker([p.lat, p.lng], { radius: 7, color: "#fff", weight: 2, fillColor: color, fillOpacity: 1 }).addTo(capa).bindTooltip(txt);
+      punto(c.origenCoord, c.origen, "#3B7A1E"); punto(c.destinoCoord, c.destino, "#A32D2D");
+      c.vias.forEach(v => punto(v, v.label, "#D99A1E"));
+      mapa.invalidateSize(); mapa.fitBounds(trazo.getBounds(), { padding: [24, 24] });
+    }
+    async function calcular() {
+      errC();
+      const cat = c.origen && c.destino ? rutaDelCatalogo(c.origen, c.destino) : null;
+      if (cat) {
+        if (cat.origenCoord && !c.origenCoord) c.origenCoord = cat.origenCoord;
+        if (cat.destinoCoord && !c.destinoCoord) c.destinoCoord = cat.destinoCoord;
+        if (cat.vias && !c.vias.length && !c._viasTocadas) c.vias = cat.vias.map(v => ({ ...v }));
+        if (cat.km && !c.vias.length === !(cat.vias || []).length) { c.km = cat.km; q("#ca-km").value = c.km; }
+        pintarVias();
+      }
+      if (!ajustes.orsKey || !c.origenCoord || !c.destinoCoord) {
+        hintC(cat ? `del catálogo${(cat.vias || []).length ? " · vía " + cat.vias.map(v => v.label.split(",")[0]).join(", ") : ""}` : (c.origen && c.destino ? (ajustes.orsKey ? "Elige origen y destino de la lista para calcular los km." : "Ruta nueva: escribe los km.") : ""));
+        pintar(); return;
+      }
+      hintC("Calculando ruta de camión…");
+      try {
+        const res = await orsRuta([c.origenCoord, ...c.vias, c.destinoCoord], ajustes.orsKey);
+        linea = res.linea; c.kmOrs = res.km;
+        const viasCat = cat && JSON.stringify((cat.vias || []).map(v => v.label)) === JSON.stringify(c.vias.map(v => v.label));
+        if (cat && cat.km && viasCat) {
+          c.km = cat.km;
+          hintC(cat.km === res.km ? "del catálogo · igual a ORS" : `Catálogo ${miles(cat.km)} km · ORS ${miles(res.km)} km <button type="button" class="co-link" id="ca-usar" style="font-size:12px;">usar ${miles(res.km)}</button>`);
+          const u = q("#ca-usar"); if (u) u.addEventListener("click", () => { c.km = res.km; q("#ca-km").value = c.km; hintC(`${miles(res.km)} km por ORS (camión)`); pintar(); });
+        } else { c.km = res.km; hintC(`${cat ? "Con vías" : "Ruta nueva"} · ${miles(res.km)} km por ORS (camión)`); }
+        q("#ca-km").value = c.km;
+        pintar(); await dibujar();
+      } catch (x) { hintC(""); errC(x.message || "No se pudo calcular la ruta."); pintar(); }
+    }
+    // Campos
+    ["or", "de"].forEach(k => {
+      const inp = q(`#ca-${k}`), campo = k === "or" ? "origen" : "destino";
+      inp.addEventListener("input", () => { c[campo] = inp.value; delete c[campo + "Coord"]; linea = null; if (!ajustes.orsKey && c.origen && c.destino) calcular(); });
+      if (ajustes.orsKey) autocompletar(inp, (op) => { c[campo] = op.label; c[campo + "Coord"] = { lng: op.lng, lat: op.lat }; calcular(); });
+    });
+    const via = q("#ca-via");
+    if (via) autocompletar(via, (op) => { c.vias.push({ label: op.label, lng: op.lng, lat: op.lat }); c._viasTocadas = true; via.value = ""; pintarVias(); calcular(); });
+    q("#ca-km").addEventListener("input", (ev) => { c.km = ev.target.value; pintar(); });
+    q("#ca-tc").addEventListener("input", (ev) => { c.tc = num(ev.target.value); pintar(); });
+    q("#ca-prueba").addEventListener("input", (ev) => { c.prueba = ev.target.value; pintarPrueba(); });
+    const det = q("#ca-det"); if (det) det.addEventListener("toggle", () => { if (det.open) { if (mapa) mapa.invalidateSize(); else dibujar(); } });
+    // Acciones
+    q("#ca-copiar").addEventListener("click", async () => {
+      const km = num(c.km);
+      if (!c.origen || !c.destino || !km) { errC("Falta la ruta o los km."); return; }
+      const u = umbralDe(ajustes, c.servicio, km);
+      const lineas = [`${c.origen} → ${c.destino} · ${miles(km)} km (${tipoRutaTxt(km)})${c.vias.length ? " · vía " + c.vias.map(v => v.label.split(",")[0]).join(", ") : ""}`,
+        `${SERVICIOS[c.servicio]} · ${CARGAS[c.carga]}: sugerida ${fmt(enMoneda(km * u.verde))} · mínima ${fmt(enMoneda(km * u.ambar))}`];
+      if (conCruce(c.servicio)) lineas.push(c.cruceSi === "si" ? `Cruce ${aduanaDe(c.aduana).corto}: ${fmt(montoCruceC())}` : "Sin cruce");
+      if (num(c.prueba) != null) { const ing = (c.moneda === "USD" ? num(c.prueba) * (num(c.tc) || 0) : num(c.prueba)) / km; lineas.push(`Propuesta: ${fmt(num(c.prueba))} (ing./km ${dinero(ing)})`); }
+      const texto = lineas.join("\n");
+      try { await navigator.clipboard.writeText(texto); }
+      catch (x) { const ta = document.createElement("textarea"); ta.value = texto; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); } catch (y) {} ta.remove(); }
+      const b = q("#ca-copiar"); b.textContent = "Copiado ✓"; setTimeout(() => { b.textContent = "Copiar resumen"; }, 2000);
+    });
+    q("#ca-cat").addEventListener("click", async () => {
+      errC();
+      if (!c.origen || !c.destino || !num(c.km)) { errC("Falta la ruta o los km."); return; }
+      const datos = { origen: c.origen.trim(), destino: c.destino.trim(), km: num(c.km), kmOrs: c.kmOrs || null, origenCoord: c.origenCoord || null, destinoCoord: c.destinoCoord || null, vias: c.vias || [], fuente: c.kmOrs ? "ORS" : "manual", actualizadoMs: Date.now() };
+      try {
+        const cat = rutaDelCatalogo(c.origen, c.destino);
+        if (cat) { await updateDoc(doc(db, COL_RUT, cat.id), datos); rutas.set(cat.id, { ...cat, ...datos }); }
+        else { const ref = doc(collection(db, COL_RUT)); await setDoc(ref, { ...datos, clave: "", creadoMs: Date.now(), creadoPor: { uid, nombre: yo.nombre } }); rutas.set(ref.id, { id: ref.id, ...datos }); }
+        const b = q("#ca-cat"); b.textContent = "Guardada en catálogo ✓"; b.disabled = true;
+      } catch (x) { errC("No se pudo guardar: " + x.message); }
+    });
+    q("#ca-conv").addEventListener("click", () => {
+      const km = num(c.km);
+      if (!c.origen || !c.destino || !km) { errC("Falta la ruta o los km."); return; }
+      const sug = enMoneda(km * umbralDe(ajustes, c.servicio, km).verde), prop = num(c.prueba);
+      cerrar();
+      fichaId = null; abrirEditor(null);
+      Object.assign(editor, {
+        tipoServicio: c.servicio, moneda: c.moneda, tipoCambio: c.moneda === "USD" ? num(c.tc) : ajustes.tipoCambio, tipoCarga: c.carga,
+        cruceSi: conCruce(c.servicio) ? c.cruceSi : "no", cruceAduana: c.aduana,
+        rutas: [{ origen: c.origen, destino: c.destino, km, importe: prop != null ? prop : sug, importeAuto: prop == null,
+          origenCoord: c.origenCoord || undefined, destinoCoord: c.destinoCoord || undefined, vias: c.vias.length ? c.vias.map(v => ({ ...v })) : undefined, kmOrs: c.kmOrs || undefined }],
+      });
+      avisar("Ruta de la calculadora lista: elige el cliente y guarda.");
+      render();
+    });
+    pintar(); pintarVias();
+    if (c.origenCoord && c.destinoCoord && ajustes.orsKey) calcular();
+  }
+  $("#co-calc").addEventListener("click", abrirCalculadora);
   $("#co-nueva").addEventListener("click", () => abrirEditor(null));
   $("#co-firma").addEventListener("click", () => {
     const m = firmaDe(uid) || {};
