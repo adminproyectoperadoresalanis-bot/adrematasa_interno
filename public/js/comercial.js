@@ -94,6 +94,8 @@ import { tomarFiltro } from "./navegacion.js"; // 2026-10-31: el Panel abre Come
 // 2026-11-02e: botón "Calculadora" junto a "+ Nueva cotización" (abrirCalculadora):
 // una ruta a la vez, mapa fijo, los tres servicios, "¿y si cobro…?", copiar
 // resumen, guardar ruta en catálogo y convertir en cotización.
+// 2026-11-02f: en la calculadora, el ing./km va en píldora bajo cada tarifa
+// (verde bajo la sugerida, ámbar bajo la mínima); se quita la columna Verde / km.
 // ============================================================================
 
 const COL_CLI = "com_clientes";
@@ -365,6 +367,10 @@ function inyectarEstilos() {
     .ca-res th.n, .ca-res td.n { text-align:right; white-space:nowrap; }
     .ca-res td.ca-v { color:#3B7A1E; } .ca-res td.ca-a { color:#B7790B; }
     .ca-res tr.sel td { background:#FFF8EC; } .ca-big { font-size:18px; }
+    .ca-res td { vertical-align:top; }
+    .ca-pill { display:inline-block; font-size:11px; font-weight:700; padding:1px 8px; border-radius:10px; margin-top:3px; white-space:nowrap; }
+    .ca-pv { background:#EAF3DE; color:#3B7A1E; } .ca-pa { background:#FBEFD2; color:#8a5a06; }
+    .ca-tramo { font-size:9.5px; font-weight:800; padding:1px 6px; border-radius:8px; background:#F2EDE6; color:#4a3e33; }
     .ca-prueba { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; margin-top:14px; padding:12px 14px; border-radius:12px; background:#fbfaf8; border:1px solid #e2ddd5; }
     .ca-barra { height:10px; border-radius:6px; position:relative; }
     .ca-barra i { position:absolute; top:-5px; width:4px; height:20px; border-radius:2px; background:#2C1E0F; }
@@ -389,7 +395,7 @@ function inyectarEstilos() {
       .co-cf input[type=text] { font-size:16px; }
       .ca-g2 { grid-template-columns:1fr; } .ca-g4 { grid-template-columns:1fr 1fr; }
       .ca input { font-size:16px; } .ca-res th, .ca-res td { padding:8px 6px; font-size:12.5px; }
-      .ca-res .ca-um { display:none; } .ca-res th.n, .ca-res td.n { white-space:normal; } .ca-big { font-size:15px; }
+      .ca-pill { font-size:10.5px; padding:1px 6px; } .ca-res th.n, .ca-res td.n { white-space:normal; } .ca-big { font-size:15px; }
       .ca-mapa { height:220px; }
       .co-dem th, .co-dem td { padding:7px 10px; }
       .co-rutas .co-c-or { padding-right:40px !important; }
@@ -672,13 +678,12 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       segC(q("#ca-carga"), "carga", Object.entries(CARGAS));
       q("#ca-tc-caja").style.display = c.moneda === "USD" ? "" : "none";
       q("#ca-tramo").textContent = km ? `${tipoRutaTxt(km)}${c.kmOrs && c.kmOrs !== km ? ` · ORS ${miles(c.kmOrs)}` : ""}` : "";
-      q("#ca-res").innerHTML = `<table><thead><tr><th>Servicio</th><th class="n ca-um">Verde / km</th><th class="n">Tarifa sugerida</th><th class="n">Mínima (ámbar)</th></tr></thead><tbody>
+      q("#ca-res").innerHTML = `<table><thead><tr><th>Servicio</th><th class="n">Tarifa sugerida</th><th class="n">Mínima (ámbar)</th></tr></thead><tbody>
         ${Object.entries(SERVICIOS).map(([s, nombre]) => {
           const u = umbralDe(ajustes, s, km);
-          return `<tr data-s="${s}" class="${c.servicio === s ? "sel" : ""}"><td>${esc(nombre)}${c.servicio === s ? ` <span class="co-chip co-gris" style="font-size:9.5px;">ELEGIDO</span>` : ""}</td>
-            <td class="n ca-um">${km ? `${dinero(u.verde)} <small class="nota">${u.tramo}</small>` : "—"}</td>
-            <td class="n ca-v"><b class="${c.servicio === s ? "ca-big" : ""}">${km ? fmt(enMoneda(km * u.verde)) : "—"}</b></td>
-            <td class="n ca-a">${km ? fmt(enMoneda(km * u.ambar)) : "—"}</td></tr>`;
+          return `<tr data-s="${s}" class="${c.servicio === s ? "sel" : ""}"><td>${esc(nombre)}${km ? ` <span class="ca-tramo">${u.tramo}</span>` : ""}${c.servicio === s ? ` <span class="co-chip co-gris" style="font-size:9.5px;">ELEGIDO</span>` : ""}</td>
+            <td class="n ca-v"><b class="${c.servicio === s ? "ca-big" : ""}">${km ? fmt(enMoneda(km * u.verde)) : "—"}</b>${km ? `<br><span class="ca-pill ca-pv">${dinero(u.verde)} / km</span>` : ""}</td>
+            <td class="n ca-a">${km ? fmt(enMoneda(km * u.ambar)) : "—"}${km ? `<br><span class="ca-pill ca-pa">${dinero(u.ambar)} / km</span>` : ""}</td></tr>`;
         }).join("")}</tbody></table>`;
       q("#ca-res").querySelectorAll("tr[data-s]").forEach(tr => tr.addEventListener("click", () => { c.servicio = tr.dataset.s; pintar(); }));
       // Cruce (solo Importación / Exportación)
