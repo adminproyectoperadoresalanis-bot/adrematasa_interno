@@ -561,11 +561,13 @@ function construirVista(contenedor, { esAdmin, uid }) {
       /iphone|ipad|ipod|android|mobi/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   }
 
-  // Reporte dentro de la app: capa a pantalla completa con un iframe. La hoja se
-  // dibuja a 1000 px y se reduce al ancho del teléfono (solo en pantalla; al
-  // imprimir sale a tamaño carta como siempre).
+  // Reporte dentro de la app: capa a pantalla completa con un iframe.
+  // 2026-11-05b (opción 2 de Ivan): la hoja de RH (vertical) va a lo ancho del
+  // teléfono; la tabla de Nóminas (horizontal, 15 columnas) va a tamaño legible
+  // dentro de un recuadro que se desliza de lado, con No. y Nombre fijos a la
+  // izquierda. Todo esto es solo en pantalla: Imprimir / PDF saca las hojas
+  // carta como siempre.
   function abrirReporteEnApp(html, numeroSemana) {
-    const ANCHO = 1000;
     const capa = document.createElement("div");
     capa.id = "reporte-en-app";
     capa.style.cssText = "position:fixed;inset:0;z-index:10000;background:#d9d4cc;display:flex;flex-direction:column;";
@@ -575,22 +577,65 @@ function construirVista(contenedor, { esAdmin, uid }) {
         <b style="font-size:14px;">Semana ${numeroSemana}</b>
         <button type="button" data-rep="imprimir" style="background:#fff;color:#2c1e0f;border:0;border-radius:9px;padding:8px 12px;font-size:14px;font-weight:700;cursor:pointer;">Imprimir / PDF</button>
       </div>
-      <iframe title="Reporte semana ${numeroSemana}" style="flex:1;width:100%;border:0;background:#fff;"></iframe>`;
+      <iframe title="Reporte semana ${numeroSemana}" style="flex:1;width:1px;min-width:100%;border:0;background:#fff;"></iframe>`;
+    // width:1px + min-width:100% evita que el iPhone estire el iframe al ancho del contenido.
     const iframe = capa.querySelector("iframe");
     const scrollPrevio = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const ajustar = () => {
+    const CSS_PANTALLA = `@media screen {
+      html, body { margin:0; background:#fff; }
+      .pagina { padding:10px 10px 18px; }
+      .tabla-paginado { table-layout:fixed; width:100%; }
+      .pagina-rh { max-width:none; }
+      .pagina-nomina { border-top:6px solid #d9d4cc; }
+      .desliza { overflow-x:auto; -webkit-overflow-scrolling:touch; border:1px solid #1a1a1a; }
+      .desliza > table { width:auto !important; min-width:100%; border-collapse:separate !important; border-spacing:0; }
+      .desliza th, .desliza td { font-size:11px !important; padding:5px 7px !important; border:0 !important; border-right:1px solid #1a1a1a !important; border-bottom:1px solid #1a1a1a !important; white-space:nowrap; }
+      .pagina-nomina .col-puesto { max-width:none !important; min-width:120px; white-space:normal !important; word-break:normal !important; }
+      .desliza .fijo { position:sticky; z-index:1; background:#fff; }
+      .desliza th.fijo { background:#f7f8fa; z-index:2; }
+      .desliza .fijo.ultimo { box-shadow:3px 0 4px -2px rgba(0,0,0,.3); }
+      .desliza .fijo.nombre { white-space:normal !important; width:118px; min-width:118px; max-width:118px; }
+      .aviso-desliza { font:600 11px -apple-system,'Segoe UI',Roboto,sans-serif; color:#6b5f52; margin:0 0 4px; }
+    }
+    @media print {
+      .desliza { overflow:visible !important; border:0 !important; }
+      .aviso-desliza { display:none !important; }
+    }`;
+    const preparar = () => {
       const d = iframe.contentDocument;
-      if (!d || !d.head) return;
-      let s = d.getElementById("ajuste-pantalla");
-      if (!s) { s = d.createElement("style"); s.id = "ajuste-pantalla"; d.head.appendChild(s); }
-      const zoom = Math.min(1, (iframe.clientWidth || ANCHO) / ANCHO);
-      s.textContent = `@media screen { body { width:${ANCHO}px; background:#fff; } html { zoom:${zoom.toFixed(4)}; } }`;
+      if (!d || !d.head || d.getElementById("ajuste-pantalla")) return;
+      const s = d.createElement("style"); s.id = "ajuste-pantalla"; s.textContent = CSS_PANTALLA; d.head.appendChild(s);
+      // Tablas anchas (Nóminas y Pendientes) dentro de un recuadro que se desliza.
+      d.querySelectorAll(".pagina-nomina .tabla-datos, .pagina-nomina .tabla-pendientes").forEach(tabla => {
+        const caja = d.createElement("div"); caja.className = "desliza";
+        tabla.parentNode.insertBefore(caja, tabla); caja.appendChild(tabla);
+        const fijas = tabla.classList.contains("tabla-datos") ? 2 : 2; // No. Emp. y Nombre
+        const filas = [...tabla.rows];
+        const marcar = () => {
+          let izq = 0;
+          for (let k = 0; k < fijas; k++) {
+            filas.forEach(fila => {
+              const celda = fila.cells[k];
+              if (!celda || celda.colSpan > 1) return;
+              celda.classList.add("fijo"); if (k === 1) celda.classList.add("nombre"); if (k === fijas - 1) celda.classList.add("ultimo");
+              celda.style.left = izq + "px";
+            });
+            const ref = filas.find(f => f.cells[k] && f.cells[k].colSpan === 1);
+            izq += ref ? ref.cells[k].getBoundingClientRect().width : 0;
+          }
+        };
+        marcar();
+        if (caja.scrollWidth > caja.clientWidth + 4) {
+          const aviso = d.createElement("div"); aviso.className = "aviso-desliza"; aviso.textContent = "Desliza la tabla →";
+          caja.parentNode.insertBefore(aviso, caja);
+        }
+      });
     };
-    iframe.addEventListener("load", ajustar);
-    window.addEventListener("resize", ajustar);
-    iframe.srcdoc = html;
-    const cerrar = () => { window.removeEventListener("resize", ajustar); capa.remove(); document.body.style.overflow = scrollPrevio; };
+    iframe.addEventListener("load", preparar);
+    // Sin esta etiqueta el teléfono dibuja la hoja a 980 px y la encoge (por eso se amontonaba).
+    iframe.srcdoc = html.replace("<head>", '<head><meta name="viewport" content="width=device-width, initial-scale=1">');
+    const cerrar = () => { capa.remove(); document.body.style.overflow = scrollPrevio; };
     capa.querySelector('[data-rep="regresar"]').addEventListener("click", cerrar);
     capa.querySelector('[data-rep="imprimir"]').addEventListener("click", () => {
       try { iframe.contentWindow.focus(); iframe.contentWindow.print(); }
