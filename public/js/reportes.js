@@ -1,3 +1,7 @@
+// ##########################################################################
+// PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+// RUTA:     /workspaces/adrematasa_interno/public/js/reportes.js
+// ##########################################################################
 import { db } from "./firebase-config.js";
 import {
   collection, onSnapshot, query, where, doc, writeBatch
@@ -534,6 +538,13 @@ function construirVista(contenedor, { esAdmin, uid }) {
 
     const paginaRH = construirPaginaRH({ listaHoras, mapUsuarios, viernes, jueves, numeroSemana, logoSrc });
     const paginaNomina = construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, jueves, numeroSemana, logoSrc });
+    // 2026-11-05: en celular (y en la app instalada) el reporte se abre DENTRO
+    // de la app, con barra "‹ Regresar" e "Imprimir / PDF". Antes abría una
+    // ventana nueva que en la app instalada no tenía cómo regresar.
+    if (esVistaMovil()) {
+      abrirReporteEnApp(construirHtmlReporteCompleto({ paginaRH, paginaNomina, numeroSemana, mostrarBarraImprimir: false }), numeroSemana);
+      return;
+    }
     const html = construirHtmlReporteCompleto({ paginaRH, paginaNomina, numeroSemana });
 
     const ventana = window.open("", "_blank");
@@ -543,6 +554,49 @@ function construirVista(contenedor, { esAdmin, uid }) {
     }
     ventana.document.write(html);
     ventana.document.close();
+  }
+
+  function esVistaMovil() {
+    return (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true ||
+      /iphone|ipad|ipod|android|mobi/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  }
+
+  // Reporte dentro de la app: capa a pantalla completa con un iframe. La hoja se
+  // dibuja a 1000 px y se reduce al ancho del teléfono (solo en pantalla; al
+  // imprimir sale a tamaño carta como siempre).
+  function abrirReporteEnApp(html, numeroSemana) {
+    const ANCHO = 1000;
+    const capa = document.createElement("div");
+    capa.id = "reporte-en-app";
+    capa.style.cssText = "position:fixed;inset:0;z-index:10000;background:#d9d4cc;display:flex;flex-direction:column;";
+    capa.innerHTML = `
+      <div style="flex:none;background:#2c1e0f;color:#fff;padding:calc(env(safe-area-inset-top, 0px) + 10px) 12px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;">
+        <button type="button" data-rep="regresar" style="background:transparent;color:#fff;border:1px solid rgba(255,255,255,.55);border-radius:9px;padding:8px 12px;font-size:14px;font-weight:700;cursor:pointer;">‹ Regresar</button>
+        <b style="font-size:14px;">Semana ${numeroSemana}</b>
+        <button type="button" data-rep="imprimir" style="background:#fff;color:#2c1e0f;border:0;border-radius:9px;padding:8px 12px;font-size:14px;font-weight:700;cursor:pointer;">Imprimir / PDF</button>
+      </div>
+      <iframe title="Reporte semana ${numeroSemana}" style="flex:1;width:100%;border:0;background:#fff;"></iframe>`;
+    const iframe = capa.querySelector("iframe");
+    const scrollPrevio = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const ajustar = () => {
+      const d = iframe.contentDocument;
+      if (!d || !d.head) return;
+      let s = d.getElementById("ajuste-pantalla");
+      if (!s) { s = d.createElement("style"); s.id = "ajuste-pantalla"; d.head.appendChild(s); }
+      const zoom = Math.min(1, (iframe.clientWidth || ANCHO) / ANCHO);
+      s.textContent = `@media screen { body { width:${ANCHO}px; background:#fff; } html { zoom:${zoom.toFixed(4)}; } }`;
+    };
+    iframe.addEventListener("load", ajustar);
+    window.addEventListener("resize", ajustar);
+    iframe.srcdoc = html;
+    const cerrar = () => { window.removeEventListener("resize", ajustar); capa.remove(); document.body.style.overflow = scrollPrevio; };
+    capa.querySelector('[data-rep="regresar"]').addEventListener("click", cerrar);
+    capa.querySelector('[data-rep="imprimir"]').addEventListener("click", () => {
+      try { iframe.contentWindow.focus(); iframe.contentWindow.print(); }
+      catch (e) { alert("No se pudo abrir el menú de imprimir: " + e.message); }
+    });
+    document.body.appendChild(capa);
   }
 
   async function marcarComoEnviado(ids) {

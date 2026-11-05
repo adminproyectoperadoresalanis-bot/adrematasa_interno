@@ -1,3 +1,7 @@
+// ##########################################################################
+// PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+// RUTA:     /workspaces/adrematasa_interno/public/js/reportesHtml.js
+// ##########################################################################
 // Lógica PURA (sin DOM, sin Firebase, sin `window`) para armar el HTML del
 // "REPORTE RH + REPORTE NOMINA" — las 2 páginas que antes vivían solo dentro
 // de js/reportes.js. Se separó a este módulo aparte para que el MISMO código
@@ -22,13 +26,17 @@ export const DIAS_ABREV = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
 // Etiquetas cortas para "Tipo Falta" en la tabla de nómina — mismos valores
 // de "tipo" que usa faltas.js.
+// 2026-11-05 (pedido de Ivan): lo que no se paga dice SIN GOCE DE SUELDO, en
+// rojo y negritas (celda "Tipo Falta" y caja de pendientes).
 export const ETIQUETAS_FALTA_CORTAS = {
-  injustificada: "Injustificada",
+  injustificada: "SIN GOCE DE SUELDO",
   justificada: "Justificada",
   incapacidad: "Incapacidad",
   permiso_con_goce: "Con goce",
-  permiso_sin_goce: "Sin goce"
+  permiso_sin_goce: "PERMISO · SIN GOCE DE SUELDO"
 };
+export const FALTAS_SIN_GOCE = ["injustificada", "permiso_sin_goce"];
+const ETIQUETAS_SIN_GOCE = FALTAS_SIN_GOCE.map(t => ETIQUETAS_FALTA_CORTAS[t]);
 
 export function formatearFechaCorta(fechaStr) {
   // "2026-08-08" -> "08-ago"
@@ -309,7 +317,9 @@ function construirSeccionPendientes({ listaHoras, listaVacaciones, listaFaltas, 
         detalle = escapeHtml(item.motivo || "");
         cantidad = `${item.horas} h`;
       } else if (item.tipo === "falta") {
-        detalle = escapeHtml(item.tipoFaltaEtiqueta || "");
+        detalle = ETIQUETAS_SIN_GOCE.includes(item.tipoFaltaEtiqueta)
+          ? `<span class="texto-sin-goce">${escapeHtml(item.tipoFaltaEtiqueta)}</span>`
+          : escapeHtml(item.tipoFaltaEtiqueta || "");
         cantidad = "1 día";
       } else if (item.tipo === "vacacion") {
         cantidad = `${item.dias} día${item.dias === 1 ? "" : "s"}`;
@@ -443,7 +453,7 @@ export function construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas
           <td class="centrado celda-total">${totalSemana}</td>
           <td class="centrado">${totalVacaciones || "—"}</td>
           <td class="centrado">${e.faltas || "—"}</td>
-          <td class="centrado">${escapeHtml(celdaTipo)}</td>
+          <td class="centrado${tiposFalta.some(t => FALTAS_SIN_GOCE.includes(t)) ? " celda-sin-goce" : ""}">${escapeHtml(celdaTipo)}</td>
         </tr>
       `;
     }).join("");
@@ -545,6 +555,7 @@ export const CSS_REPORTE = `
   .pagina-nomina .tabla-datos thead { display: table-header-group; }
   .pagina-nomina .celda-total { font-weight:bold; background:#f2f4f7; }
   .pagina-nomina .celda-falta { font-weight:bold; color:#a32424; }
+  .pagina-nomina .celda-sin-goce, .texto-sin-goce { font-weight:bold; color:#a32424; }
   .pagina-nomina .celda-vacacion { font-weight:bold; color:#1a6b3c; white-space:nowrap; }
   .pagina-nomina .col-puesto { max-width:95px; word-break:break-word; }
   .pagina-nomina .encabezado { border-bottom:1px solid #1a1a1a; }
