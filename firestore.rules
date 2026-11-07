@@ -849,6 +849,12 @@ service cloud.firestore {
       allow create, update: if esDuenoRentabilidad() || puedeCargarAnalisis();
       allow delete: if false;
     }
+    // Análisis de operaciones v2 (2026-11-07): un resumen compacto por mes.
+    match /op_resumen_mes/{mes} {
+      allow read: if esDuenoRentabilidad() || puedeVerAnalisis();
+      allow create, update: if esDuenoRentabilidad() || puedeCargarAnalisis();
+      allow delete: if false;
+    }
     match /rentabilidad_config/{id} {
       allow read, write: if esDuenoRentabilidad();
     }
