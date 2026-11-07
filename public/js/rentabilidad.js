@@ -93,6 +93,32 @@ export function nombreConcepto(servicio) {
 }
 
 function esc(t) { const d = document.createElement("div"); d.textContent = t == null ? "" : String(t); return d.innerHTML; }
+// Copiar (2026-11-07): texto para WhatsApp con *negritas* + HTML (tablas) para correo o Excel.
+const waAHtml = (t) => esc(t).replace(/\*([^*\n]+)\*/g, "<b>$1</b>").replace(/\n/g, "<br>");
+function tablaHtml(titulo, cols, filas) {
+  const td = (v, i) => `<td style="border:1px solid #ccc;padding:3px 8px;${i ? "text-align:right;" : ""}">${esc(v)}</td>`;
+  return `<b>${esc(titulo)}</b><table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px;"><tr>${cols.map(c => `<th style="border:1px solid #ccc;padding:3px 8px;background:#eee;">${esc(c)}</th>`).join("")}</tr>${filas.map(f => `<tr>${f.map(td).join("")}</tr>`).join("")}</table>`;
+}
+async function copiarAlPortapapeles(texto, html) {
+  try {
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+      await navigator.clipboard.write([new ClipboardItem({ "text/plain": new Blob([texto], { type: "text/plain" }), "text/html": new Blob([html || waAHtml(texto)], { type: "text/html" }) })]);
+      return true;
+    }
+  } catch (e) { /* sigue con texto simple */ }
+  try { await navigator.clipboard.writeText(texto); return true; } catch (e) { /* sigue con el método viejo */ }
+  const ta = document.createElement("textarea");
+  ta.value = texto; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  ta.remove();
+  return ok;
+}
+function marcarCopiado(b, ok) {
+  const t = b.textContent;
+  b.textContent = ok ? "✓ Copiado" : "No se pudo copiar"; b.classList.toggle("ok", ok);
+  setTimeout(() => { b.textContent = t; b.classList.remove("ok"); }, 1600);
+}
 const fmt = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", minimumFractionDigits: 2 });
 function dinero(n, moneda) {
   if (n == null || !isFinite(n)) return "—";
@@ -216,6 +242,15 @@ function inyectarEstilos() {
     .re-seg button:first-child { border-left:0; } .re-seg button.activo { background:#2c1e0f; color:#fff; font-weight:700; }
     .re-link { background:none; border:0; padding:0; font:inherit; font-weight:700; color:#185FA5; text-decoration:underline; cursor:pointer; }
     .re-link.re-falta { color:#A32D2D; }
+    .re-cp { background:#fff; color:#2c1e0f; border:1px solid #d9d1c5; border-radius:8px; padding:3px 9px; font:inherit; font-size:11.5px; font-weight:700; cursor:pointer; }
+    .re-cp.ok { color:#3B7A1E; border-color:#3B7A1E; }
+    .re-modal-fondo { position:fixed; inset:0; z-index:9000; background:rgba(28,20,10,.45); display:flex; align-items:center; justify-content:center; padding:16px; }
+    .re-modal { background:#fff; border-radius:16px; padding:20px; width:100%; max-width:560px; max-height:calc(100vh - 32px); overflow:auto; box-shadow:0 12px 40px rgba(0,0,0,.25); }
+    .re-modal h3 { margin:0 0 2px; font-size:17px; }
+    .re-mfila { display:flex; gap:10px; align-items:center; margin:12px 0; flex-wrap:wrap; font-size:13.5px; }
+    .re-mfila > b { width:120px; font-size:11.5px; color:#6b5f52; text-transform:uppercase; letter-spacing:.4px; }
+    .re-mfila label { display:inline-flex; gap:6px; align-items:center; margin-right:10px; cursor:pointer; }
+    .re-mfila input[type=checkbox] { width:auto; margin:0; }
     .re-lista { border:1px solid #e2ddd5; border-radius:10px; overflow:hidden; background:#fff; max-height:520px; overflow-y:auto; }
     .re-dest { display:flex; gap:8px; align-items:flex-start; padding:8px 10px; border-top:1px solid #f0ece6; font-size:13px; cursor:pointer; margin:0; color:#2c1e0f; }
     .re-dest:first-child { border-top:0; }
@@ -319,6 +354,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
             <option value="1">Este mes</option><option value="2">Este mes y el anterior</option><option value="3">Últimos 3 meses</option>
             <option value="6">Últimos 6 meses</option><option value="12">Últimos 12 meses</option><option value="0">Todo (más lecturas)</option>
           </select>
+          <button type="button" id="re-reporte" title="Reporte de tarifas de todos los clientes con flete (PDF, Excel o copiar)">⤓ Reporte</button>
         </span>
       </div>
       <p class="nota" style="margin:4px 0 12px;">Ingreso por km a partir de las facturas. Solo tú ves esta opción.</p>
@@ -476,6 +512,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       if (tab !== "cargar") render(); else renderVista();
     }, (err) => { $("#re-error").textContent = "No se pudieron leer las salidas: " + err.message; });
   }
+  $("#re-reporte").addEventListener("click", () => abrirModalReporte());
   $("#re-periodo").addEventListener("change", (e) => {
     periodoMeses = Number(e.target.value);
     try { localStorage.setItem("rentabilidad_periodo", String(periodoMeses)); } catch (err) { /* nada */ }
@@ -827,9 +864,16 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     return formato(comun) + extra;
   }
 
-  function renderTarifas() {
+  // Renglones de Tarifas: un grupo por cliente × zona × carga × ruta × recorrido.
+  // (2026-11-07: sale de renderTarifas para usarlo también en el Reporte y en Copiar.)
+  const ORDEN_C = { seca: 0, refrigerada: 1, sin: 2 }, ORDEN_R = { corta: 0, larga: 1, sin: 2 };
+  const ordenTarifas = (a, b) => a.cliNombre.localeCompare(b.cliNombre, "es") || a.zona.localeCompare(b.zona, "es") || ORDEN_C[a.carga] - ORDEN_C[b.carga] || ORDEN_R[a.ruta] - ORDEN_R[b.ruta] || a.intermedias.length - b.intermedias.length || a.rec.localeCompare(b.rec, "es");
+  const pasaFiltroTarifas = (g) => { const q = normTxt(ft.q); return (!ft.cliente || g.cli === ft.cliente) && (!ft.zona || g.zona === ft.zona) &&
+      (!ft.carga || g.carga === ft.carga) && (!ft.ruta || g.ruta === ft.ruta) &&
+      (!ft.viajes || (ft.viajes === "reparto" ? !!g.rec : !g.rec)) &&
+      (!q || normTxt(g.cliNombre).includes(q) || normTxt(g.zona).includes(q)); };
+  function agrupar() {
     const ap = aprender();
-    const ORDEN_C = { seca: 0, refrigerada: 1, sin: 2 }, ORDEN_R = { corta: 0, larga: 1, sin: 2 };
     const grupos = new Map();
     // Recorrido = paradas antes del destino final (vacío = directo). Es parte del renglón.
     const grupo = (cli, cliNombre, destClave, carga, ruta, rep) => {
@@ -859,15 +903,14 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       const ruta = destPdf ? tipoRuta(ap.kmDe(destPdf)) : "sin";
       grupo(c ? c.clave : "ADR:" + adrCli, c ? c.nombre : `${adrCli || "SIN CLIENTE"} (Adrematasa, sin facturas)`, destClave, x.tipo, ruta, recorridoDe(null, x)).pendientes.push(x);
     });
-    const todos = [...grupos.values()];
+    return { grupos, todos: [...grupos.values()] };
+  }
+
+  function renderTarifas() {
+    const { grupos, todos } = agrupar();
     const clientesOpc = new Map(); todos.forEach(g => clientesOpc.set(g.cli, g.cliNombre));
     const zonasOpc = [...new Set(todos.map(g => g.zona))].sort((a, b) => a.localeCompare(b, "es"));
-    const q = normTxt(ft.q);
-    const gs = todos.filter(g => (!ft.cliente || g.cli === ft.cliente) && (!ft.zona || g.zona === ft.zona) &&
-      (!ft.carga || g.carga === ft.carga) && (!ft.ruta || g.ruta === ft.ruta) &&
-      (!ft.viajes || (ft.viajes === "reparto" ? !!g.rec : !g.rec)) &&
-      (!q || normTxt(g.cliNombre).includes(q) || normTxt(g.zona).includes(q)))
-      .sort((a, b) => a.cliNombre.localeCompare(b.cliNombre, "es") || a.zona.localeCompare(b.zona, "es") || ORDEN_C[a.carga] - ORDEN_C[b.carga] || ORDEN_R[a.ruta] - ORDEN_R[b.ruta] || a.intermedias.length - b.intermedias.length || a.rec.localeCompare(b.rec, "es"));
+    const gs = todos.filter(pasaFiltroTarifas).sort(ordenTarifas);
 
     // Columnas de conceptos (FLETE + los más frecuentes; el resto en OTROS)
     const fsVis = gs.flatMap(g => g.fs);
@@ -896,7 +939,8 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       const tot = g.fs.reduce((s, f) => s + ((f.calculos || {})[metricaKm === "flete" ? "fleteMxn" : "subtotalMxn"] || 0), 0);
       const porKm = g.fs.map(f => (f.calculos || {})[metricaKm === "flete" ? "fletePorKm" : "subtotalPorKm"]).filter(x => x != null);
       const rango = porKm.length > 1 && Math.min(...porKm) !== Math.max(...porKm) ? `<br><small>${dinero(Math.min(...porKm))} – ${dinero(Math.max(...porKm))}</small>` : "";
-      const encabezado = g.cli !== anterior ? `<tr><td colspan="${columnas.length + 8}" style="background:#f2ede6;font-weight:800;padding-top:10px;">${esc(g.cliNombre)}</td></tr>` : "";
+      const conFlete = g.cli !== anterior && gs.some(x => x.cli === g.cli && x.fs.length);
+      const encabezado = g.cli !== anterior ? `<tr><td colspan="${columnas.length + 8}" style="background:#f2ede6;font-weight:800;padding-top:10px;"><span style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">${esc(g.cliNombre)}${conFlete ? `<button type="button" class="re-cp" data-cpcli="${esc(g.cli)}" title="Copiar las tarifas de este cliente para WhatsApp o correo">⧉ Copiar</button>` : ""}</span></td></tr>` : "";
       anterior = g.cli;
       const destinosTxt = g.conZona || g.destinos.size > 1 ? `<br><small class="nota">${esc([...g.destinos].join(" · "))}</small>` : "";
       // Recorrido: paradas → destino final; cobro por reparto y "sin cobro".
@@ -947,6 +991,10 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     $("#re-t-zona").addEventListener("change", (e) => { ft.zona = e.target.value; renderTarifas(); });
     $("#re-cuerpo").querySelectorAll("[data-ft]").forEach(b => b.addEventListener("click", () => { ft[b.dataset.ft] = b.dataset.v; renderTarifas(); }));
     $("#re-cuerpo").querySelectorAll("[data-m]").forEach(b => b.addEventListener("click", () => { metricaKm = b.dataset.m; renderTarifas(); }));
+    $("#re-cuerpo").querySelectorAll("[data-cpcli]").forEach(b => b.addEventListener("click", async () => {
+      const c = copiaCliente(b.dataset.cpcli, gs.filter(x => x.cli === b.dataset.cpcli));
+      marcarCopiado(b, await copiarAlPortapapeles(c.texto, c.html));
+    }));
     $("#re-cuerpo").querySelectorAll("[data-ver]").forEach(b => b.addEventListener("click", () => {
       const g = grupos.get(b.dataset.k);
       if (!g) return;
@@ -961,6 +1009,279 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
       render();
     }));
     enlazarPaginas(renderTarifas);
+  }
+
+  // ============================================================================
+  // Reporte de tarifas por cliente (2026-11-07, lo pidió el jefe de Ivan).
+  // Todos los clientes que ya tienen factura con FLETE en el periodo elegido
+  // arriba (los renglones "sin factura" no entran). Resumen de una línea por
+  // cliente + tarifario (zona, recorrido, carga, ruta, km, flete, ing./km,
+  // otros cargos). Sale en PDF (vista de impresión, carta horizontal), Excel
+  // (dos hojas, valores como números) o copiado (WhatsApp con *negritas* y
+  // tablas para correo). No lee nada de Firestore: usa lo que ya está cargado.
+  // Además, cada cliente en Tarifas por cliente tiene su "⧉ Copiar".
+  // Valores como en Tarifas: el más común de las facturas y su rango si varía.
+  // ============================================================================
+  function comun(valores) {
+    const v = valores.filter(x => x != null && isFinite(x));
+    if (!v.length) return null;
+    const cuenta = new Map();
+    v.forEach(x => { const r = Math.round(x * 100) / 100; cuenta.set(r, (cuenta.get(r) || 0) + 1); });
+    const c = [...cuenta.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0][0];
+    return { c, min: Math.min(...v), max: Math.max(...v), n: v.length };
+  }
+  // Valores de un renglón con facturas (mismas cuentas que la tabla de Tarifas).
+  function valoresRenglon(g, metrica) {
+    const monedas = new Set(g.fs.map(f => f.moneda || "MXN"));
+    const enOriginal = monedas.size <= 1;
+    const mon = enOriginal ? ([...monedas][0] || "MXN") : "MXN";
+    const porConcepto = new Map();
+    g.fs.forEach((f, i) => {
+      const tc = enOriginal ? 1 : ((f.moneda || "MXN") === "MXN" ? 1 : (f.tipoCambio || 1));
+      const m = new Map();
+      (f.conceptos || []).forEach(k => { const n = nombreConcepto(k.servicio); m.set(n, (m.get(n) || 0) + (k.importe || 0) * tc); });
+      m.forEach((v, n) => { if (!porConcepto.has(n)) porConcepto.set(n, new Array(g.fs.length).fill(null)); porConcepto.get(n)[i] = v; });
+    });
+    const valores = new Map(); porConcepto.forEach((arr, n) => valores.set(n, comun(arr)));
+    const campo = metrica === "flete" ? "fleteMxn" : "subtotalMxn", campoKm = metrica === "flete" ? "fletePorKm" : "subtotalPorKm";
+    const kmTot = g.fs.reduce((s, f) => s + ((f.calculos || {}).km || 0), 0);
+    const tot = g.fs.reduce((s, f) => s + ((f.calculos || {})[campo] || 0), 0);
+    const porKm = g.fs.map(f => (f.calculos || {})[campoKm]).filter(x => x != null);
+    const repFact = g.reps.filter(r => r.f && r.numero > 0);
+    const cobrados = repFact.filter(r => r.rf.cobro);
+    const porRep = cobrados.length ? cobrados.reduce((s, r) => s + r.cobroMxn, 0) / cobrados.reduce((s, r) => s + r.numero, 0) : null;
+    const fin = [...g.finales][0] || g.zona;
+    return {
+      mon, flete: valores.get("FLETE") || null, km: comun(g.fs.map(f => (f.calculos || {}).km)),
+      otros: [...valores.entries()].filter(([n, v]) => n !== "FLETE" && v).sort((a, b) => a[0].localeCompare(b[0], "es")),
+      ingKm: kmTot ? tot / kmTot : null, minKm: porKm.length ? Math.min(...porKm) : null, maxKm: porKm.length ? Math.max(...porKm) : null,
+      recorrido: g.rec ? `${g.intermedias.join(" → ")} → ${fin}` : "Directo", repartos: g.rec ? g.intermedias.length : 0, porRep,
+      sinCobro: repFact.filter(r => r.sinCobro).length,
+    };
+  }
+  const nombreCorto = (n) => n.replace(/\.$/, "").toLowerCase().replace(/^./, c => c.toUpperCase());
+  const textoCarga = (c) => c === "refrigerada" ? "refri" : c === "seca" ? "seca" : "carga sin dato";
+  function periodoTexto() {
+    const sel = $("#re-periodo"); const nombre = sel && sel.selectedOptions[0] ? sel.selectedOptions[0].textContent.replace(/\s*\(.*\)$/, "") : "";
+    const ini = inicioPeriodo();
+    if (!ini) return "Todas las facturas cargadas";
+    const MC = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"], h = new Date();
+    return `${nombre} (1 ${MC[ini.getMonth()]} ${ini.getFullYear()} – ${h.getDate()} ${MC[h.getMonth()]} ${h.getFullYear()})`;
+  }
+
+  // Junta los renglones del reporte y el resumen por cliente.
+  function datosReporte(opc) {
+    const { todos } = agrupar();
+    const base = todos.filter(g => g.fs.length && (!opc.soloFiltrado || pasaFiltroTarifas(g))).sort(ordenTarifas);
+    const filas = base.map(g => ({ g, v: valoresRenglon(g, opc.metrica) })).filter(x => x.v.flete);
+    const campo = opc.metrica === "flete" ? "fleteMxn" : "subtotalMxn", campoKm = opc.metrica === "flete" ? "fletePorKm" : "subtotalPorKm";
+    const resumen = (fs) => {
+      const conKm = fs.filter(f => (f.calculos || {}).km), conFlete = fs.filter(f => (f.calculos || {}).fleteMxn != null);
+      const kmTot = fs.reduce((s, f) => s + ((f.calculos || {}).km || 0), 0), tot = fs.reduce((s, f) => s + ((f.calculos || {})[campo] || 0), 0);
+      const porKm = fs.map(f => (f.calculos || {})[campoKm]).filter(x => x != null);
+      return { facturas: fs.length, kmProm: conKm.length ? conKm.reduce((s, f) => s + f.calculos.km, 0) / conKm.length : null,
+        fleteProm: conFlete.length ? conFlete.reduce((s, f) => s + f.calculos.fleteMxn, 0) / conFlete.length : null,
+        ingKm: kmTot ? tot / kmTot : null, minKm: porKm.length ? Math.min(...porKm) : null, maxKm: porKm.length ? Math.max(...porKm) : null };
+    };
+    const clientes = [];
+    filas.forEach(x => {
+      let c = clientes[clientes.length - 1];
+      if (!c || c.cli !== x.g.cli) { c = { cli: x.g.cli, nombre: x.g.cliNombre, filas: [] }; clientes.push(c); }
+      c.filas.push(x);
+    });
+    clientes.forEach(c => Object.assign(c, resumen(c.filas.flatMap(x => x.g.fs)), { rutas: c.filas.length }));
+    const conceptos = new Map();
+    filas.forEach(x => x.v.otros.forEach(([n]) => conceptos.set(n, (conceptos.get(n) || 0) + 1)));
+    return { filas, clientes, total: resumen(filas.flatMap(x => x.g.fs)), otrosNombres: [...conceptos.keys()].sort((a, b) => conceptos.get(b) - conceptos.get(a) || a.localeCompare(b, "es")) };
+  }
+
+  // ---- Copiar: un cliente (Tarifas) ----
+  function copiaCliente(cli, gs) {
+    const filas = gs.filter(g => g.fs.length).map(g => ({ g, v: valoresRenglon(g, metricaKm) })).filter(x => x.v.flete);
+    const nombre = filas.length ? filas[0].g.cliNombre : cli;
+    const sufijo = metricaKm === "flete" ? "/km" : "/km (subtotal)";
+    const l = [`*Tarifas · ${nombre}*`, periodoTexto()];
+    filas.forEach(({ g, v }) => {
+      l.push("", `${g.zona}${g.rec ? ` · vía ${g.intermedias.join(" → ")}` : ""} · ${textoCarga(g.carga)}${v.km ? ` · ${miles(v.km.c)} km` : ""}`);
+      l.push(`Flete *${dinero(v.flete.c, v.mon)}*${v.ingKm != null ? ` · *${dinero(v.ingKm)}${sufijo}*` : ""}${v.flete.min !== v.flete.max ? ` (varía ${dinero(v.flete.min, v.mon)} – ${dinero(v.flete.max, v.mon)})` : ""}`);
+      if (v.otros.length) l.push(v.otros.map(([n, x]) => `${nombreCorto(n)} ${dinero(x.c, v.mon)}`).join(" · "));
+    });
+    const html = tablaHtml(`Tarifas · ${nombre} · ${periodoTexto()}`, ["Zona destino", "Recorrido", "Carga", "Ruta", "Km", "Flete", `Ing./km ${metricaKm} (MXN)`, "Otros cargos", "Facturas"],
+      filas.map(({ g, v }) => [g.zona, v.recorrido, TIPO[g.carga].txt, RUTA[g.ruta].txt, v.km ? miles(v.km.c) : "—", dinero(v.flete.c, v.mon), v.ingKm != null ? dinero(v.ingKm) : "—", v.otros.map(([n, x]) => `${nombreCorto(n)} ${dinero(x.c, v.mon)}`).join(" · ") || "—", g.fs.length]));
+    return { texto: l.join("\n"), html };
+  }
+
+  // ---- Ventana de opciones ----
+  const opcRep = { soloFiltrado: false, metrica: null, resumen: true, tarifario: true, otros: true, separar: false };
+  function abrirModalReporte() {
+    if (!facturas) { $("#re-error").textContent = "Espera a que terminen de cargar las facturas."; return; }
+    if (!opcRep.metrica) opcRep.metrica = metricaKm;
+    const viejo = document.getElementById("re-modal-reporte"); if (viejo) viejo.remove();
+    const fondo = document.createElement("div");
+    fondo.id = "re-modal-reporte"; fondo.className = "re-modal-fondo";
+    document.body.appendChild(fondo);
+    const pintar = () => {
+      const d = datosReporte(opcRep);
+      const seg = (clave, ops) => `<span class="re-seg">${ops.map(([v, t]) => `<button type="button" class="${opcRep[clave] === v ? "activo" : ""}" data-o="${clave}" data-v="${v}">${t}</button>`).join("")}</span>`;
+      const chk = (clave, t) => `<label><input type="checkbox" data-c="${clave}"${opcRep[clave] ? " checked" : ""}> ${t}</label>`;
+      const ninguno = !opcRep.resumen && !opcRep.tarifario;
+      fondo.innerHTML = `<div class="re-modal" role="dialog" aria-label="Reporte de tarifas por cliente">
+        <h3>Reporte de tarifas por cliente</h3>
+        <p class="nota" style="margin:0 0 6px;">Periodo: <b>${esc(periodoTexto())}</b> (el que tienes elegido arriba) · ${d.clientes.length} cliente${d.clientes.length === 1 ? "" : "s"} con flete · ${d.filas.length} ruta${d.filas.length === 1 ? "" : "s"} · ${d.total.facturas} factura${d.total.facturas === 1 ? "" : "s"}</p>
+        <div class="re-mfila"><b>Clientes</b>${seg("soloFiltrado", [[false, "Todos con flete"], [true, "Solo el filtrado"]])}</div>
+        <div class="re-mfila"><b>Ingreso por km</b>${seg("metrica", [["flete", "Flete"], ["subtotal", "Subtotal"]])}</div>
+        <div class="re-mfila"><b>Incluir</b>${chk("resumen", "Resumen por cliente")}${chk("tarifario", "Tarifario detallado")}${chk("otros", "Otros cargos (cruce, FSC…)")}</div>
+        <div class="re-mfila"><b>Separar</b>${chk("separar", "Directos y con reparto en bloques distintos")}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:16px;">
+          <button type="button" data-a="pdf"${ninguno || !d.filas.length ? " disabled" : ""}>⤓ PDF</button>
+          <button type="button" data-a="excel"${ninguno || !d.filas.length ? " disabled" : ""}>⤓ Excel</button>
+          <button type="button" class="secundario" data-a="copiar"${ninguno || !d.filas.length ? " disabled" : ""}>⧉ Copiar todo</button>
+          <button type="button" class="secundario" data-a="cerrar" style="margin-left:auto;">Cerrar</button></div>
+        <p class="nota" style="margin:10px 0 0;">${d.filas.length ? `"Solo el filtrado" respeta lo que tengas en Tarifas por cliente (cliente, zona, carga, ruta, directos o con reparto). "Copiar todo" pega en WhatsApp el resumen por cliente y en un correo las tablas.` : "No hay facturas con flete en este periodo o con estos filtros."}</p>
+        <p class="error" id="re-m-error" style="margin:6px 0 0;"></p></div>`;
+      fondo.querySelectorAll("[data-o]").forEach(b => b.addEventListener("click", () => { const v = b.dataset.v; opcRep[b.dataset.o] = v === "true" ? true : v === "false" ? false : v; pintar(); }));
+      fondo.querySelectorAll("[data-c]").forEach(c => c.addEventListener("change", () => { opcRep[c.dataset.c] = c.checked; pintar(); }));
+      fondo.querySelector('[data-a="cerrar"]').addEventListener("click", () => fondo.remove());
+      fondo.querySelector('[data-a="pdf"]').addEventListener("click", () => { fondo.remove(); abrirPdfReporte(datosReporte(opcRep), { ...opcRep }); });
+      fondo.querySelector('[data-a="excel"]').addEventListener("click", async () => {
+        try { await excelReporte(datosReporte(opcRep), { ...opcRep }); } catch (e) { fondo.querySelector("#re-m-error").textContent = "No se pudo generar el Excel: " + e.message; }
+      });
+      fondo.querySelector('[data-a="copiar"]').addEventListener("click", async (e) => {
+        const b = e.currentTarget, c = copiaReporte(datosReporte(opcRep), opcRep);
+        marcarCopiado(b, await copiarAlPortapapeles(c.texto, c.html));
+      });
+    };
+    fondo.addEventListener("click", (e) => { if (e.target === fondo) fondo.remove(); });
+    pintar();
+  }
+
+  // ---- Copiar todo ----
+  function copiaReporte(d, opc) {
+    const sufijo = opc.metrica === "flete" ? "/km" : "/km (subtotal)";
+    const l = ["*Tarifas por cliente*", periodoTexto(),
+      `*${d.clientes.length}* clientes · *${d.filas.length}* rutas · *${d.total.facturas}* facturas${d.total.ingKm != null ? ` · ingreso *${dinero(d.total.ingKm)}${sufijo}*` : ""}`, ""];
+    d.clientes.forEach((c, i) => l.push(`${i + 1}. ${c.nombre} · ${c.rutas} ruta${c.rutas === 1 ? "" : "s"}${c.ingKm != null ? ` · *${dinero(c.ingKm)}${sufijo}*` : ""}`));
+    let html = "";
+    if (opc.resumen) html += tablaHtml(`Tarifas por cliente · ${periodoTexto()}`, ["Cliente", "Rutas", "Facturas", "Km prom.", "Flete prom. (MXN)", `Ing./km ${opc.metrica} (MXN)`, "Rango ing./km"],
+      d.clientes.map(c => [c.nombre, c.rutas, c.facturas, c.kmProm != null ? miles(Math.round(c.kmProm)) : "—", dinero(c.fleteProm), c.ingKm != null ? dinero(c.ingKm) : "—", c.minKm != null ? `${dinero(c.minKm)} – ${dinero(c.maxKm)}` : "—"]));
+    if (opc.tarifario) html += "<br>" + tablaHtml("Tarifario detallado", ["Cliente", "Zona destino", "Recorrido", "Carga", "Ruta", "Km", "Flete", `Ing./km ${opc.metrica} (MXN)`, ...(opc.otros ? ["Otros cargos"] : []), "Facturas"],
+      d.filas.map(({ g, v }) => [g.cliNombre, g.zona, v.recorrido, TIPO[g.carga].txt, RUTA[g.ruta].txt, v.km ? miles(v.km.c) : "—", dinero(v.flete.c, v.mon), v.ingKm != null ? dinero(v.ingKm) : "—",
+        ...(opc.otros ? [v.otros.map(([n, x]) => `${nombreCorto(n)} ${dinero(x.c, v.mon)}`).join(" · ") || "—"] : []), g.fs.length]));
+    return { texto: l.join("\n"), html };
+  }
+
+  // ---- Excel: Resumen por cliente + Tarifario ----
+  async function excelReporte(d, opc) {
+    const XLSX = await cargarScript(URL_SHEETJS, "XLSX");
+    const r2 = (n) => n == null ? null : Math.round(n * 100) / 100;
+    const etq = opc.metrica === "flete" ? "flete" : "subtotal";
+    const hojaRes = d.clientes.map(c => ({ "Cliente": c.nombre, "Rutas": c.rutas, "Facturas": c.facturas, "Km promedio": c.kmProm != null ? Math.round(c.kmProm) : null,
+      "Flete promedio MXN": r2(c.fleteProm), [`Ing./km ${etq} MXN`]: r2(c.ingKm), "Ing./km mínimo": r2(c.minKm), "Ing./km máximo": r2(c.maxKm) }));
+    const hojaTar = d.filas.map(({ g, v }) => {
+      const o = { "Cliente": g.cliNombre, "Zona destino": g.zona, "Destinos": [...g.destinos].join(" · "), "Recorrido": v.recorrido, "Repartos": v.repartos,
+        "Carga": TIPO[g.carga].txt, "Ruta": RUTA[g.ruta].txt, "Km": v.km ? r2(v.km.c) : null, "Moneda": v.mon, "Flete": r2(v.flete.c),
+        "Flete mínimo": r2(v.flete.min), "Flete máximo": r2(v.flete.max), [`Ing./km ${etq} MXN`]: r2(v.ingKm), "Ing./km mínimo": r2(v.minKm), "Ing./km máximo": r2(v.maxKm) };
+      if (opc.otros) d.otrosNombres.forEach(n => { const x = v.otros.find(([m]) => m === n); o[nombreCorto(n)] = x ? r2(x[1].c) : null; });
+      o["Facturas"] = g.fs.length;
+      return o;
+    });
+    const libro = XLSX.utils.book_new();
+    const anchos = (filas) => { const ks = filas.length ? Object.keys(filas[0]) : []; return ks.map(k => ({ wch: Math.min(48, Math.max(k.length, ...filas.map(f => String(f[k] == null ? "" : f[k]).length)) + 2) })); };
+    if (opc.resumen) { const h = XLSX.utils.json_to_sheet(hojaRes); h["!cols"] = anchos(hojaRes); XLSX.utils.book_append_sheet(libro, h, "Resumen por cliente"); }
+    if (opc.tarifario) { const h = XLSX.utils.json_to_sheet(hojaTar); h["!cols"] = anchos(hojaTar); XLSX.utils.book_append_sheet(libro, h, "Tarifario"); }
+    const hoy = new Date();
+    XLSX.writeFile(libro, `Tarifas_por_cliente_${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, "0")}-${String(hoy.getDate()).padStart(2, "0")}.xlsx`);
+  }
+
+  // ---- PDF: vista de impresión (carta horizontal) ----
+  function htmlReporte(d, opc, conBarra) {
+    const MC = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"], h = new Date();
+    const etq = opc.metrica === "flete" ? "flete" : "subtotal";
+    const chip = (txt, cls) => `<span class="chip ${cls}">${esc(txt)}</span>`;
+    const CHIP_C = { refrigerada: "refri", seca: "seca", sin: "gris" }, CHIP_R = { corta: "corta", larga: "larga", sin: "gris" };
+    const varia = (x, f) => x && x.min !== x.max ? `<br><span class="varia">varía ${f(x.min)} – ${f(x.max)}</span>` : "";
+    const nCol = 8 + (opc.otros ? 1 : 0);
+    const fila = ({ g, v }) => `<tr>
+      <td>${esc(g.zona)}${g.conZona && g.destinos.size ? `<br><span class="varia">${esc([...g.destinos].join(" · "))}</span>` : ""}</td>
+      <td>${g.rec ? `${g.intermedias.map(p => esc(p)).join(" → ")} → <b>${esc([...g.finales][0] || g.zona)}</b><br><span class="varia">${v.repartos} reparto${v.repartos === 1 ? "" : "s"}${v.porRep != null ? ` · ${dinero(v.porRep)} c/u` : ""}${v.sinCobro ? ` · ${v.sinCobro} sin cobro` : ""}</span>` : "Directo"}</td>
+      <td>${chip(g.carga === "refrigerada" ? "REFRI" : TIPO[g.carga].txt, CHIP_C[g.carga])}</td><td>${chip(RUTA[g.ruta].txt, CHIP_R[g.ruta])}</td>
+      <td class="n">${v.km ? miles(v.km.c) : "—"}</td>
+      <td class="n fl">${dinero(v.flete.c, v.mon)}${varia(v.flete, (n) => dinero(n, v.mon))}</td>
+      <td class="n"><b>${v.ingKm != null ? dinero(v.ingKm) : "—"}</b>${v.minKm != null && v.minKm !== v.maxKm ? `<br><span class="varia">${dinero(v.minKm)} – ${dinero(v.maxKm)}</span>` : ""}</td>
+      ${opc.otros ? `<td>${v.otros.map(([n, x]) => `${esc(nombreCorto(n))} ${dinero(x.c, v.mon)}`).join("<br>") || "—"}</td>` : ""}
+      <td class="n">${g.fs.length}</td></tr>`;
+    const bloque = (c) => {
+      const cab = `<tr class="cli"><td colspan="${nCol}">${esc(c.nombre)}</td></tr>`;
+      if (!opc.separar) return cab + c.filas.map(fila).join("");
+      const dir = c.filas.filter(x => !x.g.rec), rep = c.filas.filter(x => x.g.rec);
+      if (!dir.length || !rep.length) return cab + c.filas.map(fila).join(""); // solo un tipo: sin subtítulos
+      const sub = (t) => `<tr class="sub"><td colspan="${nCol}">${t}</td></tr>`;
+      return cab + (dir.length ? sub("Directos") + dir.map(fila).join("") : "") + (rep.length ? sub("Con reparto") + rep.map(fila).join("") : "");
+    };
+    return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tarifas por cliente</title><style>
+  @page { size: letter landscape; margin: 10mm; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Arial, Helvetica, sans-serif; color:#1F1A14; font-size:10.5px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .hoja { padding:18px 22px; }
+  .barra { position:sticky; top:0; background:#2c1e0f; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; font-family:-apple-system,'Segoe UI',Roboto,sans-serif; z-index:2; }
+  .barra button { background:#fff; color:#2c1e0f; border:0; border-radius:8px; padding:8px 14px; font-weight:700; font-size:13px; cursor:pointer; }
+  .enc { display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid #2C1E0F; padding-bottom:8px; margin-bottom:12px; gap:12px; }
+  .enc h1 { margin:0; font-size:18px; } .enc .sub { color:#6b5f52; font-size:10.5px; margin-top:3px; } .enc img { height:38px; }
+  .kp { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px; } .kp div { border:1px solid #E2DDD5; border-radius:7px; padding:7px 10px; } .kp b { font-size:15px; display:block; } .kp small { color:#6b5f52; font-size:9.5px; }
+  .tit { font-weight:700; font-size:10px; color:#6b5f52; text-transform:uppercase; letter-spacing:.4px; margin:14px 0 5px; }
+  table { width:100%; border-collapse:collapse; } thead { display:table-header-group; } tr { page-break-inside:avoid; break-inside:avoid; }
+  th { text-align:left; font-size:8.5px; color:#6b5f52; text-transform:uppercase; padding:4px 5px; border-bottom:1px solid #cfc7bb; white-space:nowrap; }
+  td { padding:4px 5px; border-bottom:1px solid #EEE9E2; vertical-align:top; } td.n, th.n { text-align:right; white-space:nowrap; }
+  tr.cli td { background:#F2EDE6; font-weight:700; font-size:11px; padding-top:6px; } tr.sub td { font-size:9px; font-weight:700; color:#6b5f52; text-transform:uppercase; letter-spacing:.3px; background:#FBFAF8; }
+  td.fl { background:#EFEAE2; font-weight:700; } .varia { color:#8a7f73; font-size:8.5px; font-weight:400; }
+  .chip { display:inline-block; font-size:8.5px; font-weight:700; padding:1px 6px; border-radius:7px; white-space:nowrap; }
+  .refri, .larga { background:#DDEEFB; color:#185FA5; } .seca { background:#F3E9D7; color:#7a4a12; } .corta { background:#EAF3DE; color:#3B7A1E; } .gris { background:#ECE9E4; color:#5c5045; }
+  .nota { margin-top:10px; font-size:8.5px; color:#6b5f52; line-height:1.45; }
+  @media screen { .tabla-caja { overflow-x:auto; } .tabla-caja table { min-width:720px; } }
+  @media print { .barra { display:none; } .hoja { padding:0; } .tabla-caja { overflow:visible; } }
+</style></head><body>
+${conBarra ? `<div class="barra"><b>Tarifas por cliente</b><button type="button" onclick="window.print()">Imprimir / Guardar PDF</button></div>` : ""}
+<div class="hoja">
+  <div class="enc"><div><h1>Tarifas por cliente</h1><div class="sub">${esc(periodoTexto())} · ingreso por km sobre ${etq.toUpperCase()}, en MXN · generado ${h.getDate()} de ${MC[h.getMonth()]} de ${h.getFullYear()}</div></div>
+    <img src="${window.location.origin}/img/logo-alanis.png" alt="Autotransportes Alanis" onerror="this.outerHTML='<b style=&quot;font-size:14px;letter-spacing:.5px;&quot;>AUTOTRANSPORTES ALANIS</b>'"></div>
+  <div class="kp"><div><b>${d.clientes.length}</b><small>Clientes con flete</small></div><div><b>${d.filas.length}</b><small>Rutas (zona · recorrido · carga · ruta)</small></div>
+    <div><b>${d.total.facturas}</b><small>Facturas</small></div><div><b>${d.total.ingKm != null ? dinero(d.total.ingKm) : "—"}</b><small>Ingreso por km ponderado (todas)</small></div></div>
+  ${opc.resumen ? `<div class="tit">Resumen por cliente</div><div class="tabla-caja"><table><thead><tr><th>Cliente</th><th class="n">Rutas</th><th class="n">Facturas</th><th class="n">Km prom.</th><th class="n">Flete prom.</th><th class="n">Ing./km</th><th class="n">Rango ing./km</th></tr></thead><tbody>
+    ${d.clientes.map(c => `<tr><td>${esc(c.nombre)}</td><td class="n">${c.rutas}</td><td class="n">${c.facturas}</td><td class="n">${c.kmProm != null ? miles(Math.round(c.kmProm)) : "—"}</td><td class="n">${dinero(c.fleteProm)}</td><td class="n"><b>${c.ingKm != null ? dinero(c.ingKm) : "—"}</b></td><td class="n">${c.minKm != null ? (c.minKm === c.maxKm ? dinero(c.minKm) : `${dinero(c.minKm)} – ${dinero(c.maxKm)}`) : "—"}</td></tr>`).join("")}
+  </tbody></table></div>` : ""}
+  ${opc.tarifario ? `<div class="tit"${opc.resumen ? ` style="page-break-before:always;break-before:page;"` : ""}>Tarifario detallado</div><div class="tabla-caja"><table><thead><tr><th>Zona destino</th><th>Recorrido</th><th>Carga</th><th>Ruta</th><th class="n">Km</th><th class="n">Flete</th><th class="n">Ing./km</th>${opc.otros ? "<th>Otros cargos</th>" : ""}<th class="n">Facturas</th></tr></thead><tbody>
+    ${d.clientes.map(bloque).join("")}
+  </tbody></table></div>` : ""}
+  <div class="nota">Valores como vienen en la factura; si cambian entre facturas, el más común y en chico el rango. Ruta CORTA: menos de ${KM_RUTA_LARGA} km; LARGA: ${KM_RUTA_LARGA} km o más. Ingreso por km = ${etq} ÷ km de la factura, en MXN (las facturas en USD al tipo de cambio de la misma factura). Flete en la moneda de la factura. Solo clientes con factura y flete en el periodo.</div>
+</div></body></html>`;
+  }
+  function esVistaMovil() {
+    return (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true ||
+      /iphone|ipad|ipod|android|mobi/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  }
+  function abrirPdfReporte(d, opc) {
+    if (!esVistaMovil()) {
+      const v = window.open("", "_blank");
+      if (!v) { $("#re-error").textContent = "El navegador bloqueó la ventana emergente. Habilita ventanas emergentes para este sitio e intenta de nuevo."; return; }
+      v.document.write(htmlReporte(d, opc, true)); v.document.close();
+      return;
+    }
+    // En celular / app instalada: dentro de la app, con ‹ Regresar e Imprimir / PDF (como el reporte de RH).
+    const capa = document.createElement("div");
+    capa.style.cssText = "position:fixed;inset:0;z-index:10000;background:#d9d4cc;display:flex;flex-direction:column;";
+    capa.innerHTML = `<div style="flex:none;background:#2c1e0f;color:#fff;padding:calc(env(safe-area-inset-top, 0px) + 10px) 12px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;">
+        <button type="button" data-r="regresar" style="background:transparent;color:#fff;border:1px solid rgba(255,255,255,.55);border-radius:9px;padding:8px 12px;font-size:14px;font-weight:700;cursor:pointer;">‹ Regresar</button>
+        <b style="font-size:14px;">Tarifas</b>
+        <button type="button" data-r="imprimir" style="background:#fff;color:#2c1e0f;border:0;border-radius:9px;padding:8px 12px;font-size:14px;font-weight:700;cursor:pointer;">Imprimir / PDF</button></div>
+      <iframe title="Tarifas por cliente" style="flex:1;width:1px;min-width:100%;border:0;background:#fff;"></iframe>`;
+    const scrollPrevio = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.body.appendChild(capa);
+    const iframe = capa.querySelector("iframe");
+    iframe.srcdoc = htmlReporte(d, opc, false);
+    capa.querySelector('[data-r="regresar"]').addEventListener("click", () => { capa.remove(); document.body.style.overflow = scrollPrevio; });
+    capa.querySelector('[data-r="imprimir"]').addEventListener("click", () => { try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch (e) { /* nada */ } });
   }
 
   // ============================================================================
