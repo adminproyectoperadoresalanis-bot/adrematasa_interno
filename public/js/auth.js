@@ -38,6 +38,7 @@ import { iniciarAsignacion } from "./asignacion.js";
 import { iniciarRentabilidad } from "./rentabilidad.js";
 import { iniciarMantenimiento } from "./mantenimiento.js";
 import { iniciarComercial } from "./comercial.js";
+import { iniciarAnalisisOperaciones } from "./analisisOperaciones.js"; // 2026-11-06
 import { iniciarPanelGeneral } from "./panelGeneral.js"; // 2026-10-31: Panel por área para todos los roles
 import { iniciarActualizaciones } from "./actualizaciones.js"; // 2026-10-31: Tráfico → Actualizaciones
 import "./actualizacion.js"; // 2026-10-28: cinta "Hay una versión nueva"
@@ -431,6 +432,7 @@ onAuthStateChanged(auth, async (user) => {
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       mantenimiento: (c) => iniciarMantenimiento(c, datosUsuario, user.uid),
       comercial: (c) => iniciarComercial(c, datosUsuario, user.uid, user.email),
+      analisisOperaciones: (c) => iniciarAnalisisOperaciones(c, datosUsuario, user.uid),
       panel: (c) => iniciarPanelGeneral(c, { rol: "admin", uid: user.uid, datosUsuario, correo: user.email, permitidas: null }),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarGestionSolicitudes(d, user.uid, datosUsuario.nombre),
@@ -469,6 +471,7 @@ onAuthStateChanged(auth, async (user) => {
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       mantenimiento: (c) => iniciarMantenimiento(c, datosUsuario, user.uid),
       comercial: (c) => iniciarComercial(c, datosUsuario, user.uid, user.email),
+      analisisOperaciones: (c) => iniciarAnalisisOperaciones(c, datosUsuario, user.uid),
       horasExtra: (c) => iniciarVistaEmpleado(c, datosUsuario, user.uid),
       vacaciones: (c) => iniciarVistaVacacionesEmpleado(c, datosUsuario, user.uid),
       faltas: (c) => iniciarVistaEmpleadoFaltas(c, datosUsuario, user.uid)
@@ -495,6 +498,7 @@ onAuthStateChanged(auth, async (user) => {
       inventario: (c) => iniciarInventario(c, datosUsuario, user.uid),
       mantenimiento: (c) => iniciarMantenimiento(c, datosUsuario, user.uid),
       comercial: (c) => iniciarComercial(c, datosUsuario, user.uid, user.email),
+      analisisOperaciones: (c) => iniciarAnalisisOperaciones(c, datosUsuario, user.uid),
       panel: (c) => iniciarPanelGeneral(c, { rol: "supervisor", uid: user.uid, datosUsuario, correo: user.email, permitidas: permitidasSupervisor }),
       solicitudes: (c) => renderEquipoYPropia(c,
         (d) => iniciarVistaSupervisor(d, user.uid, datosUsuario.nombre),

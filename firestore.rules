@@ -831,8 +831,23 @@ service cloud.firestore {
     match /rentabilidad_facturas/{id} {
       allow read, write: if esDuenoRentabilidad();
     }
+    // Análisis de operaciones (2026-11-06): salidas y viajes del Adrematasa (sin dinero).
+    function puedeVerAnalisis() {
+      return usuarioActivoValido() && tieneAccesoUtilidad('analisisOperaciones');
+    }
+    function puedeCargarAnalisis() {
+      return usuarioActivoValido()
+        && (usuarioActual().rol == 'admin' || usuarioActual().get('puesto', '').lower().matches('.*gerente.*impo.*'));
+    }
     match /rentabilidad_salidas/{id} {
-      allow read, write: if esDuenoRentabilidad();
+      allow read: if esDuenoRentabilidad() || puedeVerAnalisis();
+      allow create, update: if esDuenoRentabilidad() || puedeCargarAnalisis();
+      allow delete: if esDuenoRentabilidad();
+    }
+    match /op_viajes/{id} {
+      allow read: if esDuenoRentabilidad() || puedeVerAnalisis();
+      allow create, update: if esDuenoRentabilidad() || puedeCargarAnalisis();
+      allow delete: if false;
     }
     match /rentabilidad_config/{id} {
       allow read, write: if esDuenoRentabilidad();
