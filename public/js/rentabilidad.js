@@ -1112,7 +1112,7 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
   }
 
   // ---- Ventana de opciones ----
-  const opcRep = { soloFiltrado: false, metrica: null, resumen: true, tarifario: true, otros: true, separar: false };
+  const opcRep = { soloFiltrado: false, metrica: null, resumen: false, tarifario: true, otros: true, separar: false };
   function abrirModalReporte() {
     if (!facturas) { $("#re-error").textContent = "Espera a que terminen de cargar las facturas."; return; }
     if (!opcRep.metrica) opcRep.metrica = metricaKm;
@@ -1160,7 +1160,15 @@ export function iniciarRentabilidad(contenedor, datosUsuario, uid) {
     const sufijo = opc.metrica === "flete" ? "/km" : "/km (subtotal)";
     const l = ["*Tarifas por cliente*", periodoTexto(),
       `*${d.clientes.length}* clientes · *${d.filas.length}* rutas · *${d.total.facturas}* facturas${d.total.ingKm != null ? ` · ingreso *${dinero(d.total.ingKm)}${sufijo}*` : ""}`, ""];
-    d.clientes.forEach((c, i) => l.push(`${i + 1}. ${c.nombre} · ${c.rutas} ruta${c.rutas === 1 ? "" : "s"}${c.ingKm != null ? ` · *${dinero(c.ingKm)}${sufijo}*` : ""}`));
+    if (opc.resumen) d.clientes.forEach((c, i) => l.push(`${i + 1}. ${c.nombre} · ${c.rutas} ruta${c.rutas === 1 ? "" : "s"}${c.ingKm != null ? ` · *${dinero(c.ingKm)}${sufijo}*` : ""}`));
+    else d.clientes.forEach(c => {   // solo tarifario: cada cliente con sus rutas
+      l.push(`*${c.nombre}*`);
+      c.filas.forEach(({ g, v }) => {
+        l.push(`${g.zona}${g.rec ? ` · vía ${g.intermedias.join(" → ")}` : ""} · ${textoCarga(g.carga)}${v.km ? ` · ${miles(v.km.c)} km` : ""}`);
+        l.push(`Flete *${dinero(v.flete.c, v.mon)}*${v.ingKm != null ? ` · *${dinero(v.ingKm)}${sufijo}*` : ""}${opc.otros && v.otros.length ? ` · ${v.otros.map(([n, x]) => `${nombreCorto(n)} ${dinero(x.c, v.mon)}`).join(" · ")}` : ""}`);
+      });
+      l.push("");
+    });
     let html = "";
     if (opc.resumen) html += tablaHtml(`Tarifas por cliente · ${periodoTexto()}`, ["Cliente", "Rutas", "Facturas", "Km prom.", "Flete prom. (MXN)", `Ing./km ${opc.metrica} (MXN)`, "Rango ing./km"],
       d.clientes.map(c => [c.nombre, c.rutas, c.facturas, c.kmProm != null ? miles(Math.round(c.kmProm)) : "—", dinero(c.fleteProm), c.ingKm != null ? dinero(c.ingKm) : "—", c.minKm != null ? `${dinero(c.minKm)} – ${dinero(c.maxKm)}` : "—"]));
@@ -1245,8 +1253,8 @@ ${conBarra ? `<div class="barra"><b>Tarifas por cliente</b><button type="button"
 <div class="hoja">
   <div class="enc"><div><h1>Tarifas por cliente</h1><div class="sub">${esc(periodoTexto())} · ingreso por km sobre ${etq.toUpperCase()}, en MXN · generado ${h.getDate()} de ${MC[h.getMonth()]} de ${h.getFullYear()}</div></div>
     <img src="${window.location.origin}/img/logo-alanis.png" alt="Autotransportes Alanis" onerror="this.outerHTML='<b style=&quot;font-size:14px;letter-spacing:.5px;&quot;>AUTOTRANSPORTES ALANIS</b>'"></div>
-  <div class="kp"><div><b>${d.clientes.length}</b><small>Clientes con flete</small></div><div><b>${d.filas.length}</b><small>Rutas (zona · recorrido · carga · ruta)</small></div>
-    <div><b>${d.total.facturas}</b><small>Facturas</small></div><div><b>${d.total.ingKm != null ? dinero(d.total.ingKm) : "—"}</b><small>Ingreso por km ponderado (todas)</small></div></div>
+  ${opc.resumen ? `<div class="kp"><div><b>${d.clientes.length}</b><small>Clientes con flete</small></div><div><b>${d.filas.length}</b><small>Rutas (zona · recorrido · carga · ruta)</small></div>
+    <div><b>${d.total.facturas}</b><small>Facturas</small></div><div><b>${d.total.ingKm != null ? dinero(d.total.ingKm) : "—"}</b><small>Ingreso por km ponderado (todas)</small></div></div>` : ""}
   ${opc.resumen ? `<div class="tit">Resumen por cliente</div><div class="tabla-caja"><table><thead><tr><th>Cliente</th><th class="n">Rutas</th><th class="n">Facturas</th><th class="n">Km prom.</th><th class="n">Flete prom.</th><th class="n">Ing./km</th><th class="n">Rango ing./km</th></tr></thead><tbody>
     ${d.clientes.map(c => `<tr><td>${esc(c.nombre)}</td><td class="n">${c.rutas}</td><td class="n">${c.facturas}</td><td class="n">${c.kmProm != null ? miles(Math.round(c.kmProm)) : "—"}</td><td class="n">${dinero(c.fleteProm)}</td><td class="n"><b>${c.ingKm != null ? dinero(c.ingKm) : "—"}</b></td><td class="n">${c.minKm != null ? (c.minKm === c.maxKm ? dinero(c.minKm) : `${dinero(c.minKm)} – ${dinero(c.maxKm)}`) : "—"}</td></tr>`).join("")}
   </tbody></table></div>` : ""}
