@@ -1,3 +1,7 @@
+// ##########################################################################
+// PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+// RUTA:     /workspaces/adrematasa_interno/public/js/aprobaciones.js
+// ##########################################################################
 import { db } from "./firebase-config.js";
 import {
   collection, onSnapshot, doc, updateDoc, query, where
@@ -10,6 +14,47 @@ const ETIQUETAS_ESTATUS = {
   aprobada: "Aprobada",
   rechazada: "Rechazada"
 };
+
+// ---- Solicitudes repetidas (2026-11-10, pedido de Ivan) ----------------------
+// Dos solicitudes "se empalman" si sus horarios se cruzan, contando el turno que
+// pasa de medianoche (22:00–02:00 del 3 choca con 01:00–03:00 del 4). "Mismo
+// día" = otra solicitud con la misma fecha que no se cruza. Las rechazadas no
+// cuentan (se pueden volver a pedir). Se compara contra lo que la pantalla ya
+// tiene cargado: no gasta lecturas.
+function intervaloDe(fecha, horaInicio, horaFin) {
+  const [y, m, d] = String(fecha || "").split("-").map(Number);
+  const [hi, mi] = String(horaInicio || "").split(":").map(Number);
+  const [hf, mf] = String(horaFin || "").split(":").map(Number);
+  if (!y || !m || !d || isNaN(hi) || isNaN(hf)) return null;
+  const ini = Math.round(Date.UTC(y, m - 1, d) / 6e4) + hi * 60 + (mi || 0);
+  let dur = (hf * 60 + (mf || 0)) - (hi * 60 + (mi || 0));
+  if (dur <= 0) dur += 24 * 60; // cruza medianoche
+  return { ini, fin: ini + dur };
+}
+// otras: solicitudes del MISMO empleado. Regresa { empalmes, mismoDia }.
+function revisarChoques(fecha, horaInicio, horaFin, otras, excluirId) {
+  const yo = intervaloDe(fecha, horaInicio, horaFin);
+  const empalmes = [], mismoDia = [];
+  if (!yo) return { empalmes, mismoDia };
+  otras.forEach(s => {
+    if (s.id === excluirId || s.estatus === "rechazada") return;
+    const o = intervaloDe(s.fecha, s.horaInicio, s.horaFin);
+    if (!o) return;
+    if (yo.ini < o.fin && o.ini < yo.fin) empalmes.push(s);
+    else if (s.fecha === fecha) mismoDia.push(s);
+  });
+  const orden = (a, b) => (a.fecha + a.horaInicio).localeCompare(b.fecha + b.horaInicio);
+  return { empalmes: empalmes.sort(orden), mismoDia: mismoDia.sort(orden) };
+}
+const MESES_CORTOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+function fechaCorta(fechaStr) {
+  const [y, m, d] = String(fechaStr || "").split("-").map(Number);
+  return y && m && d ? `${d} ${MESES_CORTOS[m - 1]}` : (fechaStr || "");
+}
+function fechaCortaIso(iso) {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? "" : `${d.getDate()} ${MESES_CORTOS[d.getMonth()]}`;
+}
 
 // permiteRevertir: solo true para la vista de admin (iniciarGestionSolicitudes).
 // Las reglas de Firestore ya lo hacían así de todos modos — un supervisor solo
@@ -66,12 +111,14 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
   const tbodyAjustes = contenedor.querySelector("#tbody-ajustes-pendientes");
 
   let ultimoHistorial = [];
+  let ultimasTodas = []; // todas las solicitudes cargadas (para "Mismo día" / "Se empalma")
   let usuariosPorId = {};
 
   onSnapshot(queryBase, (snap) => {
     const todas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     todas.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
 
+    ultimasTodas = todas;
     const pendientes = todas.filter(s => s.estatus === "pendiente");
     ultimoHistorial = todas.filter(s => s.estatus !== "pendiente");
 
@@ -106,7 +153,7 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
       <tr data-id="${s.id}">
         <td>${escapeHtml(s.empleadoNombre || "")}</td>
         <td>${s.fecha}</td>
-        <td>${s.horaInicio}–${s.horaFin}</td>
+        <td>${s.horaInicio}–${s.horaFin}${etiquetaChoque(s)}</td>
         <td>${s.horas}</td>
         <td>${escapeHtml(s.motivo)}</td>
         <td><input type="text" class="input-comentario" placeholder="Comentario (opcional)"></td>
@@ -122,12 +169,32 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
       const solicitud = lista.find(s => s.id === id);
       const comentarioInput = fila.querySelector(".input-comentario");
       fila.querySelector(".btn-aprobar").addEventListener("click", () => {
+        // Si se empalma con otra (casos que se escaparon del bloqueo del empleado), pide confirmación.
+        const { empalmes } = choquesDe(solicitud);
+        if (empalmes.length && !confirm(`Esta solicitud se empalma con otra ${empalmes.some(x => x.estatus === "aprobada") ? "ya aprobada" : "pendiente"} del mismo empleado:\n\n${empalmes.map(textoOtra).join("\n")}\n\n¿Aprobar de todos modos?`)) return;
         resolverSolicitud(solicitud, "aprobada", comentarioInput.value.trim());
       });
       fila.querySelector(".btn-rechazar").addEventListener("click", () => {
         resolverSolicitud(solicitud, "rechazada", comentarioInput.value.trim());
       });
     });
+  }
+
+  // Otras solicitudes del mismo empleado que chocan con s (2026-11-10).
+  function choquesDe(s) {
+    return revisarChoques(s.fecha, s.horaInicio, s.horaFin, ultimasTodas.filter(o => o.empleadoId === s.empleadoId), s.id);
+  }
+  function textoOtra(o) {
+    return `${fechaCorta(o.fecha)}, ${o.horaInicio}–${o.horaFin} · ${ETIQUETAS_ESTATUS[o.estatus] || o.estatus}${o.enviadoANominaEn ? ` · enviada a nómina ${fechaCortaIso(o.enviadoANominaEn)}` : ""}`;
+  }
+  // Gris "Mismo día" = otra solicitud esa fecha sin cruzarse; roja "Se empalma" = horarios cruzados.
+  function etiquetaChoque(s) {
+    const { empalmes, mismoDia } = choquesDe(s);
+    const chip = (txt, fondo, color, borde) => `<div><span style="display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:9px;margin-top:4px;white-space:nowrap;background:${fondo};color:${color};${borde ? `border:1px solid ${borde};` : ""}">${txt}</span></div>`;
+    const detalle = (lista, prefijo) => `<div style="font-size:11.5px;color:#6b5f52;margin-top:3px;line-height:1.4;">${prefijo} ${lista.map(o => `${o.fecha !== s.fecha ? fechaCorta(o.fecha) + " " : ""}${o.horaInicio}–${o.horaFin} · <span class="badge badge-${o.estatus}">${ETIQUETAS_ESTATUS[o.estatus] || o.estatus}</span>${o.enviadoANominaEn ? ` · enviada a nómina ${fechaCortaIso(o.enviadoANominaEn)}` : ""}`).join("<br>")}</div>`;
+    if (empalmes.length) return chip("Se empalma", "#FDECEA", "#c0392b", "#F3C2BC") + detalle(empalmes, "con");
+    if (mismoDia.length) return chip("Mismo día", "#ECE9E4", "#4a3e33") + detalle(mismoDia, "También");
+    return "";
   }
 
   // Tabla de ajustes pendientes (solo admin, igual que los recortes de

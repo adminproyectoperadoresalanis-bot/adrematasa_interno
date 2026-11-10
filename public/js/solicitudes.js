@@ -1,3 +1,7 @@
+// ##########################################################################
+// PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+// RUTA:     /workspaces/adrematasa_interno/public/js/solicitudes.js
+// ##########################################################################
 import { db } from "./firebase-config.js";
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, where
@@ -18,6 +22,47 @@ function calcularHoras(horaInicio, horaFin) {
   let diff = minutosFin - minutosInicio;
   if (diff <= 0) diff += 24 * 60; // cruza medianoche
   return Math.round((diff / 60) * 100) / 100;
+}
+
+// ---- Solicitudes repetidas (2026-11-10, pedido de Ivan) ----------------------
+// Dos solicitudes "se empalman" si sus horarios se cruzan, contando el turno que
+// pasa de medianoche (22:00–02:00 del 3 choca con 01:00–03:00 del 4). "Mismo
+// día" = otra solicitud con la misma fecha que no se cruza. Las rechazadas no
+// cuentan (se pueden volver a pedir). Se compara contra lo que la pantalla ya
+// tiene cargado: no gasta lecturas.
+function intervaloDe(fecha, horaInicio, horaFin) {
+  const [y, m, d] = String(fecha || "").split("-").map(Number);
+  const [hi, mi] = String(horaInicio || "").split(":").map(Number);
+  const [hf, mf] = String(horaFin || "").split(":").map(Number);
+  if (!y || !m || !d || isNaN(hi) || isNaN(hf)) return null;
+  const ini = Math.round(Date.UTC(y, m - 1, d) / 6e4) + hi * 60 + (mi || 0);
+  let dur = (hf * 60 + (mf || 0)) - (hi * 60 + (mi || 0));
+  if (dur <= 0) dur += 24 * 60; // cruza medianoche
+  return { ini, fin: ini + dur };
+}
+// otras: solicitudes del MISMO empleado. Regresa { empalmes, mismoDia }.
+function revisarChoques(fecha, horaInicio, horaFin, otras, excluirId) {
+  const yo = intervaloDe(fecha, horaInicio, horaFin);
+  const empalmes = [], mismoDia = [];
+  if (!yo) return { empalmes, mismoDia };
+  otras.forEach(s => {
+    if (s.id === excluirId || s.estatus === "rechazada") return;
+    const o = intervaloDe(s.fecha, s.horaInicio, s.horaFin);
+    if (!o) return;
+    if (yo.ini < o.fin && o.ini < yo.fin) empalmes.push(s);
+    else if (s.fecha === fecha) mismoDia.push(s);
+  });
+  const orden = (a, b) => (a.fecha + a.horaInicio).localeCompare(b.fecha + b.horaInicio);
+  return { empalmes: empalmes.sort(orden), mismoDia: mismoDia.sort(orden) };
+}
+const MESES_CORTOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+function fechaCorta(fechaStr) {
+  const [y, m, d] = String(fechaStr || "").split("-").map(Number);
+  return y && m && d ? `${d} ${MESES_CORTOS[m - 1]}` : (fechaStr || "");
+}
+function fechaCortaIso(iso) {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? "" : `${d.getDate()} ${MESES_CORTOS[d.getMonth()]}`;
 }
 
 function calcularSemanaLaboral(fechaStr) {
@@ -50,6 +95,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
             <span id="horas-calculadas" class="valor-horas">—</span>
           </div>
         </div>
+        <div id="sol-aviso-choque"></div>
         <label>Motivo
           <textarea id="sol-motivo" rows="3" required></textarea>
         </label>
@@ -86,6 +132,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
   const btnCancelar = contenedor.querySelector("#btn-cancelar-edicion");
 
   let editandoId = null;
+  let ultimaLista = []; // mis solicitudes (las llena el onSnapshot de abajo)
 
   function actualizarHorasPreview() {
     if (inputInicio.value && inputFin.value) {
@@ -98,6 +145,46 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
   inputInicio.addEventListener("input", actualizarHorasPreview);
   inputFin.addEventListener("input", actualizarHorasPreview);
 
+  // Aviso de solicitudes repetidas (2026-11-10): se revisa en cuanto hay fecha y
+  // horario, y otra vez al enviar. Empalme con aprobada/pagada o con pendiente =
+  // bloqueo; mismo día sin empalme = aviso y el botón dice "enviar de todos modos".
+  const avisoChoque = contenedor.querySelector("#sol-aviso-choque");
+  const ESTILO_BLOQUEO = "border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:10px 0;background:#FDECEA;border:1px solid #F3C2BC;color:#8a2318;";
+  const ESTILO_AVISO = "border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:10px 0;background:#FFF6E0;border:1px solid #F0D79A;color:#6b4a06;";
+  const describir = (s) => {
+    const base = `${fechaCorta(s.fecha)}, ${s.horaInicio}–${s.horaFin} (${s.horas} h) · <b>${ETIQUETAS_ESTATUS[s.estatus] || s.estatus}</b>`;
+    if (s.estatus !== "aprobada") return base;
+    return base + (s.revisadoPorNombre ? ` por ${escapeHtml(s.revisadoPorNombre)}` : "") + (s.enviadoANominaEn ? ` · <b>enviada a nómina el ${fechaCortaIso(s.enviadoANominaEn)}</b>` : "");
+  };
+  // Regresa "bloqueo" | "aviso" | null y pinta el recuadro correspondiente.
+  function revisarFormulario() {
+    const textoBoton = editandoId ? "Guardar cambios" : "Enviar solicitud";
+    btnGuardar.disabled = false;
+    btnGuardar.textContent = textoBoton;
+    avisoChoque.innerHTML = "";
+    if (!inputFecha.value || !inputInicio.value || !inputFin.value) return null;
+    const { empalmes, mismoDia } = revisarChoques(inputFecha.value, inputInicio.value, inputFin.value, ultimaLista, editandoId);
+    if (empalmes.length) {
+      const pagadaOAprobada = empalmes.filter(s => s.estatus === "aprobada");
+      const pendientes = empalmes.filter(s => s.estatus === "pendiente");
+      avisoChoque.innerHTML = pagadaOAprobada.length
+        ? `<div style="${ESTILO_BLOQUEO}"><b>Ya tienes horas extra en ese horario.</b><br>${pagadaOAprobada.map(describir).join("<br>")}<br>Si fue un error, pide un ajuste sobre esa solicitud en lugar de crear otra.</div>`
+        : `<div style="${ESTILO_BLOQUEO}"><b>Ya enviaste una solicitud en ese horario.</b><br>${pendientes.map(describir).join("<br>")}<br>Si quieres cambiarla, usa <b>Editar</b> en esa solicitud.
+            ${pendientes.length === 1 ? `<div style="margin-top:8px;"><button type="button" class="secundario" id="btn-editar-choque">Editar la pendiente</button></div>` : ""}</div>`;
+      const b = avisoChoque.querySelector("#btn-editar-choque");
+      if (b) b.addEventListener("click", () => entrarModoEdicion(pendientes[0]));
+      btnGuardar.disabled = true;
+      return "bloqueo";
+    }
+    if (mismoDia.length) {
+      avisoChoque.innerHTML = `<div style="${ESTILO_AVISO}"><b>Ese día ya tienes otra solicitud:</b><br>${mismoDia.map(describir).join("<br>")}<br>Como los horarios no se cruzan, sí puedes enviarla si fueron dos bloques distintos.</div>`;
+      btnGuardar.textContent = editandoId ? "Guardar de todos modos" : "Sí, enviar de todos modos";
+      return "aviso";
+    }
+    return null;
+  }
+  [inputFecha, inputInicio, inputFin].forEach(i => i.addEventListener("input", revisarFormulario));
+
   function entrarModoEdicion(s) {
     editandoId = s.id;
     inputFecha.value = s.fecha;
@@ -108,6 +195,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
     tituloForm.textContent = "Editar solicitud";
     btnGuardar.textContent = "Guardar cambios";
     btnCancelar.classList.remove("oculto");
+    revisarFormulario();
     form.scrollIntoView({ behavior: "smooth" });
   }
 
@@ -118,6 +206,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
     tituloForm.textContent = "Nueva solicitud de horas extra";
     btnGuardar.textContent = "Enviar solicitud";
     btnCancelar.classList.add("oculto");
+    revisarFormulario();
   }
 
   btnCancelar.addEventListener("click", salirModoEdicion);
@@ -141,6 +230,9 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
       errorDiv.textContent = "La hora de salida no puede ser igual a la de entrada.";
       return;
     }
+    // Se revisa otra vez al enviar (la lista pudo cambiar mientras escribía).
+    // El aviso de "mismo día" ya se mostró antes de presionar: aquí solo frena el empalme.
+    if (revisarFormulario() === "bloqueo") return;
 
     try {
       if (editandoId) {
@@ -195,12 +287,11 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
 
   const q = query(collection(db, "solicitudes"), where("empleadoId", "==", uid));
 
-  let ultimaLista = [];
-
   onSnapshot(q, (snap) => {
     ultimaLista = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     ultimaLista.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
     renderTabla(ultimaLista);
+    revisarFormulario();
   }, (err) => {
     errorDiv.textContent = "No se pudieron cargar tus solicitudes: " + err.message;
   });
