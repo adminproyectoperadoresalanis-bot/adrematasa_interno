@@ -388,8 +388,11 @@ function inyectarEstilos() {
     .cc-th { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; } .cc-th b { font-size:14px; } .cc-der { margin-left:auto; }
     .cc-num { width:22px; height:22px; border-radius:50%; color:#fff; font-size:12px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; background:#185FA5; }
     .cc-vac .cc-num { background:#8a7f73; } .cc-expo .cc-num { background:#7A4FA0; }
-    .cc-ruta { display:grid; grid-template-columns:1fr 1fr 120px; gap:8px; }
-    .cc-cobro { display:grid; grid-template-columns:200px 1fr; gap:12px; align-items:end; margin-top:6px; }
+    .cc-ruta { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) 120px; gap:8px; }
+    .cc-cobro { display:grid; grid-template-columns:minmax(0,200px) minmax(0,1fr); gap:12px; align-items:end; margin-top:6px; }
+    .cc-ruta > div, .cc-cobro > div { min-width:0; }
+    .cc-ruta input, .cc-cobro input { width:100%; max-width:100%; box-sizing:border-box; min-width:0; }
+    .cc-tramo { min-width:0; overflow:hidden; } .cc-fijo { overflow:hidden; text-overflow:ellipsis; }
     .cc-fijo { border:1px solid #e2ddd5; border-radius:8px; padding:8px 10px; background:#fff; font-size:13.5px; min-height:38px; color:#4a3e33; }
     .cc-lig { font-size:11px; color:#6b5f52; background:#F2EDE6; border-radius:8px; padding:1px 7px; }
     .cc-enlace { font-size:11.5px; color:#6b5f52; margin:4px 0 0 18px; min-height:4px; }
@@ -407,9 +410,10 @@ function inyectarEstilos() {
     .cc-tabla tr.cc-tot td { font-weight:800; border-top:2px solid #2C1E0F; border-bottom:0; }
     .cc-meta { margin-top:12px; background:#FBF6EC; border:1px solid #EAD9B8; border-radius:10px; padding:10px 12px; font-size:13px; line-height:1.8; }
     @media (max-width:700px) {
-      .cc-ruta { grid-template-columns:1fr 1fr; } .cc-ruta > div:last-child { grid-column:span 2; }
-      .cc-cobro { grid-template-columns:1fr; } .cc-big { font-size:24px; } .cc-sep { border-left:0; padding-left:0; }
-      .cc-tabla th, .cc-tabla td { padding:6px 5px; font-size:12px; }
+      .cc-ruta { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } .cc-ruta > div:last-child { grid-column:span 2; }
+      .cc-cobro { grid-template-columns:minmax(0,1fr); } .cc-big { font-size:24px; } .cc-sep { border-left:0; padding-left:0; }
+      .cc-tabla th, .cc-tabla td { padding:6px 4px; font-size:12px; } .cc-tabla .cc-c-ruta { display:none; } .cc-tabla th { white-space:normal; }
+      .cc-tabla .ca-sem { display:block; width:max-content; margin:2px 0 0 auto; }
     }
     .ca-sem.co-s-v { background:#EAF3DE; color:#3B7A1E; } .ca-sem.co-s-a { background:#FBE3A8; color:#7a3e06; } .ca-sem.co-s-r { background:#FBE4E1; color:#A32D2D; }
     .co-auto { font-size:10px; font-weight:800; padding:2px 7px; border-radius:9px; background:#EAF1FB; color:#185FA5; }
@@ -1019,7 +1023,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       if (!v) { caja.innerHTML = `<p class="nota" style="margin:0;">Captura los km de la importación y de la exportación para ver el ingreso por km de la vuelta.</p>`; return; }
       const pk = (x) => `${(x / v.km * 100).toFixed(1)}%`;
       const usar = (o, cls) => o.cobro <= 0 ? `<span class="nota">ya llegas con la importación</span>` : `<b>${fmt(o.cobro)}</b> (${dinero(o.porKm)}/km del tramo) <button type="button" class="ca-pill ${cls} cc-usar" data-expo="${o.cobro}">usar</button>`;
-      const filaT = (n, nombre, color, ruta, km, cobro, d) => `<tr><td><b style="color:${color}">${n} · ${nombre}</b></td><td>${esc(ruta)}</td><td class="n">${miles(km)}</td><td class="n">${cobro == null ? "—" : fmt(cobro)}</td>
+      const filaT = (n, nombre, color, ruta, km, cobro, d) => `<tr><td><b style="color:${color}">${n} · ${nombre}</b></td><td class="cc-c-ruta">${esc(ruta)}</td><td class="n">${miles(km)}</td><td class="n">${cobro == null ? "—" : fmt(cobro)}</td>
         <td class="n">${d ? `${dinero(d.ing)} <span class="ca-sem ${d.sem}">${SEM[d.sem]}</span>` : "—"}</td></tr>`;
       caja.innerHTML = `
         <div class="cc-top">
@@ -1029,11 +1033,11 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
         </div>
         <div class="cc-kms"><span style="width:${pk(v.i.km)};background:${COLOR.impo}">Impo ${miles(v.i.km)} km</span>${v.kv ? `<span style="width:${pk(v.kv)};background:${COLOR.vac}">Vacío ${miles(v.kv)}</span>` : ""}<span style="width:${pk(v.e.km)};background:${COLOR.expo}">Expo ${miles(v.e.km)} km</span></div>
         <div class="nota">${v.kv ? `${Math.round(v.kv / v.km * 100)} % de la vuelta en vacío.` : "Sin vacío."}${v.faltaKmVacio ? ` <b style="color:#A32D2D;">Falta escribir los km del vacío.</b>` : ""}${!v.i.propio || !v.e.propio ? " Los tramos sin cobro escrito van con la sugerida." : ""}</div>
-        <div class="tabla-wrap"><table class="cc-tabla"><thead><tr><th>Tramo</th><th>Ruta</th><th class="n">Km</th><th class="n">Cobro</th><th class="n">Ing./km del tramo</th></tr></thead><tbody>
+        <div class="tabla-wrap"><table class="cc-tabla"><thead><tr><th>Tramo</th><th class="cc-c-ruta">Ruta</th><th class="n">Km</th><th class="n">Cobro</th><th class="n">Ing./km del tramo</th></tr></thead><tbody>
           ${filaT(1, "Importación", COLOR.impo, `${corto(c.impo.origen) || "—"} → ${corto(c.impo.destino) || "—"}`, v.i.km, v.i.cobro, v.i)}
           ${vacioSi() ? filaT(2, "Vacío", COLOR.vac, `${corto(c.impo.destino) || "—"} → ${corto(c.expo.origen) || "—"}`, v.kv, v.cv || null, null) : ""}
           ${filaT(vacioSi() ? 3 : 2, "Exportación", COLOR.expo, `${corto(c.expo.origen) || "—"} → ${corto(c.expo.destino) || "—"}`, v.e.km, v.e.cobro, v.e)}
-          <tr class="cc-tot"><td>Vuelta completa</td><td></td><td class="n">${miles(v.km)}</td><td class="n">${fmt(v.ingreso)}</td><td class="n">${dinero(v.ing)}</td></tr>
+          <tr class="cc-tot"><td>Vuelta completa</td><td class="cc-c-ruta"></td><td class="n">${miles(v.km)}</td><td class="n">${fmt(v.ingreso)}</td><td class="n">${dinero(v.ing)}</td></tr>
         </tbody></table></div>
         <div class="cc-meta"><b>¿Cuánto cobrar en la expo?</b> Con la importación en ${fmt(v.i.cobro)}${v.cv ? ` y el vacío en ${fmt(v.cv)}` : ""}:<br>
           para llegar a <b>verde (${dinero(v.meta.verde)}/km)</b> la expo debe cobrar ${usar(v.paraVerde, "ca-pv")}<br>
