@@ -119,11 +119,16 @@ const UMBRALES_BASE = { // valores del CRM (nacional = importación hasta que se
   expo_rc_verde: 100, expo_rc_ambar: 80, expo_rl_verde: 45, expo_rl_ambar: 40,
   impo_rc_verde: 100, impo_rc_ambar: 80, impo_rl_verde: 35, impo_rl_ambar: 33,
   dom_rc_verde: 100, dom_rc_ambar: 80, dom_rl_verde: 35, dom_rl_ambar: 33,
+  circ_verde: 35, circ_ambar: 33, // 2026-11-09: meta de la vuelta completa (Calculadora → Circuito completo)
 };
 export function umbralDe(ajustes, servicio, km) {
   const s = SERV_UMBRAL[servicio] || "dom", t = km && km <= KM_RUTA_CORTA ? "rc" : "rl";
   const u = { ...UMBRALES_BASE, ...((ajustes && ajustes.umbrales) || {}) };
   return { verde: Number(u[`${s}_${t}_verde`]) || 0, ambar: Number(u[`${s}_${t}_ambar`]) || 0, tramo: t.toUpperCase() };
+}
+export function metaCircuito(ajustes) {
+  const u = { ...UMBRALES_BASE, ...((ajustes && ajustes.umbrales) || {}) };
+  return { verde: Number(u.circ_verde) || 0, ambar: Number(u.circ_ambar) || 0 };
 }
 const tipoRutaTxt = (km) => km ? (km <= KM_RUTA_CORTA ? "RC" : "RL") : "";
 
@@ -378,6 +383,34 @@ function inyectarEstilos() {
     .ca-barra { height:10px; border-radius:6px; position:relative; }
     .ca-barra i { position:absolute; top:-5px; width:4px; height:20px; border-radius:2px; background:#2C1E0F; }
     .ca-sem { font-size:10px; font-weight:800; padding:2px 7px; border-radius:9px; }
+    .cc-tramo { border:1px solid #e2ddd5; border-left:5px solid #185FA5; border-radius:12px; padding:12px 14px; margin-top:10px; background:#fff; }
+    .cc-vac { border-left-color:#8a7f73; background:#FBFAF8; } .cc-expo { border-left-color:#7A4FA0; }
+    .cc-th { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; } .cc-th b { font-size:14px; } .cc-der { margin-left:auto; }
+    .cc-num { width:22px; height:22px; border-radius:50%; color:#fff; font-size:12px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; background:#185FA5; }
+    .cc-vac .cc-num { background:#8a7f73; } .cc-expo .cc-num { background:#7A4FA0; }
+    .cc-ruta { display:grid; grid-template-columns:1fr 1fr 120px; gap:8px; }
+    .cc-cobro { display:grid; grid-template-columns:200px 1fr; gap:12px; align-items:end; margin-top:6px; }
+    .cc-fijo { border:1px solid #e2ddd5; border-radius:8px; padding:8px 10px; background:#fff; font-size:13.5px; min-height:38px; color:#4a3e33; }
+    .cc-lig { font-size:11px; color:#6b5f52; background:#F2EDE6; border-radius:8px; padding:1px 7px; }
+    .cc-enlace { font-size:11.5px; color:#6b5f52; margin:4px 0 0 18px; min-height:4px; }
+    .cc-usar { border:1px solid currentColor; cursor:pointer; font:inherit; font-size:11px; font-weight:700; margin:2px 4px 2px 0; }
+    .cc-ley { display:flex; gap:14px; font-size:11.5px; color:#6b5f52; margin-top:6px; flex-wrap:wrap; } .cc-ley i { display:inline-block; width:14px; height:4px; border-radius:2px; margin-right:5px; vertical-align:middle; }
+    .cc-res { border:2px solid #2C1E0F; border-radius:14px; padding:14px 16px; margin-top:14px; background:#fff; }
+    .cc-top { display:flex; gap:18px; align-items:center; flex-wrap:wrap; } .cc-sep { border-left:1px solid #e2ddd5; padding-left:18px; }
+    .cc-et { font-size:11px; color:#6b5f52; text-transform:uppercase; letter-spacing:.4px; font-weight:700; }
+    .cc-big { font-size:30px; font-weight:800; }
+    .cc-kms { display:flex; height:26px; border-radius:7px; overflow:hidden; margin:12px 0 4px; font-size:11px; color:#fff; font-weight:700; }
+    .cc-kms span { display:flex; align-items:center; justify-content:center; white-space:nowrap; overflow:hidden; }
+    .cc-tabla { width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; }
+    .cc-tabla th { text-align:left; font-size:10.5px; color:#6b5f52; text-transform:uppercase; padding:6px 8px; border-bottom:1px solid #e2ddd5; white-space:nowrap; }
+    .cc-tabla td { padding:7px 8px; border-bottom:1px solid #f0ece6; } .cc-tabla .n { text-align:right; white-space:nowrap; }
+    .cc-tabla tr.cc-tot td { font-weight:800; border-top:2px solid #2C1E0F; border-bottom:0; }
+    .cc-meta { margin-top:12px; background:#FBF6EC; border:1px solid #EAD9B8; border-radius:10px; padding:10px 12px; font-size:13px; line-height:1.8; }
+    @media (max-width:700px) {
+      .cc-ruta { grid-template-columns:1fr 1fr; } .cc-ruta > div:last-child { grid-column:span 2; }
+      .cc-cobro { grid-template-columns:1fr; } .cc-big { font-size:24px; } .cc-sep { border-left:0; padding-left:0; }
+      .cc-tabla th, .cc-tabla td { padding:6px 5px; font-size:12px; }
+    }
     .ca-sem.co-s-v { background:#EAF3DE; color:#3B7A1E; } .ca-sem.co-s-a { background:#FBE3A8; color:#7a3e06; } .ca-sem.co-s-r { background:#FBE4E1; color:#A32D2D; }
     .co-auto { font-size:10px; font-weight:800; padding:2px 7px; border-radius:9px; background:#EAF1FB; color:#185FA5; }
     .co-conds-ro { border:1px solid #e2ddd5; border-radius:12px; padding:10px 14px; background:#fbfaf8; font-size:13px; line-height:1.6; }
@@ -631,6 +664,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const lugares = [...new Set([...rutas.values()].flatMap(r => [r.origen, r.destino]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
     ov.innerHTML = `<div class="modal-tarjeta ca" style="max-width:860px;width:100%;max-height:94vh;overflow:auto;">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><h2 style="margin:0;font-size:18px;">Calculadora</h2><button type="button" class="secundario co-mini" data-cerrar>✕</button></div>
+      <div style="margin:10px 0 4px;"><span class="co-seg"><button type="button" class="activo">Una ruta</button><button type="button" id="ca-a-circ">Circuito completo</button></span></div>
       <p class="nota" style="margin:4px 0 12px;">Tarifa de una ruta con los umbrales de Configuración. No pide cliente ni guarda cotización.</p>
       ${ajustes.orsKey ? "" : `<datalist id="ca-lugares">${lugares.map(l => `<option value="${esc(l)}">`).join("")}</datalist>`}
       <div class="ca-g2">
@@ -667,6 +701,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const hintC = (t) => { q("#ca-hint").innerHTML = t || ""; };
     const cerrar = () => { if (mapa) mapa.remove(); ov.remove(); };
     ov.querySelectorAll("[data-cerrar]").forEach(b => b.addEventListener("click", cerrar));
+    q("#ca-a-circ").addEventListener("click", () => { cerrar(); abrirCircuito(); });
     const segC = (caja, campo, opciones) => {
       caja.innerHTML = opciones.map(([v, t]) => `<button type="button" class="${String(c[campo]) === String(v) ? "activo" : ""}" data-v="${esc(v)}">${t}</button>`).join("");
       caja.querySelectorAll("button").forEach(b => b.addEventListener("click", () => { c[campo] = b.dataset.v; pintar(); }));
@@ -831,6 +866,311 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     });
     pintar(); pintarVias();
     if (c.origenCoord && c.destinoCoord && ajustes.orsKey) calcular();
+  }
+  // ---- Calculadora · Circuito completo (2026-11-09, pedido de Ivan) ----
+  // Vuelta completa: 1 Importación, 2 Vacío de reposicionamiento (Sí/No) y
+  // 3 Exportación. Cada tramo con sus km por camión (catálogo u ORS) y su cobro
+  // (si no escribes cobro, se toma la sugerida del tramo). Ingreso por km de la
+  // vuelta = cobros (sin cruce) ÷ km de los tres tramos, en MXN; semáforo con la
+  // meta del circuito (Configuración → Comercial; 35 verde / 33 ámbar). Dice
+  // cuánto cobrar en la expo para llegar a verde o a ámbar. Solo consulta: no
+  // guarda nada. El último circuito se conserva mientras la página siga abierta.
+  let circ = null;
+  function abrirCircuito() {
+    const tramoVacio = () => ({ origen: "", destino: "", km: "", cobro: "", cruceSi: "no", aduana: CRUCES_BASE[0].id });
+    if (!circ) circ = { moneda: "MXN", tc: ajustes.tipoCambio, carga: "refrigerada", vacio: "si", impo: tramoVacio(), vac: { km: "", cobro: "", clave: "" }, expo: tramoVacio() };
+    const c = circ, celular = window.innerWidth <= 700;
+    const SERV = { impo: "importacion", expo: "exportacion" }, COLOR = { impo: "#185FA5", vac: "#8a7f73", expo: "#7A4FA0" };
+    const lineas = {}; let mapa = null, capa = null;
+    const lugares = [...new Set([...rutas.values()].flatMap(r => [r.origen, r.destino]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
+    const ph = ajustes.orsKey ? "Escribe la ciudad…" : "Ciudad, estado";
+    const cajaTramo = (k, n, titulo) => `<div class="cc-tramo cc-${k}">
+        <div class="cc-th"><span class="cc-num">${n}</span><b>${titulo}</b><span id="cc-${k}-rl"></span><span class="cc-der" id="cc-${k}-sug"></span></div>
+        <div class="cc-ruta">
+          <div><label>Origen</label><div class="co-ac"><input type="text" id="cc-${k}-or" list="cc-lugares" value="${esc(c[k].origen)}" placeholder="${ph}" autocomplete="off"></div></div>
+          <div><label>Destino</label><div class="co-ac"><input type="text" id="cc-${k}-de" list="cc-lugares" value="${esc(c[k].destino)}" placeholder="${ph}" autocomplete="off"></div></div>
+          <div><label>Km (camión)</label><input type="number" min="1" id="cc-${k}-km" value="${esc(c[k].km)}"></div></div>
+        <div class="nota" id="cc-${k}-hint" style="margin-top:4px;min-height:15px;"></div>
+        <div class="cc-cobro"><div><label>Cobro (flete)</label><input type="number" min="0" step="0.01" id="cc-${k}-cobro" value="${esc(c[k].cobro)}" placeholder="Vacío = sugerida"></div><div id="cc-${k}-res"></div></div>
+        <div id="cc-${k}-cruce" style="margin-top:8px;"></div></div>`;
+    const ov = document.createElement("div");
+    ov.className = "modal-overlay";
+    ov.innerHTML = `<div class="modal-tarjeta ca" style="max-width:860px;width:100%;max-height:94vh;overflow:auto;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><h2 style="margin:0;font-size:18px;">Calculadora</h2><button type="button" class="secundario co-mini" data-cerrar>✕</button></div>
+      <div style="margin:10px 0 4px;"><span class="co-seg"><button type="button" id="cc-a-ruta">Una ruta</button><button type="button" class="activo">Circuito completo</button></span></div>
+      <p class="nota" style="margin:6px 0 10px;">Importación, vacío de reposicionamiento y exportación: ingreso por km de la vuelta completa. Solo consulta, no guarda nada.</p>
+      ${ajustes.orsKey ? "" : `<datalist id="cc-lugares">${lugares.map(l => `<option value="${esc(l)}">`).join("")}</datalist>`}
+      <div class="ca-g4">
+        <div><label>Moneda</label><span class="co-seg" id="cc-mon"></span></div>
+        <div><label>Tipo de carga</label><span class="co-seg" id="cc-carga"></span></div>
+        <div id="cc-tc-caja"><label>Tipo de cambio</label><input type="number" step="0.01" id="cc-tc" value="${esc(c.tc)}"></div>
+      </div>
+      ${celular ? `<details id="cc-det" style="margin-top:8px;"><summary class="co-link" style="font-size:13px;margin:4px 0;">Ver mapa de la vuelta</summary>` : ""}
+      <div class="co-mapa ca-mapa" id="cc-mapa" style="margin-top:10px;"><p class="nota" style="padding:12px;">El mapa aparece cuando hay rutas.</p></div>
+      <div class="cc-ley"><span><i style="background:${COLOR.impo}"></i>Importación</span><span><i style="background:${COLOR.vac}"></i>Vacío</span><span><i style="background:${COLOR.expo}"></i>Exportación</span></div>
+      ${celular ? `</details>` : ""}
+      ${cajaTramo("impo", 1, "Importación")}
+      <div class="cc-enlace" id="cc-enl-1"></div>
+      <div class="cc-tramo cc-vac">
+        <div class="cc-th"><span class="cc-num">2</span><b>Vacío de reposicionamiento</b><span class="cc-der co-seg" id="cc-vacsi"></span></div>
+        <div id="cc-vac-cuerpo">
+          <div class="cc-ruta">
+            <div><label>Desde</label><div class="cc-fijo" id="cc-vac-de"></div></div>
+            <div><label>Hasta</label><div class="cc-fijo" id="cc-vac-a"></div></div>
+            <div><label>Km (camión)</label><input type="number" min="0" id="cc-vac-km" value="${esc(c.vac.km)}"></div></div>
+          <div class="nota" id="cc-vac-hint" style="margin-top:4px;min-height:15px;"></div>
+          <div class="cc-cobro"><div><label>Cobro por reposicionamiento</label><input type="number" min="0" step="0.01" id="cc-vac-cobro" value="${esc(c.vac.cobro)}" placeholder="0.00 (opcional)"></div>
+            <div class="nota">Normalmente no se cobra: suma km pero no ingreso. Si al cliente le cobras el movimiento en vacío, escríbelo aquí.</div></div>
+        </div>
+        <div class="nota" id="cc-vac-no">Sin vacío: la exportación sale de donde terminó la importación.</div>
+      </div>
+      <div class="cc-enlace" id="cc-enl-2"></div>
+      ${cajaTramo("expo", 3, "Exportación")}
+      <p class="nota" style="margin:6px 0 0;">El cruce va aparte del flete: no entra en el ingreso por km.</p>
+      <div class="cc-res" id="cc-res"></div>
+      <div class="error" id="cc-err"></div>
+      <div class="co-acciones"><button type="button" class="secundario" id="cc-copiar">Copiar resumen</button></div>
+    </div>`;
+    document.body.appendChild(ov);
+    const q = (s) => ov.querySelector(s);
+    const errC = (t) => { q("#cc-err").textContent = t || ""; };
+    const hint = (k, t) => { q(`#cc-${k}-hint`).innerHTML = t || ""; };
+    const cerrar = () => { if (mapa) mapa.remove(); ov.remove(); };
+    ov.querySelectorAll("[data-cerrar]").forEach(b => b.addEventListener("click", cerrar));
+    q("#cc-a-ruta").addEventListener("click", () => { cerrar(); abrirCalculadora(); });
+    const segC = (caja, obj, campo, opciones, alCambiar) => {
+      caja.innerHTML = opciones.map(([v, t]) => `<button type="button" class="${String(obj[campo]) === String(v) ? "activo" : ""}" data-v="${esc(v)}">${t}</button>`).join("");
+      caja.querySelectorAll("button").forEach(b => b.addEventListener("click", () => { obj[campo] = b.dataset.v; (alCambiar || pintar)(); }));
+    };
+    const fmt = (n) => c.moneda === "USD" ? dinero(n, "USD") : `${dinero(n)} MXN`;
+    const r2 = (n) => Math.round(n * 100) / 100;
+    const aMxn = (x) => c.moneda === "USD" ? x * (num(c.tc) || 0) : x;
+    const deMxn = (x) => c.moneda === "USD" ? x / (num(c.tc) || 1) : x;
+    const semDe = (ing, u) => ing >= u.verde ? "co-s-v" : ing >= u.ambar ? "co-s-a" : "co-s-r";
+    const SEM = { "co-s-v": "VERDE", "co-s-a": "ÁMBAR", "co-s-r": "ROJO" };
+    const corto = (t) => String(t || "").split(",")[0].trim();
+    const vacioSi = () => c.vacio === "si";
+
+    // Números de un tramo cargado (impo / expo). Sin cobro escrito se usa la sugerida.
+    function datosTramo(k) {
+      const t = c[k], km = num(t.km);
+      if (!km) return null;
+      const u = umbralDe(ajustes, SERV[k], km);
+      const sug = r2(deMxn(km * u.verde)), min = r2(deMxn(km * u.ambar));
+      const propio = num(t.cobro), cobro = propio != null ? propio : sug, ing = aMxn(cobro) / km;
+      return { km, u, sug, min, cobro, propio: propio != null, ing, sem: semDe(ing, u) };
+    }
+    function vuelta() {
+      const i = datosTramo("impo"), e = datosTramo("expo");
+      if (!i || !e) return null;
+      const kv = vacioSi() ? (num(c.vac.km) || 0) : 0, cv = vacioSi() ? (num(c.vac.cobro) || 0) : 0;
+      const km = i.km + kv + e.km, ingreso = i.cobro + cv + e.cobro, mxn = aMxn(ingreso);
+      const ing = mxn / km, cargado = mxn / (i.km + e.km), meta = metaCircuito(ajustes);
+      const falta = (m) => { const x = m * km - aMxn(i.cobro) - aMxn(cv); return { cobro: r2(deMxn(x)), porKm: x / e.km }; };
+      return { i, e, kv, cv, km, ingreso, ing, cargado, meta, sem: semDe(ing, meta), paraVerde: falta(meta.verde), paraAmbar: falta(meta.ambar), faltaKmVacio: vacioSi() && !num(c.vac.km) };
+    }
+
+    function pintar() {
+      // Al cambiar de moneda, los cobros escritos se convierten al tipo de cambio.
+      segC(q("#cc-mon"), { moneda: c.moneda }, "moneda", [["MXN", "MXN"], ["USD", "USD"]], function () {});
+      q("#cc-mon").querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+        const nueva = b.dataset.v, tc = num(c.tc) || 1;
+        if (nueva === c.moneda) return;
+        [c.impo, c.vac, c.expo].forEach(t => {
+          const x = num(t.cobro); if (x == null) return;
+          // Ida y vuelta sin tocarlo: regresa el importe original (sin centavos de redondeo).
+          if (t._orig && t._orig.moneda === nueva && t._orig.convertido === String(t.cobro)) { t.cobro = t._orig.valor; t._orig = null; return; }
+          const nuevo = String(r2(nueva === "USD" ? x / tc : x * tc));
+          t._orig = { moneda: c.moneda, valor: String(t.cobro), convertido: nuevo }; t.cobro = nuevo;
+        });
+        c.moneda = nueva;
+        q("#cc-impo-cobro").value = c.impo.cobro; q("#cc-vac-cobro").value = c.vac.cobro; q("#cc-expo-cobro").value = c.expo.cobro;
+        pintar();
+      }));
+      segC(q("#cc-carga"), c, "carga", Object.entries(CARGAS));
+      q("#cc-tc-caja").style.display = c.moneda === "USD" ? "" : "none";
+      ["impo", "expo"].forEach(pintarTramo);
+      // Vacío
+      segC(q("#cc-vacsi"), c, "vacio", [["si", "Sí hay vacío"], ["no", "No"]], () => { if (!vacioSi()) encadenarSinVacio(); kmVacio(); pintar(); dibujar(); });
+      q("#cc-vac-cuerpo").style.display = vacioSi() ? "" : "none";
+      q("#cc-vac-no").style.display = vacioSi() ? "none" : "";
+      q("#cc-vac-de").innerHTML = c.impo.destino ? `${esc(c.impo.destino)} <span class="cc-lig">del tramo 1</span>` : `<span class="nota">destino de la importación</span>`;
+      q("#cc-vac-a").innerHTML = c.expo.origen ? `${esc(c.expo.origen)} <span class="cc-lig">del tramo 3</span>` : `<span class="nota">origen de la exportación</span>`;
+      q("#cc-enl-1").textContent = c.impo.destino ? `↓ el remolque queda en ${corto(c.impo.destino)}` : "";
+      q("#cc-enl-2").textContent = c.expo.origen ? `↓ carga de regreso en ${corto(c.expo.origen)}` : "";
+      pintarResultado();
+    }
+    function pintarTramo(k) {
+      const d = datosTramo(k), t = c[k];
+      q(`#cc-${k}-rl`).innerHTML = d ? `<span class="ca-tramo">${d.u.tramo}</span>` : "";
+      q(`#cc-${k}-sug`).innerHTML = d ? `<span class="ca-pill ca-pv">${dinero(d.u.verde)}/km sugerida</span>` : "";
+      q(`#cc-${k}-res`).innerHTML = d ? `<button type="button" class="ca-pill ca-pv cc-usar" data-usar="${d.sug}">usar sugerida ${fmt(d.sug)}</button><button type="button" class="ca-pill ca-pa cc-usar" data-usar="${d.min}">mínima ${fmt(d.min)}</button>
+          <span style="font-size:13px;white-space:nowrap;"> · este tramo <b>${dinero(d.ing)}/km</b> <span class="ca-sem ${d.sem}">${SEM[d.sem]}</span>${d.propio ? "" : ` <span class="nota">(con la sugerida)</span>`}</span>`
+        : `<span class="nota">Escribe la ruta o los km para ver la tarifa.</span>`;
+      q(`#cc-${k}-res`).querySelectorAll("[data-usar]").forEach(b => b.addEventListener("click", () => { t.cobro = b.dataset.usar; q(`#cc-${k}-cobro`).value = t.cobro; pintar(); }));
+      const cc = q(`#cc-${k}-cruce`);
+      cc.innerHTML = `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;"><label style="margin:0;">Cruce</label><span class="co-seg" id="cc-${k}-cr"></span>
+        ${t.cruceSi === "si" ? `<span class="co-seg" id="cc-${k}-ad"></span><span style="font-size:13px;">${montoCruce(t.aduana, c.moneda) ? fmt(montoCruce(t.aduana, c.moneda)) : "sin monto en Configuración"} <small class="nota">(aparte del flete)</small></span>` : ""}</div>`;
+      segC(q(`#cc-${k}-cr`), t, "cruceSi", [["no", "No"], ["si", "Sí"]]);
+      if (q(`#cc-${k}-ad`)) segC(q(`#cc-${k}-ad`), t, "aduana", crucesDe(ajustes).map(a => [a.id, a.corto]));
+    }
+    function pintarResultado() {
+      const v = vuelta(), caja = q("#cc-res");
+      if (!v) { caja.innerHTML = `<p class="nota" style="margin:0;">Captura los km de la importación y de la exportación para ver el ingreso por km de la vuelta.</p>`; return; }
+      const pk = (x) => `${(x / v.km * 100).toFixed(1)}%`;
+      const usar = (o, cls) => o.cobro <= 0 ? `<span class="nota">ya llegas con la importación</span>` : `<b>${fmt(o.cobro)}</b> (${dinero(o.porKm)}/km del tramo) <button type="button" class="ca-pill ${cls} cc-usar" data-expo="${o.cobro}">usar</button>`;
+      const filaT = (n, nombre, color, ruta, km, cobro, d) => `<tr><td><b style="color:${color}">${n} · ${nombre}</b></td><td>${esc(ruta)}</td><td class="n">${miles(km)}</td><td class="n">${cobro == null ? "—" : fmt(cobro)}</td>
+        <td class="n">${d ? `${dinero(d.ing)} <span class="ca-sem ${d.sem}">${SEM[d.sem]}</span>` : "—"}</td></tr>`;
+      caja.innerHTML = `
+        <div class="cc-top">
+          <div><div class="cc-et">Ingreso por km de la vuelta</div><span class="cc-big co-ing ${v.sem}">${dinero(v.ing)}</span> <span class="ca-sem ${v.sem}">${SEM[v.sem]}</span>
+            <div class="nota">${fmt(v.ingreso)} ÷ ${miles(v.km)} km recorridos · meta verde ${dinero(v.meta.verde)} · ámbar ${dinero(v.meta.ambar)}</div></div>
+          ${v.kv ? `<div class="cc-sep"><div class="nota">Solo km con carga</div><b style="font-size:18px;">${dinero(v.cargado)}/km</b><div class="nota">${miles(v.i.km + v.e.km)} km · el vacío te baja <b>${dinero(v.cargado - v.ing)}/km</b></div></div>` : ""}
+        </div>
+        <div class="cc-kms"><span style="width:${pk(v.i.km)};background:${COLOR.impo}">Impo ${miles(v.i.km)} km</span>${v.kv ? `<span style="width:${pk(v.kv)};background:${COLOR.vac}">Vacío ${miles(v.kv)}</span>` : ""}<span style="width:${pk(v.e.km)};background:${COLOR.expo}">Expo ${miles(v.e.km)} km</span></div>
+        <div class="nota">${v.kv ? `${Math.round(v.kv / v.km * 100)} % de la vuelta en vacío.` : "Sin vacío."}${v.faltaKmVacio ? ` <b style="color:#A32D2D;">Falta escribir los km del vacío.</b>` : ""}${!v.i.propio || !v.e.propio ? " Los tramos sin cobro escrito van con la sugerida." : ""}</div>
+        <div class="tabla-wrap"><table class="cc-tabla"><thead><tr><th>Tramo</th><th>Ruta</th><th class="n">Km</th><th class="n">Cobro</th><th class="n">Ing./km del tramo</th></tr></thead><tbody>
+          ${filaT(1, "Importación", COLOR.impo, `${corto(c.impo.origen) || "—"} → ${corto(c.impo.destino) || "—"}`, v.i.km, v.i.cobro, v.i)}
+          ${vacioSi() ? filaT(2, "Vacío", COLOR.vac, `${corto(c.impo.destino) || "—"} → ${corto(c.expo.origen) || "—"}`, v.kv, v.cv || null, null) : ""}
+          ${filaT(vacioSi() ? 3 : 2, "Exportación", COLOR.expo, `${corto(c.expo.origen) || "—"} → ${corto(c.expo.destino) || "—"}`, v.e.km, v.e.cobro, v.e)}
+          <tr class="cc-tot"><td>Vuelta completa</td><td></td><td class="n">${miles(v.km)}</td><td class="n">${fmt(v.ingreso)}</td><td class="n">${dinero(v.ing)}</td></tr>
+        </tbody></table></div>
+        <div class="cc-meta"><b>¿Cuánto cobrar en la expo?</b> Con la importación en ${fmt(v.i.cobro)}${v.cv ? ` y el vacío en ${fmt(v.cv)}` : ""}:<br>
+          para llegar a <b>verde (${dinero(v.meta.verde)}/km)</b> la expo debe cobrar ${usar(v.paraVerde, "ca-pv")}<br>
+          para llegar a <b>ámbar (${dinero(v.meta.ambar)}/km)</b> la expo debe cobrar ${usar(v.paraAmbar, "ca-pa")}</div>`;
+      caja.querySelectorAll("[data-expo]").forEach(b => b.addEventListener("click", () => { c.expo.cobro = b.dataset.expo; q("#cc-expo-cobro").value = c.expo.cobro; pintar(); }));
+    }
+
+    // ---- Km por tramo: catálogo u ORS ----
+    async function kmTramo(k) {
+      errC();
+      const t = c[k];
+      const cat = t.origen && t.destino ? rutaDelCatalogo(t.origen, t.destino) : null;
+      if (cat) {
+        if (cat.origenCoord && !t.origenCoord) t.origenCoord = cat.origenCoord;
+        if (cat.destinoCoord && !t.destinoCoord) t.destinoCoord = cat.destinoCoord;
+        if (cat.km) { t.km = cat.km; q(`#cc-${k}-km`).value = t.km; }
+      }
+      if (!ajustes.orsKey || !t.origenCoord || !t.destinoCoord) {
+        hint(k, cat && cat.km ? "del catálogo" : (t.origen && t.destino ? (ajustes.orsKey ? "Elige origen y destino de la lista para calcular los km." : "Ruta nueva: escribe los km.") : ""));
+        pintar(); return;
+      }
+      hint(k, "Calculando ruta de camión…");
+      try {
+        const res = await orsRuta([t.origenCoord, t.destinoCoord], ajustes.orsKey);
+        lineas[k] = res.linea;
+        if (cat && cat.km) hint(k, cat.km === res.km ? "del catálogo · igual a ORS" : `del catálogo (${miles(cat.km)} km) · ORS ${miles(res.km)} km`);
+        else { t.km = res.km; hint(k, `${miles(res.km)} km por ORS (camión)`); }
+        q(`#cc-${k}-km`).value = t.km;
+      } catch (x) { hint(k, ""); errC(x.message || "No se pudo calcular la ruta."); }
+      pintar(); dibujar();
+    }
+    // Vacío: del destino de la impo al origen de la expo. Se recalcula cuando cambian esos puntos.
+    async function kmVacio() {
+      const de = c.impo.destino, a = c.expo.origen, clave = `${de}|${a}`;
+      if (!vacioSi() || !de || !a || clave === c.vac.clave) { pintar(); return; }
+      const hv = (t) => { q("#cc-vac-hint").innerHTML = t || ""; };
+      const cat = rutaDelCatalogo(de, a);
+      if (cat && cat.km) { c.vac.km = cat.km; q("#cc-vac-km").value = c.vac.km; c.vac.clave = clave; hv("del catálogo"); }
+      const p1 = c.impo.destinoCoord || (cat && cat.origenCoord), p2 = c.expo.origenCoord || (cat && cat.destinoCoord);
+      if (ajustes.orsKey && p1 && p2) {
+        hv(cat && cat.km ? "del catálogo · calculando trazo…" : "Calculando ruta de camión…");
+        try {
+          const res = await orsRuta([p1, p2], ajustes.orsKey);
+          lineas.vac = res.linea;
+          if (!(cat && cat.km)) { c.vac.km = res.km; q("#cc-vac-km").value = c.vac.km; hv(`${miles(res.km)} km por ORS (camión)`); } else hv("del catálogo");
+          c.vac.clave = clave;
+        } catch (x) { hv(""); errC(x.message || "No se pudo calcular el vacío."); }
+      } else if (!(cat && cat.km)) hv(normTxt(de) === normTxt(a) ? "Mismo lugar: sin vacío (0 km)." : "Escribe los km del vacío.");
+      if (normTxt(de) === normTxt(a) && !(cat && cat.km)) { c.vac.km = 0; q("#cc-vac-km").value = 0; c.vac.clave = clave; }
+      pintar(); dibujar();
+    }
+    // Sin vacío: si la expo no tiene origen, sale de donde terminó la impo.
+    function encadenarSinVacio() {
+      if (c.expo.origen || !c.impo.destino) return;
+      c.expo.origen = c.impo.destino; if (c.impo.destinoCoord) c.expo.origenCoord = c.impo.destinoCoord;
+      q("#cc-expo-or").value = c.expo.origen;
+      kmTramo("expo");
+    }
+    async function dibujar() {
+      const hay = Object.values(lineas).some(Boolean);
+      if (!hay) return;
+      const det = q("#cc-det"); if (det && !det.open) return;
+      try { cargarCss(URL_LEAFLET_CSS); await cargarScript(URL_LEAFLET_JS, "L"); } catch (x) { errC("No se pudo cargar el mapa."); return; }
+      const L = window.L, div = q("#cc-mapa");
+      if (!mapa) { div.innerHTML = ""; mapa = L.map(div); L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap", maxZoom: 18 }).addTo(mapa); }
+      if (capa) capa.remove();
+      capa = L.layerGroup().addTo(mapa);
+      const trazos = [];
+      [["impo", false], ["vac", true], ["expo", false]].forEach(([k, punteado]) => {
+        if (!lineas[k] || (k === "vac" && !vacioSi())) return;
+        trazos.push(L.polyline(lineas[k], { color: COLOR[k], weight: punteado ? 3 : 4, dashArray: punteado ? "6 6" : null }).addTo(capa));
+      });
+      const punto = (p, txt, color) => { if (p) L.circleMarker([p.lat, p.lng], { radius: 7, color: "#fff", weight: 2, fillColor: color, fillOpacity: 1 }).addTo(capa).bindTooltip(txt); };
+      punto(c.impo.origenCoord, c.impo.origen, "#3B7A1E"); punto(c.impo.destinoCoord, c.impo.destino, COLOR.impo);
+      punto(c.expo.origenCoord, c.expo.origen, COLOR.expo); punto(c.expo.destinoCoord, c.expo.destino, "#A32D2D");
+      if (!trazos.length) return;
+      mapa.invalidateSize(); mapa.fitBounds(L.featureGroup(trazos).getBounds(), { padding: [24, 24] });
+    }
+
+    // ---- Campos ----
+    ["impo", "expo"].forEach(k => {
+      const t = c[k];
+      ["or", "de"].forEach(p => {
+        const inp = q(`#cc-${k}-${p}`), campo = p === "or" ? "origen" : "destino";
+        const tocaVacio = (k === "impo" && campo === "destino") || (k === "expo" && campo === "origen");
+        inp.addEventListener("input", () => {
+          t[campo] = inp.value; delete t[campo + "Coord"]; lineas[k] = null;
+          if (tocaVacio) { lineas.vac = null; c.vac.clave = ""; }
+          if (!ajustes.orsKey && t.origen && t.destino) kmTramo(k);
+          if (!ajustes.orsKey && tocaVacio) kmVacio(); else pintar();
+        });
+        if (ajustes.orsKey) autocompletar(inp, (op) => {
+          t[campo] = op.label; t[campo + "Coord"] = { lng: op.lng, lat: op.lat };
+          kmTramo(k);
+          if (tocaVacio) { if (!vacioSi()) encadenarSinVacio(); kmVacio(); }
+        });
+      });
+      q(`#cc-${k}-km`).addEventListener("input", (ev) => { t.km = ev.target.value; pintar(); });
+      q(`#cc-${k}-cobro`).addEventListener("input", (ev) => { t.cobro = ev.target.value; pintar(); });
+    });
+    q("#cc-vac-km").addEventListener("input", (ev) => { c.vac.km = ev.target.value; pintar(); });
+    q("#cc-vac-cobro").addEventListener("input", (ev) => { c.vac.cobro = ev.target.value; pintar(); });
+    q("#cc-tc").addEventListener("input", (ev) => { c.tc = num(ev.target.value); pintar(); });
+    const det = q("#cc-det"); if (det) det.addEventListener("toggle", () => { if (det.open) { if (mapa) mapa.invalidateSize(); else dibujar(); } });
+
+    // ---- Copiar resumen (WhatsApp *negritas* + HTML para Outlook/Teams) ----
+    q("#cc-copiar").addEventListener("click", async () => {
+      const v = vuelta();
+      if (!v) { errC("Falta la importación o la exportación (ruta y km)."); return; }
+      errC();
+      const sinPais = (t) => String(t || "").replace(/,\s*(México|Mexico|Estados Unidos|EE\.?\s*UU\.?|USA|United States)\s*$/i, "").trim();
+      const L2 = [[[`Circuito · carga ${CARGAS[c.carga].toLowerCase()}`, 1]],
+        [[`1. Impo ${sinPais(c.impo.origen)} → ${sinPais(c.impo.destino)} · `], [`${miles(v.i.km)} km`, 1]],
+        [["Cobro "], [fmt(v.i.cobro), 1], [" · "], [`${dinero(v.i.ing)}/km`, 1]]];
+      if (v.kv) L2.push([[`2. Vacío ${sinPais(c.impo.destino)} → ${sinPais(c.expo.origen)} · `], [`${miles(v.kv)} km`, 1], [v.cv ? ` · cobro ${fmt(v.cv)}` : ""]]);
+      L2.push([[`${v.kv ? 3 : 2}. Expo ${sinPais(c.expo.origen)} → ${sinPais(c.expo.destino)} · `], [`${miles(v.e.km)} km`, 1]],
+        [["Cobro "], [fmt(v.e.cobro), 1], [" · "], [`${dinero(v.e.ing)}/km`, 1]], [[""]],
+        [["Vuelta: "], [`${miles(v.km)} km`, 1], [v.kv ? ` (${Math.round(v.kv / v.km * 100)} % vacío)` : ""]],
+        [["Ingreso: "], [fmt(v.ingreso), 1], [" · "], [`${dinero(v.ing)}/km`, 1], [` (${SEM[v.sem].toLowerCase()})`]]);
+      if (v.sem !== "co-s-v" && v.paraVerde.cobro > 0) L2.push([["Para verde, expo en "], [fmt(v.paraVerde.cobro), 1]]);
+      const cruces = ["impo", "expo"].filter(k => c[k].cruceSi === "si").map(k => `Cruce ${k === "impo" ? "impo" : "expo"} ${aduanaDe(c[k].aduana).corto}: ${fmt(montoCruce(c[k].aduana, c.moneda))}`);
+      if (cruces.length) L2.push([[cruces.join(" · ") + " (aparte)"]]);
+      const texto = L2.map(l => l.map(([s, n]) => n ? `*${s}*` : s).join("")).join("\n");
+      const html = `<div style="font-family:Calibri,Arial,sans-serif;font-size:14px;">${L2.map(l => l.map(([s, n]) => n ? `<b>${esc(s)}</b>` : esc(s)).join("")).join("<br>")}</div>`;
+      try {
+        if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+          await navigator.clipboard.write([new ClipboardItem({ "text/plain": new Blob([texto], { type: "text/plain" }), "text/html": new Blob([html], { type: "text/html" }) })]);
+        } else await navigator.clipboard.writeText(texto);
+      } catch (x) {
+        try { await navigator.clipboard.writeText(texto); }
+        catch (y) { const ta = document.createElement("textarea"); ta.value = texto; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); } catch (z) {} ta.remove(); }
+      }
+      const b = q("#cc-copiar"); b.textContent = "Copiado ✓"; setTimeout(() => { b.textContent = "Copiar resumen"; }, 2000);
+    });
+    pintar();
+    ["impo", "expo"].forEach(k => { if (c[k].origen && c[k].destino) hint(k, ""); });
+    if (ajustes.orsKey) { ["impo", "expo"].forEach(k => { if (c[k].origenCoord && c[k].destinoCoord) kmTramo(k); }); c.vac.clave = ""; kmVacio(); }
   }
   $("#co-calc").addEventListener("click", abrirCalculadora);
   $("#co-nueva").addEventListener("click", () => abrirEditor(null));
@@ -1783,6 +2123,9 @@ export function iniciarAjustesComercial(caja, resumen) {
             <thead><tr><th>Servicio</th><th class="n">RC verde</th><th class="n">RC ámbar</th><th class="n">RL verde</th><th class="n">RL ámbar</th></tr></thead>
             <tbody>${Object.entries(SERV_UMBRAL).map(([sv, k]) => `<tr><td>${esc(SERVICIOS[sv])}</td>${["rc_verde", "rc_ambar", "rl_verde", "rl_ambar"].map(c => `<td class="n"><input type="number" step="0.01" min="0" data-umbral="${k}_${c}" value="${esc(umbralDe(ajustes, sv, c.startsWith("rc") ? 1 : 999)[c.endsWith("verde") ? "verde" : "ambar"])}" style="width:90px;"></td>`).join("")}</tr>`).join("")}</tbody>
           </table></div><small class="nota">RC = 350 km o menos · RL = 351 km o más.</small></div>
+        <div style="grid-column:1/-1;"><label>Meta del circuito completo (ingreso por km de la vuelta: impo + vacío + expo)</label>
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;"><span class="nota">Verde</span><input type="number" step="0.01" min="0" data-umbral="circ_verde" value="${esc(metaCircuito(ajustes).verde)}" style="width:90px;">
+            <span class="nota">Ámbar</span><input type="number" step="0.01" min="0" data-umbral="circ_ambar" value="${esc(metaCircuito(ajustes).ambar)}" style="width:90px;"></div></div>
         <div><label>Tipo de cambio sugerido</label><input type="number" step="0.01" id="caj-tc" value="${esc(ajustes.tipoCambio)}"></div>
         <div><label>Vigencia por omisión</label><select id="caj-vig">${opcionesVigencia(ajustes.vigenciaDias).map(d => `<option value="${d}"${d === Number(ajustes.vigenciaDias) ? " selected" : ""}>${textoVigencia(d)}</option>`).join("")}</select></div>
         <div style="grid-column:1/-1;"><label>Clave de OpenRouteService</label><input type="text" id="caj-ors" value="${esc(ajustes.orsKey || "")}" placeholder="Pega aquí la clave de openrouteservice.org" autocomplete="off"></div>
@@ -1838,6 +2181,7 @@ export function iniciarAjustesComercial(caja, resumen) {
       for (const k of Object.values(SERV_UMBRAL)) for (const t of ["rc", "rl"]) {
         if (umbrales[`${k}_${t}_ambar`] > umbrales[`${k}_${t}_verde`]) { err("En cada servicio, el ámbar debe ser menor o igual que el verde."); return; }
       }
+      if (umbrales.circ_ambar > umbrales.circ_verde) { err("En la meta del circuito, el ámbar debe ser menor o igual que el verde."); return; }
       if (!(tc > 0) || vig == null || vig < 0) { err("Revisa el tipo de cambio y la vigencia."); return; }
       const condicionesLista = conds.map(c => ({ id: c.id, texto: String(c.texto || "").trim() })).filter(c => c.texto);
       const cruces = crucesDe(ajustes).map(a => ({ id: a.id, nombre: a.nombre,
