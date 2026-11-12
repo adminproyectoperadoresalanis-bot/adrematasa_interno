@@ -1,0 +1,195 @@
+<!-- ##########################################################################
+     PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+     RUTA:     /workspaces/adrematasa_interno/public/llave-seguridad.html
+     ACCION:   archivo NUEVO (crearlo y pegar todo el contenido, Ctrl+S)
+     USO:      pantalla solo para administradores; se abre escribiendo la
+               direccion directamente (no esta en el menu). La funcion
+               generarLlaveSeguridad vuelve a comprobar en el servidor que
+               quien la pide sea administrador activo.
+     ########################################################################## -->
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#FBF6EF">
+<title>Llave de acceso · Estrategia de seguridad</title>
+<style>
+  :root { --bg:#FBF6EF; --ink:#2B1A0E; --muted:#6B4828; --brand:#4A2F18; --line:#EAD9C6; --ok:#14532D; --err:#B91C1C; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+  main { max-width: 440px; margin: 0 auto; padding: calc(24px + env(safe-area-inset-top)) 20px calc(32px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 18px; }
+  h1 { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+  .sub { font-size: 14px; line-height: 1.5; color: var(--muted); }
+  .tarjeta { background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  .tarjeta h2 { font-size: 15px; font-weight: 700; }
+  .qr { width: min(100%, 340px); aspect-ratio: 1; margin: 0 auto; background: #fff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+  .qr svg { width: 100%; height: 100%; display: block; }
+  .qr.vacio { color: var(--muted); font-size: 14px; text-align: center; padding: 20px; background: #FBF6EF; border-style: dashed; }
+  .dir { font-size: 13px; color: var(--muted); text-align: center; word-break: break-all; }
+  .barra { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+  .barra div { height: 100%; width: 0; background: var(--brand); transition: width .2s linear; }
+  .cuenta { font-size: 14px; font-weight: 600; text-align: center; min-height: 20px; }
+  .aviso { font-size: 13px; text-align: center; min-height: 18px; color: var(--muted); }
+  .aviso.error { color: var(--err); font-weight: 600; }
+  button { font: 700 16px/1 inherit; font-family: inherit; border: 0; border-radius: 14px; height: 54px; cursor: pointer; background: var(--brand); color: #fff; }
+  button:disabled { opacity: .55; cursor: default; }
+  button.sec { background: #fff; color: var(--brand); border: 1.5px solid var(--brand); height: 44px; font-size: 14px; }
+  button:focus-visible { outline: 3px solid #8B5A2B; outline-offset: 3px; }
+  [hidden] { display: none !important; }
+  a { color: var(--brand); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Presentación de seguridad</h1>
+    <p class="sub">Muestra primero el QR del enlace y después el de la llave de acceso.</p>
+  </header>
+
+  <p id="estado" class="sub">Verificando tu sesión…</p>
+
+  <section id="panel" hidden>
+    <div class="tarjeta">
+      <h2>1 · Enlace</h2>
+      <div id="qr-enlace" class="qr" role="img" aria-label="QR del enlace de la presentación"></div>
+      <p class="dir" id="dir-enlace"></p>
+    </div>
+
+    <div class="tarjeta" style="margin-top:18px">
+      <h2>2 · Llave de acceso</h2>
+      <p class="sub">Dura 60 segundos y solo funciona una vez. Genérala justo antes de mostrarla.</p>
+      <div id="caja-llave" class="qr vacio">Aún no hay una llave activa.</div>
+      <div class="barra" aria-hidden="true"><div id="barra"></div></div>
+      <p id="cuenta" class="cuenta" aria-live="polite"></p>
+      <button id="btn-generar" type="button">Generar llave</button>
+      <button id="btn-copiar" class="sec" type="button" hidden>Copiar texto de la llave</button>
+      <p id="aviso" class="aviso" aria-live="polite"></p>
+    </div>
+  </section>
+</main>
+
+<script src="js/qrcode.js"></script>
+<script type="module">
+  import "./js/firebase-config.js";
+  import { getApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
+  import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
+  import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
+
+  // Dirección pública de la presentación (cambiar aquí si se compra un dominio propio).
+  const URL_SITIO = "https://flowseguridad.web.app";
+
+  const app = getApp();
+  const auth = getAuth(app);
+  const generarLlave = httpsCallable(getFunctions(app, "us-central1"), "generarLlaveSeguridad");
+
+  const $ = (id) => document.getElementById(id);
+  const estado = $("estado"), panel = $("panel"), caja = $("caja-llave"), barra = $("barra");
+  const cuenta = $("cuenta"), aviso = $("aviso"), btnGenerar = $("btn-generar"), btnCopiar = $("btn-copiar");
+
+  // Convierte un texto en un QR (SVG nítido, con zona blanca alrededor).
+  function svgQR(texto, correccion) {
+    const qr = qrcode(0, correccion);
+    qr.addData(texto);
+    qr.make();
+    const n = qr.getModuleCount(), margen = 4, total = n + 2 * margen;
+    let d = "";
+    for (let f = 0; f < n; f++) {
+      for (let c = 0; c < n; c++) {
+        if (qr.isDark(f, c)) d += "M" + (c + margen) + " " + (f + margen) + "h1v1h-1z";
+      }
+    }
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + total + " " + total +
+      '" shape-rendering="crispEdges" role="img" aria-label="Código QR"><rect width="' + total +
+      '" height="' + total + '" fill="#fff"/><path d="' + d + '" fill="#000"/></svg>';
+  }
+
+  // QR 1: enlace (fijo)
+  $("qr-enlace").innerHTML = svgQR(URL_SITIO, "M");
+  $("dir-enlace").textContent = URL_SITIO;
+
+  let temporizador = null;
+  let llaveActual = "";
+
+  function mostrarAviso(texto, esError) {
+    aviso.textContent = texto || "";
+    aviso.classList.toggle("error", !!esError);
+  }
+
+  function limpiarLlave(mensaje) {
+    clearInterval(temporizador);
+    temporizador = null;
+    llaveActual = "";
+    caja.innerHTML = "";
+    caja.textContent = mensaje;
+    caja.classList.add("vacio");
+    barra.style.width = "0";
+    cuenta.textContent = "";
+    btnCopiar.hidden = true;
+  }
+
+  btnGenerar.addEventListener("click", async () => {
+    btnGenerar.disabled = true;
+    mostrarAviso("Generando…", false);
+    try {
+      const resp = (await generarLlave()).data;
+      if (!resp || !resp.ok) throw new Error("Respuesta inválida");
+      llaveActual = resp.llave;
+      caja.textContent = "";
+      caja.innerHTML = svgQR(resp.llave, "L");
+      caja.classList.remove("vacio");
+      btnCopiar.hidden = false;
+      mostrarAviso("", false);
+
+      const duracion = resp.vigenciaSeg * 1000;
+      const fin = performance.now() + duracion;
+      clearInterval(temporizador);
+      temporizador = setInterval(() => {
+        const resta = fin - performance.now();
+        if (resta <= 0) {
+          limpiarLlave("Llave caducada. Genera una nueva.");
+          return;
+        }
+        barra.style.width = (resta / duracion) * 100 + "%";
+        cuenta.textContent = "Vence en " + Math.ceil(resta / 1000) + " s";
+      }, 200);
+    } catch (e) {
+      limpiarLlave("No se pudo generar la llave.");
+      if (e && e.code === "functions/permission-denied") {
+        mostrarAviso("Tu cuenta no es de administrador o no está activa.", true);
+      } else if (e && e.code === "functions/unauthenticated") {
+        mostrarAviso("Tu sesión expiró. Vuelve a iniciar sesión en ADREMATASA.", true);
+      } else {
+        mostrarAviso("Ocurrió un error. Intenta de nuevo.", true);
+      }
+    } finally {
+      btnGenerar.disabled = false;
+      btnGenerar.textContent = "Generar otra llave";
+    }
+  });
+
+  // Respaldo (y para pruebas): copiar el texto de la llave vigente.
+  btnCopiar.addEventListener("click", async () => {
+    if (!llaveActual) return;
+    try {
+      await navigator.clipboard.writeText(llaveActual);
+      mostrarAviso("Texto copiado. Sigue siendo válido solo el tiempo que queda.", false);
+    } catch (e) {
+      mostrarAviso("No se pudo copiar desde este navegador.", true);
+    }
+  });
+
+  onAuthStateChanged(auth, (usuario) => {
+    if (usuario) {
+      estado.hidden = true;
+      panel.hidden = false;
+    } else {
+      panel.hidden = true;
+      estado.hidden = false;
+      estado.innerHTML = 'Inicia sesión en <a href="/">ADREMATASA Interno</a> con tu cuenta de administrador y vuelve a abrir esta página.';
+    }
+  });
+</script>
+</body>
+</html>
