@@ -386,15 +386,15 @@ function inyectarEstilos() {
     .ca-barra { height:10px; border-radius:6px; position:relative; }
     .ca-barra i { position:absolute; top:-5px; width:4px; height:20px; border-radius:2px; background:#2C1E0F; }
     .ca-sem { font-size:10px; font-weight:800; padding:2px 7px; border-radius:9px; }
-    .cc-tc { display:inline-block; font-size:10px; font-weight:800; padding:1px 7px; border-radius:9px; margin-left:4px; white-space:nowrap; vertical-align:1px; }
+    .cc-tc { display:inline-block; font-size:10px; font-weight:800; padding:1px 7px; border-radius:9px; white-space:nowrap; vertical-align:1px; }
     .cc-tc-f { background:#F1E8FB; color:#6B3FA0; } .cc-tc-c { background:#ECE9E4; color:#5c5045; } .cc-tc-m { background:#FBE3A8; color:#7a3e06; }
-    @media (max-width:700px) { .cc-tc { display:block; width:max-content; margin:2px 0 0 auto; } }
+    @media (max-width:700px) { .cc-tc { white-space:normal; } }
     .cc-fact { margin:8px 0 2px; padding:7px 10px; border-radius:9px; background:#F8F4FD; border:1px solid #C9B8E6; font-size:12.5px; }
     .cc-tramo { border:1px solid #e2ddd5; border-left:5px solid #185FA5; border-radius:12px; padding:12px 14px; margin-top:10px; background:#fff; }
-    .cc-vac { border-left-color:#8a7f73; background:#FBFAF8; } .cc-expo { border-left-color:#7A4FA0; }
+    .cc-vac { border-left-color:#A32D2D; background:#FDF7F6; } .cc-expo { border-left-color:#3B7A1E; }
     .cc-th { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; } .cc-th b { font-size:14px; } .cc-der { margin-left:auto; }
     .cc-num { width:22px; height:22px; border-radius:50%; color:#fff; font-size:12px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; background:#185FA5; }
-    .cc-vac .cc-num { background:#8a7f73; } .cc-expo .cc-num { background:#7A4FA0; }
+    .cc-vac .cc-num { background:#A32D2D; } .cc-expo .cc-num { background:#3B7A1E; }
     .cc-ruta { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) 120px; gap:8px; }
     .cc-cobro { display:grid; grid-template-columns:minmax(0,200px) minmax(0,1fr); gap:12px; align-items:end; margin-top:6px; }
     .cc-ruta > div, .cc-cobro > div { min-width:0; }
@@ -703,6 +703,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       </div>
       <div class="error" id="ca-err"></div>
       <div class="co-acciones">
+        <button type="button" class="secundario" id="ca-limpiar">Limpiar</button>
         <button type="button" class="secundario" id="ca-copiar">Copiar resumen</button>
         <button type="button" class="secundario" id="ca-cat">Guardar ruta en catálogo</button>
         <button type="button" id="ca-conv">Convertir en cotización →</button>
@@ -714,6 +715,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const cerrar = () => { if (mapa) mapa.remove(); ov.remove(); };
     ov.querySelectorAll("[data-cerrar]").forEach(b => b.addEventListener("click", cerrar));
     q("#ca-a-circ").addEventListener("click", () => { cerrar(); abrirCircuito(); });
+    q("#ca-limpiar").addEventListener("click", () => { calc = null; cerrar(); abrirCalculadora(); }); // 2026-11-17: empezar de cero
     // Factura (2026-11-17): llena origen, destino, km (manda el de la factura), flete y TC.
     const pintarFactura = () => {
       const fa = c.factura, caja = q("#ca-fact-info");
@@ -925,7 +927,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const tramoVacio = () => ({ origen: "", destino: "", km: "", cobro: "", cruceSi: "no", aduana: CRUCES_BASE[0].id });
     if (!circ) circ = { moneda: "MXN", tc: ajustes.tipoCambio, carga: "refrigerada", vacio: "si", impo: tramoVacio(), vac: { km: "", cobro: "", clave: "" }, expo: tramoVacio() };
     const c = circ, celular = window.innerWidth <= 700;
-    const SERV = { impo: "importacion", expo: "exportacion" }, COLOR = { impo: "#185FA5", vac: "#8a7f73", expo: "#7A4FA0" };
+    const SERV = { impo: "importacion", expo: "exportacion" }, COLOR = { impo: "#185FA5", vac: "#A32D2D", expo: "#3B7A1E" }; // 2026-11-17: impo azul, expo verde, vacío rojo
     const lineas = {}; let mapa = null, capa = null;
     const lugares = [...new Set([...rutas.values()].flatMap(r => [r.origen, r.destino]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
     const ph = ajustes.orsKey ? "Escribe la ciudad…" : "Ciudad, estado";
@@ -975,7 +977,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       <p class="nota" style="margin:6px 0 0;">El cruce va aparte del flete: no entra en el ingreso por km.</p>
       <div class="cc-res" id="cc-res"></div>
       <div class="error" id="cc-err"></div>
-      <div class="co-acciones"><button type="button" class="secundario" id="cc-copiar">Copiar resumen</button></div>
+      <div class="co-acciones"><button type="button" class="secundario" id="cc-limpiar">Limpiar</button><button type="button" class="secundario" id="cc-copiar">Copiar resumen</button></div>
     </div>`;
     document.body.appendChild(ov);
     const q = (s) => ov.querySelector(s);
@@ -984,6 +986,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const cerrar = () => { if (mapa) mapa.remove(); ov.remove(); };
     ov.querySelectorAll("[data-cerrar]").forEach(b => b.addEventListener("click", cerrar));
     q("#cc-a-ruta").addEventListener("click", () => { cerrar(); abrirCalculadora(); });
+    q("#cc-limpiar").addEventListener("click", () => { circ = null; cerrar(); abrirCircuito(); }); // 2026-11-17: empezar de cero
     const segC = (caja, obj, campo, opciones, alCambiar) => {
       caja.innerHTML = opciones.map(([v, t]) => `<button type="button" class="${String(obj[campo]) === String(v) ? "activo" : ""}" data-v="${esc(v)}">${t}</button>`).join("");
       caja.querySelectorAll("button").forEach(b => b.addEventListener("click", () => { obj[campo] = b.dataset.v; (alCambiar || pintar)(); }));
@@ -1076,24 +1079,40 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       const pk = (x) => `${(x / v.km * 100).toFixed(1)}%`;
       const usar = (o, cls) => o.cobro <= 0 ? `<span class="nota">ya llegas con la importación</span>` : `<b>${fmt(o.cobro)}</b> (${dinero(o.porKm)}/km del tramo) <button type="button" class="ca-pill ${cls} cc-usar" data-expo="${o.cobro}">usar</button>`;
       // 2026-11-17: columna de pesos con el TC aplicado en cada tramo (cápsula: factura / Configuración / capturado).
-      const verMxn = c.moneda === "USD" || ["impo", "expo"].some(k => conFactura(c[k]) && c[k].factura.tc);
-      const tcVac = c.moneda === "USD" ? { tc: num(c.tc) || 0, fuente: Number(num(c.tc)) === Number(ajustes.tipoCambio) ? "Configuración" : "capturado" } : null;
-      const filaT = (n, nombre, color, ruta, km, cobro, d, mxn, tc) => `<tr><td><b style="color:${color}">${n} · ${nombre}</b></td><td class="cc-c-ruta">${esc(ruta)}</td><td class="n">${miles(km)}</td><td class="n">${cobro == null ? "—" : fmt(cobro)}</td>
-        ${verMxn ? `<td class="n">${mxn == null ? "—" : dinero(mxn)}${mxn == null ? "" : capsulaTc(tc)}</td>` : ""}
-        <td class="n">${d ? `${dinero(d.ing)} <span class="ca-sem ${d.sem}">${SEM[d.sem]}</span>` : "—"}</td></tr>`;
+      // 2026-11-17: con al menos una factura en dólares (o el circuito en USD) se ven USD | MXN | TC;
+      // si todo es en pesos, solo el cobro en MXN.
+      const verUsd = c.moneda === "USD" || ["impo", "expo"].some(k => conFactura(c[k]) && c[k].factura.tc);
+      const tcCirc = { tc: num(c.tc) || 0, fuente: Number(num(c.tc)) === Number(ajustes.tipoCambio) ? "Configuración" : "capturado" };
+      // Dólares de cada renglón: factura en USD → su importe; factura en MXN → no aplica; a mano → con el TC del circuito.
+      const usdDe = (t, cobro, mxn) => {
+        if (t && conFactura(t)) return t.factura.tc ? r2(t.factura.mxn / t.factura.tc) : null;
+        if (mxn == null) return null;
+        return c.moneda === "USD" ? cobro : (num(c.tc) ? r2(mxn / num(c.tc)) : null);
+      };
+      const tcDe = (t) => (t && conFactura(t)) ? { tc: t.factura.tc || null, fuente: "factura" } : tcCirc;
+      const filas = [
+        { n: 1, nombre: "Importación", color: COLOR.impo, ruta: `${corto(c.impo.origen) || "—"} → ${corto(c.impo.destino) || "—"}`, km: v.i.km, mxn: v.i.mxn, usd: usdDe(c.impo, v.i.cobro, v.i.mxn), tc: tcDe(c.impo), d: v.i },
+        ...(vacioSi() ? [{ n: 2, nombre: "Vacío", color: COLOR.vac, ruta: `${corto(c.impo.destino) || "—"} → ${corto(c.expo.origen) || "—"}`, km: v.kv, mxn: v.cv ? v.cvMxn : null, usd: v.cv ? usdDe(null, v.cv, v.cvMxn) : null, tc: v.cv ? tcCirc : null, d: null }] : []),
+        { n: vacioSi() ? 3 : 2, nombre: "Exportación", color: COLOR.expo, ruta: `${corto(c.expo.origen) || "—"} → ${corto(c.expo.destino) || "—"}`, km: v.e.km, mxn: v.e.mxn, usd: usdDe(c.expo, v.e.cobro, v.e.mxn), tc: tcDe(c.expo), d: v.e },
+      ];
+      const conCobro = filas.filter(f => f.mxn != null);
+      const usdTotal = conCobro.every(f => f.usd != null) ? r2(conCobro.reduce((s, f) => s + f.usd, 0)) : null;
+      const filaT = (f) => `<tr><td><b style="color:${f.color}">${f.n} · ${f.nombre}</b></td><td class="cc-c-ruta">${esc(f.ruta)}</td><td class="n">${miles(f.km)}</td>
+        ${verUsd ? `<td class="n">${f.mxn == null ? "—" : f.usd == null ? `<span class="nota">n/a</span>` : dinero(f.usd, "USD")}</td>` : ""}
+        <td class="n">${f.mxn == null ? "—" : dinero(f.mxn)}</td>
+        ${verUsd ? `<td class="n">${f.mxn == null ? "—" : capsulaTc(f.tc) || "—"}</td>` : ""}
+        <td class="n">${f.d ? `${dinero(f.d.ing)} <span class="ca-sem ${f.d.sem}">${SEM[f.d.sem]}</span>` : "—"}</td></tr>`;
       caja.innerHTML = `
         <div class="cc-top">
           <div><div class="cc-et">Ingreso por km de la vuelta</div><span class="cc-big co-ing ${v.sem}">${dinero(v.ing)}</span> <span class="ca-sem ${v.sem}">${SEM[v.sem]}</span>
-            <div class="nota">${c.moneda === "USD" ? `${fmt(v.ingreso)} = ${dinero(v.mxn)} MXN` : fmt(v.ingreso)} ÷ ${miles(v.km)} km recorridos · meta verde ${dinero(v.meta.verde)} · ámbar ${dinero(v.meta.ambar)}</div></div>
+            <div class="nota">${verUsd && usdTotal != null ? `${dinero(usdTotal, "USD")} = ` : ""}${dinero(v.mxn)} MXN ÷ ${miles(v.km)} km recorridos · meta verde ${dinero(v.meta.verde)} · ámbar ${dinero(v.meta.ambar)}</div></div>
           ${v.kv ? `<div class="cc-sep"><div class="nota">Solo km con carga</div><b style="font-size:18px;">${dinero(v.cargado)}/km</b><div class="nota">${miles(v.i.km + v.e.km)} km · el vacío te baja <b>${dinero(v.cargado - v.ing)}/km</b></div></div>` : ""}
         </div>
         <div class="cc-kms"><span style="width:${pk(v.i.km)};background:${COLOR.impo}">Impo ${miles(v.i.km)} km</span>${v.kv ? `<span style="width:${pk(v.kv)};background:${COLOR.vac}">Vacío ${miles(v.kv)}</span>` : ""}<span style="width:${pk(v.e.km)};background:${COLOR.expo}">Expo ${miles(v.e.km)} km</span></div>
         <div class="nota">${v.kv ? `${Math.round(v.kv / v.km * 100)} % de la vuelta en vacío.` : "Sin vacío."}${v.faltaKmVacio ? ` <b style="color:#A32D2D;">Falta escribir los km del vacío.</b>` : ""}${!v.i.propio || !v.e.propio ? " Los tramos sin cobro escrito van con la sugerida." : ""}</div>
-        <div class="tabla-wrap"><table class="cc-tabla"><thead><tr><th>Tramo</th><th class="cc-c-ruta">Ruta</th><th class="n">Km</th><th class="n">Cobro</th>${verMxn ? `<th class="n">Cobro en pesos</th>` : ""}<th class="n">Ing./km del tramo</th></tr></thead><tbody>
-          ${filaT(1, "Importación", COLOR.impo, `${corto(c.impo.origen) || "—"} → ${corto(c.impo.destino) || "—"}`, v.i.km, v.i.cobro, v.i, v.i.mxn, v.i.tc)}
-          ${vacioSi() ? filaT(2, "Vacío", COLOR.vac, `${corto(c.impo.destino) || "—"} → ${corto(c.expo.origen) || "—"}`, v.kv, v.cv || null, null, v.cv ? v.cvMxn : null, tcVac) : ""}
-          ${filaT(vacioSi() ? 3 : 2, "Exportación", COLOR.expo, `${corto(c.expo.origen) || "—"} → ${corto(c.expo.destino) || "—"}`, v.e.km, v.e.cobro, v.e, v.e.mxn, v.e.tc)}
-          <tr class="cc-tot"><td>Vuelta completa</td><td class="cc-c-ruta"></td><td class="n">${miles(v.km)}</td><td class="n">${fmt(v.ingreso)}</td>${verMxn ? `<td class="n">${dinero(v.mxn)}</td>` : ""}<td class="n">${dinero(v.ing)}</td></tr>
+        <div class="tabla-wrap"><table class="cc-tabla"><thead><tr><th>Tramo</th><th class="cc-c-ruta">Ruta</th><th class="n">Km</th>${verUsd ? `<th class="n">Cobro USD</th><th class="n">Cobro MXN</th><th class="n">TC</th>` : `<th class="n">Cobro</th>`}<th class="n">Ing./km del tramo</th></tr></thead><tbody>
+          ${filas.map(filaT).join("")}
+          <tr class="cc-tot"><td>Vuelta completa</td><td class="cc-c-ruta"></td><td class="n">${miles(v.km)}</td>${verUsd ? `<td class="n">${usdTotal == null ? "—" : dinero(usdTotal, "USD")}</td>` : ""}<td class="n">${dinero(v.mxn)}</td>${verUsd ? `<td></td>` : ""}<td class="n">${dinero(v.ing)}</td></tr>
         </tbody></table></div>
         <div class="cc-meta"><b>¿Cuánto cobrar en la expo?</b> Con la importación en ${fmt(v.i.cobro)}${v.cv ? ` y el vacío en ${fmt(v.cv)}` : ""}:<br>
           para llegar a <b>verde (${dinero(v.meta.verde)}/km)</b> la expo debe cobrar ${usar(v.paraVerde, "ca-pv")}<br>
