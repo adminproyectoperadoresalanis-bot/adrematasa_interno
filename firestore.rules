@@ -905,6 +905,15 @@ service cloud.firestore {
       allow read, create, update: if puedeComercial();
       allow delete: if esAdmin();
     }
+    // Calculadora con factura (2026-11-17): lugar de la factura → lugar de ORS.
+    match /com_lugares/{id} {
+      allow read: if puedeComercial();
+      allow create, update: if puedeComercial()
+        && request.resource.data.label is string
+        && request.resource.data.lat is number
+        && request.resource.data.lng is number;
+      allow delete: if esAdmin();
+    }
     match /com_config/{id} {
       allow read: if puedeComercial();
       allow write: if esAdmin();

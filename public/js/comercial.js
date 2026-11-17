@@ -9,6 +9,7 @@ import {
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
 import { LOGO_ALANIS } from "./comercialLogo.js";
 import { tomarFiltro } from "./navegacion.js"; // 2026-10-31: el Panel abre Comercial ya filtrado
+import { abrirCargaFactura, esDuenoRentabilidad, servicioProbable } from "./comercialFactura.js"; // 2026-11-17: factura en la Calculadora
 
 // ============================================================================
 // Utilidades → Comercial (2026-10-30, pedido de Ivan). Reemplaza al CRM viejo
@@ -130,6 +131,8 @@ export function metaCircuito(ajustes) {
   const u = { ...UMBRALES_BASE, ...((ajustes && ajustes.umbrales) || {}) };
   return { verde: Number(u.circ_verde) || 0, ambar: Number(u.circ_ambar) || 0 };
 }
+// Estado de la factura en Rentabilidad (2026-11-17).
+const textoRent = (e) => e === "guardada" ? "guardada en Rentabilidad" : e === "existente" ? "ya estaba en Rentabilidad" : e === "sin-km" ? "no se guardó en Rentabilidad (sin km)" : String(e || "").startsWith("error") ? "no se pudo guardar en Rentabilidad" : "";
 const tipoRutaTxt = (km) => km ? (km <= KM_RUTA_CORTA ? "RC" : "RL") : "";
 
 const AJUSTES_BASE = {
@@ -383,6 +386,7 @@ function inyectarEstilos() {
     .ca-barra { height:10px; border-radius:6px; position:relative; }
     .ca-barra i { position:absolute; top:-5px; width:4px; height:20px; border-radius:2px; background:#2C1E0F; }
     .ca-sem { font-size:10px; font-weight:800; padding:2px 7px; border-radius:9px; }
+    .cc-fact { margin:8px 0 2px; padding:7px 10px; border-radius:9px; background:#F8F4FD; border:1px solid #C9B8E6; font-size:12.5px; }
     .cc-tramo { border:1px solid #e2ddd5; border-left:5px solid #185FA5; border-radius:12px; padding:12px 14px; margin-top:10px; background:#fff; }
     .cc-vac { border-left-color:#8a7f73; background:#FBFAF8; } .cc-expo { border-left-color:#7A4FA0; }
     .cc-th { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; } .cc-th b { font-size:14px; } .cc-der { margin-left:auto; }
@@ -668,7 +672,8 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const lugares = [...new Set([...rutas.values()].flatMap(r => [r.origen, r.destino]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
     ov.innerHTML = `<div class="modal-tarjeta ca" style="max-width:860px;width:100%;max-height:94vh;overflow:auto;">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><h2 style="margin:0;font-size:18px;">Calculadora</h2><button type="button" class="secundario co-mini" data-cerrar>✕</button></div>
-      <div style="margin:10px 0 4px;"><span class="co-seg"><button type="button" class="activo">Una ruta</button><button type="button" id="ca-a-circ">Circuito completo</button></span></div>
+      <div style="margin:10px 0 4px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><span class="co-seg"><button type="button" class="activo">Una ruta</button><button type="button" id="ca-a-circ">Circuito completo</button></span><button type="button" class="secundario co-mini" id="ca-factura">📄 Cargar factura</button></div>
+      <div id="ca-fact-info"></div>
       <p class="nota" style="margin:4px 0 12px;">Tarifa de una ruta con los umbrales de Configuración. No pide cliente ni guarda cotización.</p>
       ${ajustes.orsKey ? "" : `<datalist id="ca-lugares">${lugares.map(l => `<option value="${esc(l)}">`).join("")}</datalist>`}
       <div class="ca-g2">
@@ -706,6 +711,30 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const cerrar = () => { if (mapa) mapa.remove(); ov.remove(); };
     ov.querySelectorAll("[data-cerrar]").forEach(b => b.addEventListener("click", cerrar));
     q("#ca-a-circ").addEventListener("click", () => { cerrar(); abrirCircuito(); });
+    // Factura (2026-11-17): llena origen, destino, km (manda el de la factura), flete y TC.
+    const pintarFactura = () => {
+      const fa = c.factura, caja = q("#ca-fact-info");
+      if (!fa) { caja.innerHTML = ""; return; }
+      caja.innerHTML = `<div class="cc-fact">📄 <b>Factura ${esc(fa.folio)}</b> · ${esc(fa.cliente)} · ${esc(fa.ruta)}${fa.estadoRent ? ` <span class="nota">· ${esc(textoRent(fa.estadoRent))}</span>` : ""} <button type="button" class="co-link" id="ca-fact-quitar" style="font-size:12px;">quitar</button></div>`;
+      q("#ca-fact-quitar").addEventListener("click", () => { delete c.factura; delete c.kmFactura; c.usarKmOrs = false; pintarFactura(); calcular(); });
+    };
+    q("#ca-factura").addEventListener("click", () => abrirCargaFactura({
+      esDueno: esDuenoRentabilidad(datosUsuario, yo.correo), orsKey: ajustes.orsKey, por: { uid, nombre: yo.nombre },
+      alUsar: ({ f, origen, destino, estadoRent }) => {
+        const k = f.calculos || {};
+        c.origen = origen.label; c.origenCoord = { lng: origen.lng, lat: origen.lat };
+        c.destino = destino.label; c.destinoCoord = { lng: destino.lng, lat: destino.lat };
+        c.vias = []; c._viasTocadas = true; linea = null;
+        c.kmFactura = k.km; c.km = k.km; c.usarKmOrs = false;
+        c.moneda = f.moneda === "USD" ? "USD" : "MXN";
+        if (c.moneda === "USD" && f.tipoCambio) { c.tc = f.tipoCambio; q("#ca-tc").value = c.tc; }
+        c.prueba = k.flete != null ? String(k.flete) : "";
+        c.servicio = servicioProbable(f);
+        c.factura = { folio: f.factura || "", cliente: (f.cliente || {}).nombre || "", ruta: f.ruta || "", estadoRent };
+        q("#ca-or").value = c.origen; q("#ca-de").value = c.destino; q("#ca-km").value = c.km; q("#ca-prueba").value = c.prueba;
+        pintarVias(); pintarFactura(); calcular();
+      },
+    }));
     const segC = (caja, campo, opciones) => {
       caja.innerHTML = opciones.map(([v, t]) => `<button type="button" class="${String(c[campo]) === String(v) ? "activo" : ""}" data-v="${esc(v)}">${t}</button>`).join("");
       caja.querySelectorAll("button").forEach(b => b.addEventListener("click", () => { c[campo] = b.dataset.v; pintar(); }));
@@ -777,17 +806,25 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
         if (cat.origenCoord && !c.origenCoord) c.origenCoord = cat.origenCoord;
         if (cat.destinoCoord && !c.destinoCoord) c.destinoCoord = cat.destinoCoord;
         if (cat.vias && !c.vias.length && !c._viasTocadas) c.vias = cat.vias.map(v => ({ ...v }));
-        if (cat.km && !c.vias.length === !(cat.vias || []).length) { c.km = cat.km; q("#ca-km").value = c.km; }
+        if (cat.km && !c.kmFactura && !c.vias.length === !(cat.vias || []).length) { c.km = cat.km; q("#ca-km").value = c.km; }
         pintarVias();
       }
       if (!ajustes.orsKey || !c.origenCoord || !c.destinoCoord) {
-        hintC(cat ? `del catálogo${(cat.vias || []).length ? " · vía " + cat.vias.map(v => v.label.split(",")[0]).join(", ") : ""}` : (c.origen && c.destino ? (ajustes.orsKey ? "Elige origen y destino de la lista para calcular los km." : "Ruta nueva: escribe los km.") : ""));
+        hintC(c.kmFactura ? `${miles(c.kmFactura)} km de la factura (Carta Porte)` : cat ? `del catálogo${(cat.vias || []).length ? " · vía " + cat.vias.map(v => v.label.split(",")[0]).join(", ") : ""}` : (c.origen && c.destino ? (ajustes.orsKey ? "Elige origen y destino de la lista para calcular los km." : "Ruta nueva: escribe los km.") : ""));
         pintar(); return;
       }
       hintC("Calculando ruta de camión…");
       try {
         const res = await orsRuta([c.origenCoord, ...c.vias, c.destinoCoord], ajustes.orsKey);
         linea = res.linea; c.kmOrs = res.km;
+        if (c.kmFactura) { // manda el km de la factura; ORS solo como referencia (se puede usar con un toque)
+          c.km = c.usarKmOrs ? res.km : c.kmFactura;
+          const dif = c.kmFactura ? Math.round((res.km - c.kmFactura) / c.kmFactura * 1000) / 10 : 0;
+          hintC(`Factura ${miles(c.kmFactura)} km · ORS ${miles(res.km)} km (${dif > 0 ? "+" : ""}${dif} %) · usando <b>${c.usarKmOrs ? "ORS" : "factura"}</b> <button type="button" class="co-link" id="ca-km-alt" style="font-size:12px;">usar ${c.usarKmOrs ? "factura" : "ORS"}</button>`);
+          const alt = q("#ca-km-alt"); if (alt) alt.addEventListener("click", () => { c.usarKmOrs = !c.usarKmOrs; calcular(); });
+          q("#ca-km").value = c.km;
+          pintar(); await dibujar(); return;
+        }
         const viasCat = cat && JSON.stringify((cat.vias || []).map(v => v.label)) === JSON.stringify(c.vias.map(v => v.label));
         if (cat && cat.km && viasCat) {
           c.km = cat.km;
@@ -801,8 +838,9 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     // Campos
     ["or", "de"].forEach(k => {
       const inp = q(`#ca-${k}`), campo = k === "or" ? "origen" : "destino";
-      inp.addEventListener("input", () => { c[campo] = inp.value; delete c[campo + "Coord"]; linea = null; if (!ajustes.orsKey && c.origen && c.destino) calcular(); });
-      if (ajustes.orsKey) autocompletar(inp, (op) => { c[campo] = op.label; c[campo + "Coord"] = { lng: op.lng, lat: op.lat }; calcular(); });
+      const sinFactura = () => { if (c.factura) { delete c.factura; delete c.kmFactura; c.usarKmOrs = false; pintarFactura(); } };
+      inp.addEventListener("input", () => { sinFactura(); c[campo] = inp.value; delete c[campo + "Coord"]; linea = null; if (!ajustes.orsKey && c.origen && c.destino) calcular(); });
+      if (ajustes.orsKey) autocompletar(inp, (op) => { sinFactura(); c[campo] = op.label; c[campo + "Coord"] = { lng: op.lng, lat: op.lat }; calcular(); });
     });
     const via = q("#ca-via");
     if (via) autocompletar(via, (op) => { c.vias.push({ label: op.label, lng: op.lng, lat: op.lat }); c._viasTocadas = true; via.value = ""; pintarVias(); calcular(); });
@@ -868,7 +906,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       avisar("Ruta de la calculadora lista: elige el cliente y guarda.");
       render();
     });
-    pintar(); pintarVias();
+    pintar(); pintarVias(); pintarFactura();
     if (c.origenCoord && c.destinoCoord && ajustes.orsKey) calcular();
   }
   // ---- Calculadora · Circuito completo (2026-11-09, pedido de Ivan) ----
@@ -889,7 +927,8 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const lugares = [...new Set([...rutas.values()].flatMap(r => [r.origen, r.destino]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
     const ph = ajustes.orsKey ? "Escribe la ciudad…" : "Ciudad, estado";
     const cajaTramo = (k, n, titulo) => `<div class="cc-tramo cc-${k}">
-        <div class="cc-th"><span class="cc-num">${n}</span><b>${titulo}</b><span id="cc-${k}-rl"></span><span class="cc-der" id="cc-${k}-sug"></span></div>
+        <div class="cc-th"><span class="cc-num">${n}</span><b>${titulo}</b><span id="cc-${k}-rl"></span><button type="button" class="secundario co-mini" data-cf-tramo="${k}">📄 Factura</button><span class="cc-der" id="cc-${k}-sug"></span></div>
+        <div id="cc-${k}-fact"></div>
         <div class="cc-ruta">
           <div><label>Origen</label><div class="co-ac"><input type="text" id="cc-${k}-or" list="cc-lugares" value="${esc(c[k].origen)}" placeholder="${ph}" autocomplete="off"></div></div>
           <div><label>Destino</label><div class="co-ac"><input type="text" id="cc-${k}-de" list="cc-lugares" value="${esc(c[k].destino)}" placeholder="${ph}" autocomplete="off"></div></div>
@@ -1053,17 +1092,23 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       if (cat) {
         if (cat.origenCoord && !t.origenCoord) t.origenCoord = cat.origenCoord;
         if (cat.destinoCoord && !t.destinoCoord) t.destinoCoord = cat.destinoCoord;
-        if (cat.km) { t.km = cat.km; q(`#cc-${k}-km`).value = t.km; }
+        if (cat.km && !t.kmFactura) { t.km = cat.km; q(`#cc-${k}-km`).value = t.km; }
       }
       if (!ajustes.orsKey || !t.origenCoord || !t.destinoCoord) {
-        hint(k, cat && cat.km ? "del catálogo" : (t.origen && t.destino ? (ajustes.orsKey ? "Elige origen y destino de la lista para calcular los km." : "Ruta nueva: escribe los km.") : ""));
+        hint(k, t.kmFactura ? `${miles(t.kmFactura)} km de la factura (Carta Porte)` : cat && cat.km ? "del catálogo" : (t.origen && t.destino ? (ajustes.orsKey ? "Elige origen y destino de la lista para calcular los km." : "Ruta nueva: escribe los km.") : ""));
         pintar(); return;
       }
       hint(k, "Calculando ruta de camión…");
       try {
         const res = await orsRuta([t.origenCoord, t.destinoCoord], ajustes.orsKey);
         lineas[k] = res.linea;
-        if (cat && cat.km) hint(k, cat.km === res.km ? "del catálogo · igual a ORS" : `del catálogo (${miles(cat.km)} km) · ORS ${miles(res.km)} km`);
+        if (t.kmFactura) {
+          t.km = t.usarKmOrs ? res.km : t.kmFactura;
+          const dif = Math.round((res.km - t.kmFactura) / t.kmFactura * 1000) / 10;
+          hint(k, `Factura ${miles(t.kmFactura)} km · ORS ${miles(res.km)} km (${dif > 0 ? "+" : ""}${dif} %) · usando <b>${t.usarKmOrs ? "ORS" : "factura"}</b> <button type="button" class="co-link" data-km-alt="${k}" style="font-size:12px;">usar ${t.usarKmOrs ? "factura" : "ORS"}</button>`);
+          const alt = q(`[data-km-alt="${k}"]`); if (alt) alt.addEventListener("click", () => { t.usarKmOrs = !t.usarKmOrs; kmTramo(k); });
+        }
+        else if (cat && cat.km) hint(k, cat.km === res.km ? "del catálogo · igual a ORS" : `del catálogo (${miles(cat.km)} km) · ORS ${miles(res.km)} km`);
         else { t.km = res.km; hint(k, `${miles(res.km)} km por ORS (camión)`); }
         q(`#cc-${k}-km`).value = t.km;
       } catch (x) { hint(k, ""); errC(x.message || "No se pudo calcular la ruta."); }
@@ -1124,12 +1169,14 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
         const inp = q(`#cc-${k}-${p}`), campo = p === "or" ? "origen" : "destino";
         const tocaVacio = (k === "impo" && campo === "destino") || (k === "expo" && campo === "origen");
         inp.addEventListener("input", () => {
+          sinFacturaTramo(k);
           t[campo] = inp.value; delete t[campo + "Coord"]; lineas[k] = null;
           if (tocaVacio) { lineas.vac = null; c.vac.clave = ""; }
           if (!ajustes.orsKey && t.origen && t.destino) kmTramo(k);
           if (!ajustes.orsKey && tocaVacio) kmVacio(); else pintar();
         });
         if (ajustes.orsKey) autocompletar(inp, (op) => {
+          sinFacturaTramo(k);
           t[campo] = op.label; t[campo + "Coord"] = { lng: op.lng, lat: op.lat };
           kmTramo(k);
           if (tocaVacio) { if (!vacioSi()) encadenarSinVacio(); kmVacio(); }
@@ -1138,6 +1185,37 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       q(`#cc-${k}-km`).addEventListener("input", (ev) => { t.km = ev.target.value; pintar(); });
       q(`#cc-${k}-cobro`).addEventListener("input", (ev) => { t.cobro = ev.target.value; pintar(); });
     });
+    // Factura por tramo (2026-11-17): origen, destino, km de la factura (manda) y flete como cobro.
+    function sinFacturaTramo(k) { const t = c[k]; if (t.factura) { delete t.factura; delete t.kmFactura; t.usarKmOrs = false; pintarFacturaTramo(k); } }
+    function pintarFacturaTramo(k) {
+      const fa = c[k].factura, caja = q(`#cc-${k}-fact`);
+      if (!fa) { caja.innerHTML = ""; return; }
+      caja.innerHTML = `<div class="cc-fact">📄 <b>Factura ${esc(fa.folio)}</b> · ${esc(fa.cliente)}${fa.estadoRent ? ` <span class="nota">· ${esc(textoRent(fa.estadoRent))}</span>` : ""} <button type="button" class="co-link" data-fq="${k}" style="font-size:12px;">quitar</button></div>`;
+      caja.querySelector("[data-fq]").addEventListener("click", () => { sinFacturaTramo(k); kmTramo(k); });
+    }
+    ov.querySelectorAll("[data-cf-tramo]").forEach(b => b.addEventListener("click", () => {
+      const k = b.dataset.cfTramo, t = c[k];
+      abrirCargaFactura({
+        esDueno: esDuenoRentabilidad(datosUsuario, yo.correo), orsKey: ajustes.orsKey, por: { uid, nombre: yo.nombre },
+        tramo: k === "impo" ? "Importación" : "Exportación",
+        alUsar: ({ f, origen, destino, estadoRent }) => {
+          const kk = f.calculos || {};
+          t.origen = origen.label; t.origenCoord = { lng: origen.lng, lat: origen.lat };
+          t.destino = destino.label; t.destinoCoord = { lng: destino.lng, lat: destino.lat };
+          t.kmFactura = kk.km; t.km = kk.km; t.usarKmOrs = false; lineas[k] = null;
+          // Cobro en la moneda del circuito (USD de la factura → MXN con el TC de esa factura).
+          const mxn = kk.fleteMxn != null ? kk.fleteMxn : kk.flete;
+          t.cobro = mxn == null ? "" : String(r2(c.moneda === "USD" ? mxn / (num(c.tc) || 1) : mxn)); t._orig = null;
+          t.factura = { folio: f.factura || "", cliente: (f.cliente || {}).nombre || "", estadoRent };
+          q(`#cc-${k}-or`).value = t.origen; q(`#cc-${k}-de`).value = t.destino; q(`#cc-${k}-km`).value = t.km; q(`#cc-${k}-cobro`).value = t.cobro;
+          lineas.vac = null; c.vac.clave = "";
+          pintarFacturaTramo(k);
+          kmTramo(k);
+          if (k === "impo" && !vacioSi()) encadenarSinVacio();
+          kmVacio();
+        },
+      });
+    }));
     q("#cc-vac-km").addEventListener("input", (ev) => { c.vac.km = ev.target.value; pintar(); });
     q("#cc-vac-cobro").addEventListener("input", (ev) => { c.vac.cobro = ev.target.value; pintar(); });
     q("#cc-tc").addEventListener("input", (ev) => { c.tc = num(ev.target.value); pintar(); });
@@ -1173,6 +1251,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       const b = q("#cc-copiar"); b.textContent = "Copiado ✓"; setTimeout(() => { b.textContent = "Copiar resumen"; }, 2000);
     });
     pintar();
+    ["impo", "expo"].forEach(pintarFacturaTramo);
     ["impo", "expo"].forEach(k => { if (c[k].origen && c[k].destino) hint(k, ""); });
     if (ajustes.orsKey) { ["impo", "expo"].forEach(k => { if (c[k].origenCoord && c[k].destinoCoord) kmTramo(k); }); c.vac.clave = ""; kmVacio(); }
   }
