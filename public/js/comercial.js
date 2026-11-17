@@ -112,6 +112,8 @@ const esCelular = () => /iphone|ipad|ipod|android|mobi/i.test(navigator.userAgen
 const correoValido = (t) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(t || "").trim());
 const URL_JSPDF = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
 const URL_LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+const URL_HTML2CANVAS = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"; // 2026-11-17: copiar la vuelta como imagen
+const esCelularUA = () => /iphone|ipad|ipod|android|mobi/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const URL_LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const ORS = "https://api.openrouteservice.org";
 const KM_RUTA_CORTA = 350; // como el CRM: RC = 350 km o menos; RL = 351 o más
@@ -1073,6 +1075,90 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       segC(q(`#cc-${k}-cr`), t, "cruceSi", [["no", "No"], ["si", "Sí"]]);
       if (q(`#cc-${k}-ad`)) segC(q(`#cc-${k}-ad`), t, "aduana", crucesDe(ajustes).map(a => [a.id, a.corto]));
     }
+    // ---- Copiar / compartir la vuelta como imagen (2026-11-17) ----
+    // Se arma una versión limpia del recuadro (sin botones ni rutas, "cuánto cobrar" en una línea y pie con
+    // fecha) fuera de la pantalla, se convierte en PNG con html2canvas y se copia (computadora) o se comparte (celular).
+    let imgLista = null; // celular: si el permiso de compartir venció mientras se armaba, el 2º toque comparte
+    function htmlImagenVuelta({ v, filas, verUsd, usdTotal }) {
+      const C_SEM = { "co-s-v": ["#EAF3DE", "#3B7A1E"], "co-s-a": ["#FBE3A8", "#7a3e06"], "co-s-r": ["#FBE4E1", "#A32D2D"] };
+      const sem = (s) => `<span style="font-size:10px;font-weight:800;padding:2px 7px;border-radius:9px;background:${C_SEM[s][0]};color:${C_SEM[s][1]};">${SEM[s]}</span>`;
+      const td = "padding:6px 8px;border-bottom:1px solid #F0ECE6;", tdn = td + "text-align:right;white-space:nowrap;";
+      const th = "text-align:left;font-size:10px;color:#6b5f52;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid #E2DDD5;";
+      const tcCap = (x) => !x ? "—" : `<span style="font-size:10px;font-weight:800;padding:1px 7px;border-radius:9px;background:${x.fuente === "factura" ? "#F1E8FB" : x.fuente === "capturado" ? "#FBE3A8" : "#ECE9E4"};color:${x.fuente === "factura" ? "#6B3FA0" : x.fuente === "capturado" ? "#7a3e06" : "#5c5045"};">${x.tc ? "TC " + Number(x.tc).toFixed(2) : "MXN"}</span>`;
+      const pk = (x) => `${(x / v.km * 100).toFixed(1)}%`;
+      const colIng = { "co-s-v": "#3B7A1E", "co-s-a": "#B7790B", "co-s-r": "#B83227" }[v.sem];
+      const ahora = new Date();
+      const fecha = `${ahora.getDate()} ${["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"][ahora.getMonth()]} ${ahora.getFullYear()}, ${String(ahora.getHours()).padStart(2, "0")}:${String(ahora.getMinutes()).padStart(2, "0")}`;
+      const meta = (o) => o.cobro <= 0 ? "ya se cumple" : `<b>${fmt(o.cobro)}</b>`;
+      return `<div style="width:640px;padding:16px 18px;background:#fff;border:2px solid #2C1E0F;border-radius:14px;font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;color:#1F1A14;">
+        <div style="display:flex;gap:18px;align-items:flex-start;">
+          <div style="flex:1;"><div style="font-size:11px;color:#6b5f52;text-transform:uppercase;letter-spacing:.4px;font-weight:700;">Ingreso por km de la vuelta · carga ${esc(CARGAS[c.carga].toLowerCase())}</div>
+            <span style="font-size:30px;font-weight:800;color:${colIng};">${dinero(v.ing)}</span> ${sem(v.sem)}
+            <div style="font-size:12px;color:#8a7f73;">${verUsd && usdTotal != null ? `${dinero(usdTotal, "USD")} = ` : ""}${dinero(v.mxn)} MXN ÷ ${miles(v.km)} km · meta verde ${dinero(v.meta.verde)} · ámbar ${dinero(v.meta.ambar)}</div></div>
+          ${v.kv ? `<div style="border-left:1px solid #E2DDD5;padding-left:16px;"><div style="font-size:12px;color:#8a7f73;">Solo km con carga</div><b style="font-size:18px;">${dinero(v.cargado)}/km</b><div style="font-size:12px;color:#8a7f73;">el vacío baja ${dinero(v.cargado - v.ing)}/km</div></div>` : ""}
+        </div>
+        <div style="display:flex;height:24px;border-radius:7px;overflow:hidden;margin:12px 0 4px;font-size:11px;color:#fff;font-weight:700;">
+          <span style="display:flex;align-items:center;justify-content:center;width:${pk(v.i.km)};background:${COLOR.impo}">Impo ${miles(v.i.km)} km</span>${v.kv ? `<span style="display:flex;align-items:center;justify-content:center;width:${pk(v.kv)};background:${COLOR.vac}">Vacío ${miles(v.kv)}</span>` : ""}<span style="display:flex;align-items:center;justify-content:center;width:${pk(v.e.km)};background:${COLOR.expo}">Expo ${miles(v.e.km)} km</span></div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:6px;"><thead><tr><th style="${th}">Tramo</th><th style="${th}text-align:right;">Km</th>
+          ${verUsd ? `<th style="${th}text-align:right;">USD</th><th style="${th}text-align:right;">MXN</th><th style="${th}text-align:right;">TC</th>` : `<th style="${th}text-align:right;">Cobro</th>`}<th style="${th}text-align:right;">Ing./km</th></tr></thead><tbody>
+          ${filas.map(f => `<tr><td style="${td}"><b style="color:${f.color}">${f.n} · ${f.nombre}</b></td><td style="${tdn}">${miles(f.km)}</td>
+            ${verUsd ? `<td style="${tdn}">${f.mxn == null ? "—" : f.usd == null ? "n/a" : dinero(f.usd, "USD")}</td>` : ""}<td style="${tdn}">${f.mxn == null ? "—" : dinero(f.mxn)}</td>
+            ${verUsd ? `<td style="${tdn}">${f.mxn == null ? "—" : tcCap(f.tc)}</td>` : ""}<td style="${tdn}">${f.d ? `${dinero(f.d.ing)} ${sem(f.d.sem)}` : "—"}</td></tr>`).join("")}
+          <tr><td style="padding:7px 8px;border-top:2px solid #2C1E0F;font-weight:800;">Vuelta completa</td><td style="padding:7px 8px;border-top:2px solid #2C1E0F;font-weight:800;text-align:right;">${miles(v.km)}</td>
+            ${verUsd ? `<td style="padding:7px 8px;border-top:2px solid #2C1E0F;font-weight:800;text-align:right;">${usdTotal == null ? "—" : dinero(usdTotal, "USD")}</td>` : ""}<td style="padding:7px 8px;border-top:2px solid #2C1E0F;font-weight:800;text-align:right;">${dinero(v.mxn)}</td>
+            ${verUsd ? `<td style="border-top:2px solid #2C1E0F;"></td>` : ""}<td style="padding:7px 8px;border-top:2px solid #2C1E0F;font-weight:800;text-align:right;">${dinero(v.ing)}</td></tr>
+        </tbody></table>
+        <div style="margin-top:10px;background:#FBF6EC;border:1px solid #EAD9B8;border-radius:10px;padding:8px 12px;font-size:12.5px;">Expo para verde: ${meta(v.paraVerde)} · para ámbar: ${meta(v.paraAmbar)}</div>
+        <div style="display:flex;justify-content:space-between;margin-top:10px;font-size:11px;color:#6b5f52;border-top:1px dashed #E2DDD5;padding-top:8px;"><span>Autotransportes Alanis · Calculadora de circuito</span><span>${fecha}</span></div>
+      </div>`;
+    }
+    async function pngVuelta(datos) {
+      const html2canvas = await cargarScript(URL_HTML2CANVAS, "html2canvas");
+      const caja = document.createElement("div");
+      caja.style.cssText = "position:fixed;left:-10000px;top:0;background:#fff;padding:6px;";
+      caja.innerHTML = htmlImagenVuelta(datos);
+      document.body.appendChild(caja);
+      try {
+        const lienzo = await html2canvas(caja, { scale: 2, backgroundColor: "#ffffff", logging: false });
+        return await new Promise((ok, mal) => lienzo.toBlob(b => b ? ok(b) : mal(new Error("No se pudo crear la imagen.")), "image/png"));
+      } finally { caja.remove(); }
+    }
+    function marcarImg(b, txt, ms) { const antes = b.dataset.txt || b.textContent; b.dataset.txt = antes; b.textContent = txt; if (ms) setTimeout(() => { b.textContent = antes; }, ms); }
+    function descargarPng(blob) {
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "vuelta-circuito.png";
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }
+    async function copiarImagenVuelta(b, datos) {
+      errC();
+      const archivo = (blob) => new File([blob], "vuelta-circuito.png", { type: "image/png" });
+      if (esCelularUA()) {
+        // Celular: menú de compartir del teléfono (WhatsApp, etc.).
+        try {
+          if (imgLista) { const f = imgLista; imgLista = null; await navigator.share({ files: [f] }); marcarImg(b, "📤 Compartir imagen", 0); return; }
+          marcarImg(b, "Preparando…", 0);
+          const f = archivo(await pngVuelta(datos));
+          if (navigator.canShare && navigator.canShare({ files: [f] })) {
+            try { await navigator.share({ files: [f] }); marcarImg(b, "📤 Compartir imagen", 0); }
+            catch (e) {
+              if (e && e.name === "AbortError") { marcarImg(b, "📤 Compartir imagen", 0); return; }
+              imgLista = f; marcarImg(b, "📤 Lista · toca para compartir", 0); // el permiso venció mientras se armaba
+            }
+          } else { descargarPng(f); marcarImg(b, "✓ Imagen descargada", 2500); }
+        } catch (e) { marcarImg(b, "📤 Compartir imagen", 0); errC("No se pudo crear la imagen: " + (e.message || e)); }
+        return;
+      }
+      // Computadora: al portapapeles (la promesa se entrega en el mismo clic, como pide Safari).
+      marcarImg(b, "Copiando…", 0);
+      const promesa = pngVuelta(datos);
+      try {
+        if (!(window.ClipboardItem && navigator.clipboard && navigator.clipboard.write)) throw new Error("sin portapapeles de imágenes");
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": promesa })]);
+        marcarImg(b, "✓ Imagen copiada · pega con Ctrl+V", 2500);
+      } catch (e) {
+        try { descargarPng(await promesa); marcarImg(b, "✓ Imagen descargada", 2500); }
+        catch (x) { marcarImg(b, "📷 Copiar imagen", 0); errC("No se pudo crear la imagen: " + (x.message || x)); }
+      }
+    }
     function pintarResultado() {
       const v = vuelta(), caja = q("#cc-res");
       if (!v) { caja.innerHTML = `<p class="nota" style="margin:0;">Captura los km de la importación y de la exportación para ver el ingreso por km de la vuelta.</p>`; return; }
@@ -1107,6 +1193,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
           <div><div class="cc-et">Ingreso por km de la vuelta</div><span class="cc-big co-ing ${v.sem}">${dinero(v.ing)}</span> <span class="ca-sem ${v.sem}">${SEM[v.sem]}</span>
             <div class="nota">${verUsd && usdTotal != null ? `${dinero(usdTotal, "USD")} = ` : ""}${dinero(v.mxn)} MXN ÷ ${miles(v.km)} km recorridos · meta verde ${dinero(v.meta.verde)} · ámbar ${dinero(v.meta.ambar)}</div></div>
           ${v.kv ? `<div class="cc-sep"><div class="nota">Solo km con carga</div><b style="font-size:18px;">${dinero(v.cargado)}/km</b><div class="nota">${miles(v.i.km + v.e.km)} km · el vacío te baja <b>${dinero(v.cargado - v.ing)}/km</b></div></div>` : ""}
+          <button type="button" class="secundario co-mini" id="cc-img" style="margin-left:auto;align-self:flex-start;">${esCelularUA() ? "📤 Compartir imagen" : "📷 Copiar imagen"}</button>
         </div>
         <div class="cc-kms"><span style="width:${pk(v.i.km)};background:${COLOR.impo}">Impo ${miles(v.i.km)} km</span>${v.kv ? `<span style="width:${pk(v.kv)};background:${COLOR.vac}">Vacío ${miles(v.kv)}</span>` : ""}<span style="width:${pk(v.e.km)};background:${COLOR.expo}">Expo ${miles(v.e.km)} km</span></div>
         <div class="nota">${v.kv ? `${Math.round(v.kv / v.km * 100)} % de la vuelta en vacío.` : "Sin vacío."}${v.faltaKmVacio ? ` <b style="color:#A32D2D;">Falta escribir los km del vacío.</b>` : ""}${!v.i.propio || !v.e.propio ? " Los tramos sin cobro escrito van con la sugerida." : ""}</div>
@@ -1118,6 +1205,8 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
           para llegar a <b>verde (${dinero(v.meta.verde)}/km)</b> la expo debe cobrar ${usar(v.paraVerde, "ca-pv")}<br>
           para llegar a <b>ámbar (${dinero(v.meta.ambar)}/km)</b> la expo debe cobrar ${usar(v.paraAmbar, "ca-pa")}</div>`;
       caja.querySelectorAll("[data-expo]").forEach(b => b.addEventListener("click", () => { c.expo.cobro = b.dataset.expo; q("#cc-expo-cobro").value = c.expo.cobro; pintar(); }));
+      const bImg = q("#cc-img");
+      if (bImg) bImg.addEventListener("click", () => copiarImagenVuelta(bImg, { v, filas, verUsd, usdTotal }));
     }
 
     // ---- Km por tramo: catálogo u ORS ----
