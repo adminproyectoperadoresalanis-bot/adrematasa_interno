@@ -1000,6 +1000,26 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const semDe = (ing, u) => ing >= u.verde ? "co-s-v" : ing >= u.ambar ? "co-s-a" : "co-s-r";
     const SEM = { "co-s-v": "VERDE", "co-s-a": "ÁMBAR", "co-s-r": "ROJO" };
     const corto = (t) => String(t || "").split(",")[0].trim();
+    // 2026-11-18: "Nuevo Laredo, TAM, México" → "Nuevo Laredo, TAM" (clave corta del estado; en EUA "Laredo, TX").
+    const CLAVE_EDO = { "AGUASCALIENTES": "AGS", "BAJA CALIFORNIA": "BC", "BAJA CALIFORNIA SUR": "BCS", "CAMPECHE": "CAMP", "CHIAPAS": "CHIS", "CHIHUAHUA": "CHIH",
+      "COAHUILA": "COAH", "COAHUILA DE ZARAGOZA": "COAH", "COLIMA": "COL", "CIUDAD DE MEXICO": "CDMX", "DISTRITO FEDERAL": "CDMX", "DURANGO": "DGO", "GUANAJUATO": "GTO",
+      "GUERRERO": "GRO", "HIDALGO": "HGO", "JALISCO": "JAL", "MEXICO": "MEX", "ESTADO DE MEXICO": "MEX", "MICHOACAN": "MICH", "MICHOACAN DE OCAMPO": "MICH", "MORELOS": "MOR",
+      "NAYARIT": "NAY", "NUEVO LEON": "NL", "OAXACA": "OAX", "PUEBLA": "PUE", "QUERETARO": "QRO", "QUINTANA ROO": "QROO", "SAN LUIS POTOSI": "SLP", "SINALOA": "SIN",
+      "SONORA": "SON", "TABASCO": "TAB", "TAMAULIPAS": "TAM", "TLAXCALA": "TLAX", "VERACRUZ": "VER", "YUCATAN": "YUC", "ZACATECAS": "ZAC", "TEXAS": "TX" };
+    const sinAcento = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/\./g, "").replace(/\s+/g, " ").trim();
+    function lugarCorto(t) {
+      const partes = String(t || "").split(",").map(x => x.trim()).filter(Boolean);
+      if (!partes.length) return "—";
+      const ciudad = partes[0];
+      const edo = partes.slice(1).find(x => !/^(MEXICO|MÉXICO|USA|EUA|ESTADOS UNIDOS|UNITED STATES)$/i.test(x));
+      if (!edo) return ciudad;
+      const clave = /^[A-Z]{2,4}$/.test(edo) ? edo : (CLAVE_EDO[sinAcento(edo)] || edo);
+      return `${ciudad}, ${clave}`;
+    }
+    const rutaCorta = (a, b) => `${lugarCorto(a)} → ${lugarCorto(b)}`;
+    // Cápsula de ruta (corta solo en la flecha, nunca a mitad de un nombre).
+    const COLOR_SUAVE = { "#185FA5": "#E6F1FB", "#A32D2D": "#FBE9E7", "#3B7A1E": "#EAF3DE" };
+    const capsulaRuta = (ruta, color) => `<div style="margin-top:3px;"><span style="display:inline-block;font-size:11px;font-weight:600;line-height:1.35;padding:2px 8px;border-radius:9px;background:${COLOR_SUAVE[color] || "#F2EDE6"};color:${color};">${String(ruta).split(" → ").map(x => `<span style="white-space:nowrap;">${esc(x)}</span>`).join(" → ")}</span></div>`;
     const vacioSi = () => c.vacio === "si";
 
     // Números de un tramo cargado (impo / expo). Sin cobro escrito se usa la sugerida.
@@ -1101,7 +1121,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
           <span style="display:flex;align-items:center;justify-content:center;width:${pk(v.i.km)};background:${COLOR.impo}">Impo ${miles(v.i.km)} km</span>${v.kv ? `<span style="display:flex;align-items:center;justify-content:center;width:${pk(v.kv)};background:${COLOR.vac}">Vacío ${miles(v.kv)}</span>` : ""}<span style="display:flex;align-items:center;justify-content:center;width:${pk(v.e.km)};background:${COLOR.expo}">Expo ${miles(v.e.km)} km</span></div>
         <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:6px;"><thead><tr><th style="${th}">Tramo</th><th style="${th}text-align:right;">Km</th>
           ${verUsd ? `<th style="${th}text-align:right;">USD</th><th style="${th}text-align:right;">MXN</th><th style="${th}text-align:right;">TC</th>` : `<th style="${th}text-align:right;">Cobro</th>`}<th style="${th}text-align:right;">Ing./km</th></tr></thead><tbody>
-          ${filas.map(f => `<tr><td style="${td}"><b style="color:${f.color}">${f.n} · ${f.nombre}</b></td><td style="${tdn}">${miles(f.km)}</td>
+          ${filas.map(f => `<tr><td style="${td}"><b style="color:${f.color}">${f.n} · ${f.nombre}</b>${capsulaRuta(f.ruta, f.color)}</td><td style="${tdn}">${miles(f.km)}</td>
             ${verUsd ? `<td style="${tdn}">${f.mxn == null ? "—" : f.usd == null ? "n/a" : dinero(f.usd, "USD")}</td>` : ""}<td style="${tdn}">${f.mxn == null ? "—" : dinero(f.mxn)}</td>
             ${verUsd ? `<td style="${tdn}">${f.mxn == null ? "—" : tcCap(f.tc)}</td>` : ""}<td style="${tdn}">${f.d ? `${dinero(f.d.ing)} ${sem(f.d.sem)}` : "—"}</td></tr>`).join("")}
           <tr><td style="padding:7px 8px;border-top:2px solid #2C1E0F;font-weight:800;">Vuelta completa</td><td style="padding:7px 8px;border-top:2px solid #2C1E0F;font-weight:800;text-align:right;">${miles(v.km)}</td>
@@ -1177,13 +1197,13 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       };
       const tcDe = (t) => (t && conFactura(t)) ? { tc: t.factura.tc || null, fuente: "factura" } : tcCirc;
       const filas = [
-        { n: 1, nombre: "Importación", color: COLOR.impo, ruta: `${corto(c.impo.origen) || "—"} → ${corto(c.impo.destino) || "—"}`, km: v.i.km, mxn: v.i.mxn, usd: usdDe(c.impo, v.i.cobro, v.i.mxn), tc: tcDe(c.impo), d: v.i },
-        ...(vacioSi() ? [{ n: 2, nombre: "Vacío", color: COLOR.vac, ruta: `${corto(c.impo.destino) || "—"} → ${corto(c.expo.origen) || "—"}`, km: v.kv, mxn: v.cv ? v.cvMxn : null, usd: v.cv ? usdDe(null, v.cv, v.cvMxn) : null, tc: v.cv ? tcCirc : null, d: null }] : []),
-        { n: vacioSi() ? 3 : 2, nombre: "Exportación", color: COLOR.expo, ruta: `${corto(c.expo.origen) || "—"} → ${corto(c.expo.destino) || "—"}`, km: v.e.km, mxn: v.e.mxn, usd: usdDe(c.expo, v.e.cobro, v.e.mxn), tc: tcDe(c.expo), d: v.e },
+        { n: 1, nombre: "Importación", color: COLOR.impo, ruta: rutaCorta(c.impo.origen, c.impo.destino), km: v.i.km, mxn: v.i.mxn, usd: usdDe(c.impo, v.i.cobro, v.i.mxn), tc: tcDe(c.impo), d: v.i },
+        ...(vacioSi() ? [{ n: 2, nombre: "Vacío", color: COLOR.vac, ruta: rutaCorta(c.impo.destino, c.expo.origen), km: v.kv, mxn: v.cv ? v.cvMxn : null, usd: v.cv ? usdDe(null, v.cv, v.cvMxn) : null, tc: v.cv ? tcCirc : null, d: null }] : []),
+        { n: vacioSi() ? 3 : 2, nombre: "Exportación", color: COLOR.expo, ruta: rutaCorta(c.expo.origen, c.expo.destino), km: v.e.km, mxn: v.e.mxn, usd: usdDe(c.expo, v.e.cobro, v.e.mxn), tc: tcDe(c.expo), d: v.e },
       ];
       const conCobro = filas.filter(f => f.mxn != null);
       const usdTotal = conCobro.every(f => f.usd != null) ? r2(conCobro.reduce((s, f) => s + f.usd, 0)) : null;
-      const filaT = (f) => `<tr><td><b style="color:${f.color}">${f.n} · ${f.nombre}</b></td><td class="cc-c-ruta">${esc(f.ruta)}</td><td class="n">${miles(f.km)}</td>
+      const filaT = (f) => `<tr><td><b style="color:${f.color}">${f.n} · ${f.nombre}</b>${capsulaRuta(f.ruta, f.color)}</td><td class="n">${miles(f.km)}</td>
         ${verUsd ? `<td class="n">${f.mxn == null ? "—" : f.usd == null ? `<span class="nota">n/a</span>` : dinero(f.usd, "USD")}</td>` : ""}
         <td class="n">${f.mxn == null ? "—" : dinero(f.mxn)}</td>
         ${verUsd ? `<td class="n">${f.mxn == null ? "—" : capsulaTc(f.tc) || "—"}</td>` : ""}
@@ -1197,9 +1217,9 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
         </div>
         <div class="cc-kms"><span style="width:${pk(v.i.km)};background:${COLOR.impo}">Impo ${miles(v.i.km)} km</span>${v.kv ? `<span style="width:${pk(v.kv)};background:${COLOR.vac}">Vacío ${miles(v.kv)}</span>` : ""}<span style="width:${pk(v.e.km)};background:${COLOR.expo}">Expo ${miles(v.e.km)} km</span></div>
         <div class="nota">${v.kv ? `${Math.round(v.kv / v.km * 100)} % de la vuelta en vacío.` : "Sin vacío."}${v.faltaKmVacio ? ` <b style="color:#A32D2D;">Falta escribir los km del vacío.</b>` : ""}${!v.i.propio || !v.e.propio ? " Los tramos sin cobro escrito van con la sugerida." : ""}</div>
-        <div class="tabla-wrap"><table class="cc-tabla"><thead><tr><th>Tramo</th><th class="cc-c-ruta">Ruta</th><th class="n">Km</th>${verUsd ? `<th class="n">Cobro USD</th><th class="n">Cobro MXN</th><th class="n">TC</th>` : `<th class="n">Cobro</th>`}<th class="n">Ing./km del tramo</th></tr></thead><tbody>
+        <div class="tabla-wrap"><table class="cc-tabla"><thead><tr><th>Tramo</th><th class="n">Km</th>${verUsd ? `<th class="n">Cobro USD</th><th class="n">Cobro MXN</th><th class="n">TC</th>` : `<th class="n">Cobro</th>`}<th class="n">Ing./km del tramo</th></tr></thead><tbody>
           ${filas.map(filaT).join("")}
-          <tr class="cc-tot"><td>Vuelta completa</td><td class="cc-c-ruta"></td><td class="n">${miles(v.km)}</td>${verUsd ? `<td class="n">${usdTotal == null ? "—" : dinero(usdTotal, "USD")}</td>` : ""}<td class="n">${dinero(v.mxn)}</td>${verUsd ? `<td></td>` : ""}<td class="n">${dinero(v.ing)}</td></tr>
+          <tr class="cc-tot"><td>Vuelta completa</td><td class="n">${miles(v.km)}</td>${verUsd ? `<td class="n">${usdTotal == null ? "—" : dinero(usdTotal, "USD")}</td>` : ""}<td class="n">${dinero(v.mxn)}</td>${verUsd ? `<td></td>` : ""}<td class="n">${dinero(v.ing)}</td></tr>
         </tbody></table></div>
         <div class="cc-meta"><b>¿Cuánto cobrar en la expo?</b> Con la importación en ${fmt(v.i.cobro)}${v.cv ? ` y el vacío en ${fmt(v.cv)}` : ""}:<br>
           para llegar a <b>verde (${dinero(v.meta.verde)}/km)</b> la expo debe cobrar ${usar(v.paraVerde, "ca-pv")}<br>
