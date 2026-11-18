@@ -6,6 +6,7 @@ import { db } from "./firebase-config.js";
 import {
   collection, onSnapshot, query, where, doc, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { getAuth } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import {
   formatearFechaCorta, formatearHora12, sumarDias, calcularSemanaLaboral,
   numeroSemanaISO, formatearFechaDDMMYY, formatearFechaLargaCap,
@@ -13,6 +14,11 @@ import {
   construirPaginaRH, construirPaginaNomina, construirHtmlReporteCompleto,
   idsIncluidosEnReporte, filtrarPendientes
 } from "./reportesHtml.js";
+// 2026-11-18: personal en día festivo — formato ATAF104 (solo quien autoriza).
+import {
+  puedeUsarAtaf104, REF_CFG_FESTIVO, agruparFestivoPorArea, datosFormatoFestivo,
+  abrirVerFestivo, abrirEnvioFestivo, inyectarEstilosFestivo, claveFestivo, fechaNum, fechaHoraCorta
+} from "./formatoFestivo.js";
 
 function hoyLocalStr() {
   // Evita el corrimiento de un día que da toISOString() cerca de medianoche
@@ -136,6 +142,27 @@ function construirVista(contenedor, { esAdmin, uid }) {
       </div>
       <div id="horarios-docx-error" class="error"></div>
     </section>
+
+    ${esAdmin && puedeUsarAtaf104() ? `
+    <section class="panel" style="margin-top:20px;" id="rep-festivo">
+      <h2>Personal en día festivo (ATAF104)</h2>
+      <p class="nota">
+        Se arma con las solicitudes de horas extra <strong>aprobadas</strong> de la fecha del festivo, una hoja por área.
+        Las pendientes se avisan pero no entran. Los destinatarios de cada área están en Configuración › 1 · RH.
+      </p>
+      <div class="fila-captura">
+        <label>Festivo
+          <select id="rep-festivo-fecha"><option value="">Cargando...</option></select>
+        </label>
+      </div>
+      <div class="tabla-wrap">
+        <table class="tabla">
+          <thead><tr><th>Área</th><th>Personas</th><th>Estatus</th><th>Acción</th></tr></thead>
+          <tbody id="tbody-rep-festivo"><tr><td colspan="4">Cargando...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+    ` : ""}
   `;
 
   const selectSemana = contenedor.querySelector("#rep-semana");
@@ -188,7 +215,89 @@ function construirVista(contenedor, { esAdmin, uid }) {
   onSnapshot(baseUsuarios, (snap) => {
     mapUsuarios.clear();
     snap.docs.forEach(d => mapUsuarios.set(d.id, d.data()));
+    renderFestivo();
   });
+
+  // ---- Personal en día festivo (ATAF104, 2026-11-18) ----
+  // Usa las mismas listas en vivo de esta pantalla (listaHoras, mapUsuarios).
+  const seccionFestivo = contenedor.querySelector("#rep-festivo");
+  let festivosCatalogo = [];
+  let cfgFestivo = {};
+  if (seccionFestivo) {
+    inyectarEstilosFestivo();
+    const selFestivo = seccionFestivo.querySelector("#rep-festivo-fecha");
+    selFestivo.addEventListener("change", renderFestivo);
+    onSnapshot(doc(db, "configuracion", "diasFestivos"), (snap) => {
+      const lista = snap.exists() && Array.isArray(snap.data().festivos) ? snap.data().festivos : [];
+      festivosCatalogo = lista.filter(f => f && f.fecha).sort((a, b) => a.fecha.localeCompare(b.fecha));
+      const hoy = hoyLocalStr();
+      const hace60 = sumarDias(hoy, -60);
+      const visibles = festivosCatalogo.filter(f => f.fecha >= hace60);
+      const previo = selFestivo.value;
+      const sugerido = (festivosCatalogo.find(f => f.fecha >= hoy) || festivosCatalogo[festivosCatalogo.length - 1] || {}).fecha || "";
+      selFestivo.innerHTML = visibles.length
+        ? visibles.map(f => `<option value="${f.fecha}">${fechaNum(f.fecha)} · ${escapeHtmlCompartido(f.nombre || "")}${f.fecha < hoy ? " (pasado)" : ""}</option>`).join("")
+        : `<option value="">No hay festivos en Configuración</option>`;
+      selFestivo.value = visibles.some(f => f.fecha === previo) ? previo : sugerido;
+      renderFestivo();
+    });
+    onSnapshot(REF_CFG_FESTIVO(), (snap) => {
+      cfgFestivo = snap.exists() ? snap.data() : {};
+      renderFestivo();
+    });
+  }
+
+  function festivoElegido() {
+    const sel = seccionFestivo && seccionFestivo.querySelector("#rep-festivo-fecha");
+    return sel ? festivosCatalogo.find(f => f.fecha === sel.value) || null : null;
+  }
+  function yoFestivo() {
+    const u = getAuth().currentUser;
+    const datos = (u && mapUsuarios.get(u.uid)) || {};
+    return { nombre: datos.nombre || (u && u.displayName) || "", puesto: datos.puesto || "" };
+  }
+
+  function renderFestivo() {
+    if (!seccionFestivo) return;
+    const tbodyF = seccionFestivo.querySelector("#tbody-rep-festivo");
+    const festivo = festivoElegido();
+    if (!festivo) { tbodyF.innerHTML = `<tr><td colspan="4">Elige un festivo.</td></tr>`; return; }
+    const grupos = agruparFestivoPorArea(listaHoras, mapUsuarios, festivo.fecha);
+    if (grupos.length === 0) {
+      tbodyF.innerHTML = `<tr><td colspan="4">Nadie ha capturado horas extra para este festivo todavía.</td></tr>`;
+      return;
+    }
+    tbodyF.innerHTML = grupos.map((g, i) => {
+      const personas = new Set(g.aprobadas.map(s => s.empleadoId)).size;
+      const envios = ((cfgFestivo.envios || {})[claveFestivo(festivo.fecha, g.area)] || []).slice().sort((a, b) => (b.ms || 0) - (a.ms || 0));
+      const ultimo = envios[0];
+      return `<tr data-i="${i}">
+        <td>${escapeHtmlCompartido(g.area)}</td>
+        <td>${personas}${g.pendientes.length ? ` <span class="ff-chip ff-pend">${g.pendientes.length} pendiente${g.pendientes.length === 1 ? "" : "s"}</span>` : ""}</td>
+        <td>${ultimo
+          ? `<span class="ff-chip ff-env" title="Para: ${escapeHtmlCompartido((ultimo.para || []).join(", "))}">Enviado ${fechaHoraCorta(ultimo.ms)}</span>`
+          : `<span class="ff-chip ff-sin">Sin enviar</span>`}</td>
+        <td class="acciones">
+          <button type="button" class="secundario btn-festivo-ver">Ver / PDF</button>
+          <button type="button" class="btn-festivo-enviar"${personas ? "" : " disabled"}>✉️ ${ultimo ? "Reenviar" : "Enviar"}</button>
+        </td>
+      </tr>`;
+    }).join("");
+    tbodyF.querySelectorAll("tr[data-i]").forEach(fila => {
+      const g = grupos[Number(fila.dataset.i)];
+      const armar = () => {
+        const d = datosFormatoFestivo({ festivo, grupo: g, mapUsuarios, responsable: yoFestivo().nombre });
+        d.observaciones = (cfgFestivo.observaciones || {})[claveFestivo(festivo.fecha, g.area)] || "";
+        return d;
+      };
+      fila.querySelector(".btn-festivo-ver").addEventListener("click", () => {
+        abrirVerFestivo({ d: armar(), pendientes: g.pendientes, cfg: cfgFestivo, yo: yoFestivo() });
+      });
+      fila.querySelector(".btn-festivo-enviar").addEventListener("click", () => {
+        abrirEnvioFestivo({ d: armar(), cfg: cfgFestivo, yo: yoFestivo() });
+      });
+    });
+  }
 
   [selectSemana, chkIncluirTodo].forEach(el => el.addEventListener("change", renderTodo));
 
@@ -225,6 +334,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
 
     resumen = construirResumen(filtradasHoras, filtradasVacaciones, filtradasFaltas, pendientes);
     renderResumen();
+    renderFestivo();
   }
 
   // Junta horas extra, vacaciones y faltas del mismo rango en una fila por

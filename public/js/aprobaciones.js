@@ -56,6 +56,12 @@ function fechaCortaIso(iso) {
   return isNaN(d.getTime()) ? "" : `${d.getDate()} ${MESES_CORTOS[d.getMonth()]}`;
 }
 
+// Día festivo (2026-11-18, ATAF104): chip en la fecha si la solicitud se capturó
+// como día festivo (campo festivo que guarda solicitudes.js).
+function chipFestivo(s) {
+  return s && s.festivo ? `<br><span style="display:inline-block;margin-top:3px;background:#FFF1CC;color:#8a5a00;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;white-space:nowrap;" title="Día festivo · formato ATAF104">🎉 ${escapeHtml(s.festivo.nombre || "Festivo")}</span>` : "";
+}
+
 // permiteRevertir: solo true para la vista de admin (iniciarGestionSolicitudes).
 // Las reglas de Firestore ya lo hacían así de todos modos — un supervisor solo
 // puede actualizar una solicitud mientras sigue "pendiente" (resource.data.estatus
@@ -152,7 +158,7 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
     tbodyPendientes.innerHTML = lista.map(s => `
       <tr data-id="${s.id}">
         <td>${escapeHtml(s.empleadoNombre || "")}</td>
-        <td>${s.fecha}</td>
+        <td>${s.fecha}${chipFestivo(s)}</td>
         <td>${s.horaInicio}–${s.horaFin}${etiquetaChoque(s)}</td>
         <td>${s.horas}</td>
         <td>${escapeHtml(s.motivo)}</td>
@@ -255,7 +261,7 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
     tbodyHistorial.innerHTML = ultimoHistorial.map(s => `
         <tr data-id-correo="${s.id}">
           <td>${escapeHtml(s.empleadoNombre || "")}</td>
-          <td>${s.fecha}</td>
+          <td>${s.fecha}${chipFestivo(s)}</td>
           <td>${s.horaInicio}–${s.horaFin}</td>
           <td>${s.horas}</td>
           <td>${escapeHtml(s.motivo)}</td>

@@ -6,6 +6,15 @@ import { db } from "./firebase-config.js";
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, where
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+// 2026-11-18 (ATAF104): días festivos. Una fecha futura solo se puede capturar si
+// es día festivo del catálogo (Configuración › Días festivos). En festivo el
+// motivo se vuelve "Justificación" breve (máx. 150) y es lo que sale en la
+// sección 2 del formato ATAF104. La solicitud guarda festivo: { fecha, nombre }.
+const MAX_JUSTIFICACION = 150;
+function hoyLocalIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 import { avisarNuevaSolicitud } from "./avisoNuevaSolicitud.js";
 
 const ETIQUETAS_ESTATUS = {
@@ -95,10 +104,12 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
             <span id="horas-calculadas" class="valor-horas">—</span>
           </div>
         </div>
+        <div id="sol-aviso-festivo"></div>
         <div id="sol-aviso-choque"></div>
-        <label>Motivo
+        <label><span id="sol-motivo-etiqueta">Motivo</span>
           <textarea id="sol-motivo" rows="3" required></textarea>
         </label>
+        <div id="sol-motivo-contador" class="nota oculto" style="margin-top:-4px;"></div>
         <div class="acciones-form">
           <button type="submit" id="btn-guardar-solicitud">Enviar solicitud</button>
           <button type="button" id="btn-cancelar-edicion" class="secundario oculto">Cancelar edición</button>
@@ -134,6 +145,49 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
   let editandoId = null;
   let ultimaLista = []; // mis solicitudes (las llena el onSnapshot de abajo)
 
+  // ---- Días festivos (2026-11-18, ATAF104) ----
+  let festivos = []; // [{ fecha: "yyyy-mm-dd", nombre }]
+  const avisoFestivo = contenedor.querySelector("#sol-aviso-festivo");
+  const etiquetaMotivo = contenedor.querySelector("#sol-motivo-etiqueta");
+  const contadorMotivo = contenedor.querySelector("#sol-motivo-contador");
+  const festivoDe = (fecha) => festivos.find(f => f.fecha === fecha) || null;
+  onSnapshot(doc(db, "configuracion", "diasFestivos"), (snap) => {
+    const lista = snap.exists() ? snap.data().festivos : null;
+    festivos = Array.isArray(lista) ? lista.filter(f => f && f.fecha) : [];
+    revisarFormulario();
+    if (ultimaLista.length) renderTabla(ultimaLista);
+  }, () => { /* sin catálogo: se comporta como antes, sin fechas futuras */ });
+  function pintarContador() {
+    const n = inputMotivo.value.length;
+    contadorMotivo.textContent = `${n} / ${MAX_JUSTIFICACION} caracteres · aparece tal cual en el formato ATAF104`;
+    contadorMotivo.style.color = n > MAX_JUSTIFICACION ? "#8a2318" : "";
+  }
+  inputMotivo.addEventListener("input", () => { if (!contadorMotivo.classList.contains("oculto")) pintarContador(); });
+  // Pinta el aviso del festivo y regresa "futuro" si la fecha es futura y NO es festivo.
+  function revisarFestivo() {
+    avisoFestivo.innerHTML = "";
+    const fecha = inputFecha.value;
+    const f = fecha ? festivoDe(fecha) : null;
+    if (f) {
+      avisoFestivo.innerHTML = `<div style="border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:10px 0;background:#FFF6E0;border:1px solid #E9C46A;color:#6b4a06;">🎉 <b>Día festivo: ${escapeHtml(f.nombre || "")}.</b> Esta solicitud entra a la <b>planeación del personal que labora en día festivo (formato ATAF104)</b>. Se puede capturar antes de la fecha. Escribe una justificación breve: qué actividad vas a atender.</div>`;
+      etiquetaMotivo.textContent = "Justificación (breve, obligatoria en día festivo)";
+      inputMotivo.setAttribute("maxlength", String(MAX_JUSTIFICACION));
+      inputMotivo.placeholder = "Ej. Recepción y despacho de embarques programados.";
+      contadorMotivo.classList.remove("oculto");
+      pintarContador();
+      return null;
+    }
+    etiquetaMotivo.textContent = "Motivo";
+    inputMotivo.removeAttribute("maxlength");
+    inputMotivo.placeholder = "";
+    contadorMotivo.classList.add("oculto");
+    if (fecha && fecha > hoyLocalIso()) {
+      avisoFestivo.innerHTML = `<div style="border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:10px 0;background:#FDECEA;border:1px solid #F3C2BC;color:#8a2318;"><b>Esa fecha todavía no ocurre.</b><br>Solo se pueden capturar fechas futuras cuando son día festivo.</div>`;
+      return "futuro";
+    }
+    return null;
+  }
+
   function actualizarHorasPreview() {
     if (inputInicio.value && inputFin.value) {
       const horas = calcularHoras(inputInicio.value, inputFin.value);
@@ -162,6 +216,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
     btnGuardar.disabled = false;
     btnGuardar.textContent = textoBoton;
     avisoChoque.innerHTML = "";
+    if (revisarFestivo() === "futuro") { btnGuardar.disabled = true; return "bloqueo"; }
     if (!inputFecha.value || !inputInicio.value || !inputFin.value) return null;
     const { empalmes, mismoDia } = revisarChoques(inputFecha.value, inputInicio.value, inputFin.value, ultimaLista, editandoId);
     if (empalmes.length) {
@@ -224,6 +279,12 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
       errorDiv.textContent = "Completa todos los campos.";
       return;
     }
+    const festivo = festivoDe(fecha);
+    if (festivo && motivo.length > MAX_JUSTIFICACION) {
+      errorDiv.textContent = `En día festivo la justificación debe ser breve (máximo ${MAX_JUSTIFICACION} caracteres).`;
+      return;
+    }
+    const datoFestivo = festivo ? { fecha: festivo.fecha, nombre: festivo.nombre || "" } : null;
 
     const horas = calcularHoras(horaInicio, horaFin);
     if (horas <= 0) {
@@ -242,6 +303,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
           horaFin,
           horas,
           motivo,
+          festivo: datoFestivo,
           semanaLaboral: calcularSemanaLaboral(fecha)
         });
         salirModoEdicion();
@@ -255,6 +317,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
           horaFin,
           horas,
           motivo,
+          festivo: datoFestivo,
           semanaLaboral: calcularSemanaLaboral(fecha),
           estatus: "pendiente",
           comentarioRevisor: null,
@@ -264,6 +327,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
         });
         form.reset();
         horasCalculadas.textContent = "—";
+        revisarFormulario();
 
         // Aviso por correo a quien le toca aprobar (mejor esfuerzo — no
         // bloquea ni afecta el guardado de arriba, que ya quedó hecho).
@@ -271,9 +335,9 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
           datosUsuario,
           asunto: `Nueva solicitud de horas extra de ${datosUsuario.nombre}`,
           mensaje: `<p style="margin:0 0 12px;">${escapeHtml(datosUsuario.nombre)} envió una nueva solicitud de horas extra:</p>
-<p style="margin:0 0 4px;"><strong>Fecha:</strong> ${fecha}</p>
+<p style="margin:0 0 4px;"><strong>Fecha:</strong> ${fecha}${festivo ? ` (día festivo: ${escapeHtml(festivo.nombre || "")})` : ""}</p>
 <p style="margin:0 0 4px;"><strong>Horario:</strong> ${horaInicio}–${horaFin} (${horas} h)</p>
-<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(motivo)}</p>
+<p style="margin:0 0 12px;"><strong>${festivo ? "Justificación" : "Motivo"}:</strong> ${escapeHtml(motivo)}</p>
 <p style="margin:0;color:#555;font-size:0.9em;">Entra a Adrematasa Interno para aprobarla o rechazarla.</p>`,
           tituloBell: "Nueva solicitud de horas extra",
           mensajeBell: `${datosUsuario.nombre} envió una solicitud para tu revisión`,
@@ -296,6 +360,11 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
     errorDiv.textContent = "No se pudieron cargar tus solicitudes: " + err.message;
   });
 
+  function chipFestivo(s) {
+    const f = s.festivo || festivoDe(s.fecha);
+    return f ? `<br><span style="display:inline-block;margin-top:3px;background:#FFF1CC;color:#8a5a00;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;white-space:nowrap;" title="Día festivo · formato ATAF104">🎉 ${escapeHtml(f.nombre || "Festivo")}</span>` : "";
+  }
+
   function renderTabla(filas) {
     if (filas.length === 0) {
       tbody.innerHTML = `<tr><td colspan="8">Aún no has enviado ninguna solicitud.</td></tr>`;
@@ -303,7 +372,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
     }
     tbody.innerHTML = filas.map(s => `
       <tr data-id="${s.id}">
-        <td>${s.fecha}</td>
+        <td>${s.fecha}${chipFestivo(s)}</td>
         <td>${s.horaInicio}–${s.horaFin}</td>
         <td>${s.horas}</td>
         <td>${escapeHtml(s.motivo)}</td>
