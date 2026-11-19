@@ -16,6 +16,8 @@ function hoyLocalIso() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 import { avisarNuevaSolicitud } from "./avisoNuevaSolicitud.js";
+// ATAF104 (2026-11-18): fecha límite = cuando sale el formato a nóminas.
+import { fechaEnvioAtaf104, fechaLargaConDia, HORA_ENVIO_ATAF104 } from "./reportesHtml.js";
 
 const ETIQUETAS_ESTATUS = {
   pendiente: "Pendiente",
@@ -169,7 +171,14 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
     const fecha = inputFecha.value;
     const f = fecha ? festivoDe(fecha) : null;
     if (f) {
-      avisoFestivo.innerHTML = `<div style="border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:10px 0;background:#FFF6E0;border:1px solid #E9C46A;color:#6b4a06;">🎉 <b>Día festivo: ${escapeHtml(f.nombre || "")}.</b> Esta solicitud entra a la <b>planeación del personal que labora en día festivo (formato ATAF104)</b>. Se puede capturar antes de la fecha. Escribe una justificación breve: qué actividad vas a atender.</div>`;
+      // Fecha límite: el ATAF104 sale 2 días hábiles antes del festivo a las 9:00 am.
+      const envio = fechaEnvioAtaf104(f.fecha, festivos);
+      const ahora = new Date();
+      const yaSalio = hoyLocalIso() > envio || (hoyLocalIso() === envio && ahora.getHours() >= HORA_ENVIO_ATAF104);
+      const limite = yaSalio
+        ? `<br><b>El formato de este festivo ya se envió a nóminas (${escapeHtml(fechaLargaConDia(envio))}, ${HORA_ENVIO_ATAF104}:00 am).</b> Esta solicitud ya no entra en la lista que recibe seguridad; avisa a tu jefe.`
+        : `<br>Para que entres en la lista que recibe seguridad, <b>captúrala y que te la aprueben antes del ${escapeHtml(fechaLargaConDia(envio))} a las ${HORA_ENVIO_ATAF104}:00 am</b>.`;
+      avisoFestivo.innerHTML = `<div style="border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:10px 0;background:#FFF6E0;border:1px solid #E9C46A;color:#6b4a06;">🎉 <b>Día festivo: ${escapeHtml(f.nombre || "")}.</b> Esta solicitud entra al formato ATAF104 (personal que labora en día festivo). Escribe una justificación breve: qué actividad vas a atender.${limite}</div>`;
       etiquetaMotivo.textContent = "Justificación (breve, obligatoria en día festivo)";
       inputMotivo.setAttribute("maxlength", String(MAX_JUSTIFICACION));
       inputMotivo.placeholder = "Ej. Recepción y despacho de embarques programados.";

@@ -1,3 +1,11 @@
+// ##########################################################################
+// PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+// RUTA:     /workspaces/adrematasa_interno/automatizacion/generar-y-enviar-reporte.mjs
+// ##########################################################################
+// 2026-11-18 (ATAF104): lee el catálogo de festivos (configuracion/diasFestivos)
+// para que el REPORTE NOMINA separe las horas en festivo (columna "H Fest").
+// El ATAF104 NO va en este correo: sale solo 2 días hábiles antes del festivo
+// (ver generar-y-enviar-ataf104.mjs).
 // Correo automático de los jueves: genera el mismo PDF de 2 páginas
 // (REPORTE RH + REPORTE NOMINAS) que ya arma js/reportes.js en el
 // navegador — usando exactamente el mismo módulo (js/reportesHtml.js), para
@@ -185,12 +193,14 @@ async function main() {
   }
 
   // --- 3. Leer el resto de Firestore ---
-  const [snapHoras, snapVacaciones, snapFaltas, snapUsuarios] = await Promise.all([
+  const [snapHoras, snapVacaciones, snapFaltas, snapUsuarios, snapFestivos] = await Promise.all([
     db.collection("solicitudes").get(),
     db.collection("solicitudesVacaciones").get(),
     db.collection("faltas").get(),
-    db.collection("usuarios").get()
+    db.collection("usuarios").get(),
+    db.collection("configuracion").doc("diasFestivos").get()
   ]);
+  const festivos = snapFestivos.exists && Array.isArray(snapFestivos.data().festivos) ? snapFestivos.data().festivos.filter(f => f && f.fecha) : [];
   const listaHoras = snapHoras.docs.map(d => ({ id: d.id, ...d.data() }));
   const listaVacaciones = snapVacaciones.docs.map(d => ({ id: d.id, ...d.data() }));
   const listaFaltas = snapFaltas.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -213,8 +223,8 @@ async function main() {
   const logoBuffer = readFileSync(join(__dirname, "..", "public", "img", "logo-alanis.png"));
   const logoSrc = `data:image/png;base64,${logoBuffer.toString("base64")}`;
 
-  const paginaRH = construirPaginaRH({ listaHoras, mapUsuarios, viernes, jueves, numeroSemana, logoSrc });
-  const paginaNomina = construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, jueves, numeroSemana, logoSrc });
+  const paginaRH = construirPaginaRH({ listaHoras, mapUsuarios, viernes, jueves, numeroSemana, logoSrc, festivos });
+  const paginaNomina = construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, jueves, numeroSemana, logoSrc, festivos });
   const html = construirHtmlReporteCompleto({ paginaRH, paginaNomina, numeroSemana, mostrarBarraImprimir: false });
 
   // --- 5. HTML -> PDF con Chromium headless (mismo resultado que "Imprimir / Guardar como PDF") ---

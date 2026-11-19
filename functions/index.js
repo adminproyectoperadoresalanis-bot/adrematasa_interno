@@ -795,5 +795,3 @@ exports.generarLlaveSeguridad = require("./llavesSeguridad").generarLlaveSegurid
 // Avisos push en el celular: campanita + McCain (2026-11-13)
 Object.assign(exports, require("./avisosPushAdrematasa"));
 
-// ATAF104: formato de personal en día festivo por correo (2026-11-18)
-Object.assign(exports, require("./ataf104Correo"));

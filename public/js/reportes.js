@@ -6,19 +6,26 @@ import { db } from "./firebase-config.js";
 import {
   collection, onSnapshot, query, where, doc, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
-import { getAuth } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import {
   formatearFechaCorta, formatearHora12, sumarDias, calcularSemanaLaboral,
   numeroSemanaISO, formatearFechaDDMMYY, formatearFechaLargaCap,
   formatearFechaHoraGeneracion, escapeHtml as escapeHtmlCompartido,
   construirPaginaRH, construirPaginaNomina, construirHtmlReporteCompleto,
-  idsIncluidosEnReporte, filtrarPendientes
+  idsIncluidosEnReporte, filtrarPendientes,
+  festivosParaAtaf104, personasAtaf104, responsableAtaf104, construirPaginaAtaf104,
+  fechaEnvioAtaf104, fechaLargaConDia, HORA_ENVIO_ATAF104
 } from "./reportesHtml.js";
-// 2026-11-18: personal en día festivo — formato ATAF104 (solo quien autoriza).
-import {
-  puedeUsarAtaf104, REF_CFG_FESTIVO, agruparFestivoPorArea, datosFormatoFestivo,
-  abrirVerFestivo, abrirEnvioFestivo, inyectarEstilosFestivo, claveFestivo, fechaNum, fechaHoraCorta
-} from "./formatoFestivo.js";
+// 2026-11-18 (ATAF104): columna Festivo en el resumen y hoja ATAF104 en la
+// vista previa (solo quien autoriza). El correo del ATAF104 sale solo, 2 días
+// hábiles antes del festivo (automatizacion/generar-y-enviar-ataf104.mjs).
+import { puedeUsarAtaf104, REF_CFG_FESTIVO, REF_ESTADO_FESTIVO, abrirObservacionesAtaf104 } from "./formatoFestivo.js";
+
+// Fecha local (yyyy-mm-dd) de un ISO.
+function hoyLocalDe(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 function hoyLocalStr() {
   // Evita el corrimiento de un día que da toISOString() cerca de medianoche
@@ -112,9 +119,9 @@ function construirVista(contenedor, { esAdmin, uid }) {
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-rep-resumen">
           <thead>
-            <tr><th>Empleado</th><th>Horas extra</th><th>Días de vacaciones</th><th>Faltas</th></tr>
+            <tr><th>Empleado</th><th>Horas extra</th><th>Festivo</th><th>Días de vacaciones</th><th>Faltas</th></tr>
           </thead>
-          <tbody id="tbody-rep-resumen"><tr><td colspan="4">Cargando...</td></tr></tbody>
+          <tbody id="tbody-rep-resumen"><tr><td colspan="5">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -128,6 +135,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
       <div class="acciones-form">
         <button type="button" class="secundario" id="btn-vista-previa">VISTA PREVIA / IMPRIMIR</button>
       </div>
+      <div id="rep-ataf104-aviso"></div>
     </section>
 
     <section class="panel" style="margin-top:20px;">
@@ -142,33 +150,6 @@ function construirVista(contenedor, { esAdmin, uid }) {
       </div>
       <div id="horarios-docx-error" class="error"></div>
     </section>
-
-    ${esAdmin && puedeUsarAtaf104() ? `
-    <section class="panel" style="margin-top:20px;" id="rep-festivo">
-      <h2>Personal en día festivo (ATAF104)</h2>
-      <p class="nota">
-        Se arma con las solicitudes de horas extra <strong>aprobadas</strong> de la fecha del festivo, todas las áreas en
-        un solo formato. Las pendientes se avisan pero no entran. Un solo correo por festivo; los destinatarios
-        están en Configuración › 1 · RH.
-      </p>
-      <div class="fila-captura">
-        <label>Festivo
-          <select id="rep-festivo-fecha"><option value="">Cargando...</option></select>
-        </label>
-      </div>
-      <div class="tabla-wrap">
-        <table class="tabla">
-          <thead><tr><th>Área</th><th>Personas</th></tr></thead>
-          <tbody id="tbody-rep-festivo"><tr><td colspan="2">Cargando...</td></tr></tbody>
-        </table>
-      </div>
-      <p class="nota" id="rep-festivo-estatus" style="margin:10px 0 0;"></p>
-      <div class="acciones-form">
-        <button type="button" class="secundario" id="btn-festivo-ver" disabled>Ver / PDF</button>
-        <button type="button" id="btn-festivo-enviar" disabled>✉️ Enviar</button>
-      </div>
-    </section>
-    ` : ""}
   `;
 
   const selectSemana = contenedor.querySelector("#rep-semana");
@@ -221,88 +202,73 @@ function construirVista(contenedor, { esAdmin, uid }) {
   onSnapshot(baseUsuarios, (snap) => {
     mapUsuarios.clear();
     snap.docs.forEach(d => mapUsuarios.set(d.id, d.data()));
-    renderFestivo();
+    renderAvisoAtaf104();
   });
 
-  // ---- Personal en día festivo (ATAF104, 2026-11-18) ----
-  // Usa las mismas listas en vivo de esta pantalla (listaHoras, mapUsuarios).
-  const seccionFestivo = contenedor.querySelector("#rep-festivo");
-  let festivosCatalogo = [];
-  let cfgFestivo = {};
-  if (seccionFestivo) {
-    inyectarEstilosFestivo();
-    const selFestivo = seccionFestivo.querySelector("#rep-festivo-fecha");
-    selFestivo.addEventListener("change", renderFestivo);
-    onSnapshot(doc(db, "configuracion", "diasFestivos"), (snap) => {
-      const lista = snap.exists() && Array.isArray(snap.data().festivos) ? snap.data().festivos : [];
-      festivosCatalogo = lista.filter(f => f && f.fecha).sort((a, b) => a.fecha.localeCompare(b.fecha));
-      const hoy = hoyLocalStr();
-      const hace60 = sumarDias(hoy, -60);
-      const visibles = festivosCatalogo.filter(f => f.fecha >= hace60);
-      const previo = selFestivo.value;
-      const sugerido = (festivosCatalogo.find(f => f.fecha >= hoy) || festivosCatalogo[festivosCatalogo.length - 1] || {}).fecha || "";
-      selFestivo.innerHTML = visibles.length
-        ? visibles.map(f => `<option value="${f.fecha}">${fechaNum(f.fecha)} · ${escapeHtmlCompartido(f.nombre || "")}${f.fecha < hoy ? " (pasado)" : ""}</option>`).join("")
-        : `<option value="">No hay festivos en Configuración</option>`;
-      selFestivo.value = visibles.some(f => f.fecha === previo) ? previo : sugerido;
-      renderFestivo();
-    });
-    onSnapshot(REF_CFG_FESTIVO(), (snap) => {
-      cfgFestivo = snap.exists() ? snap.data() : {};
-      renderFestivo();
-    });
+  // ---- Festivos y ATAF104 (2026-11-18) ----
+  let festivos = [];
+  let cfgAtaf104 = {};
+  let estadoAtaf104 = {};
+  const verAtaf104 = esAdmin && puedeUsarAtaf104();
+  onSnapshot(doc(db, "configuracion", "diasFestivos"), (snap) => {
+    const lista = snap.exists() && Array.isArray(snap.data().festivos) ? snap.data().festivos : [];
+    festivos = lista.filter(f => f && f.fecha).sort((a, b) => a.fecha.localeCompare(b.fecha));
+    renderTodo();
+  }, () => {});
+  if (verAtaf104) {
+    onSnapshot(REF_CFG_FESTIVO(), (snap) => { cfgAtaf104 = snap.exists() ? snap.data() : {}; renderAvisoAtaf104(); }, () => {});
+    onSnapshot(REF_ESTADO_FESTIVO(), (snap) => { estadoAtaf104 = snap.exists() ? snap.data() : {}; renderAvisoAtaf104(); }, () => {});
   }
 
-  function festivoElegido() {
-    const sel = seccionFestivo && seccionFestivo.querySelector("#rep-festivo-fecha");
-    return sel ? festivosCatalogo.find(f => f.fecha === sel.value) || null : null;
+  // Festivos de la semana elegida (o la siguiente) que llevan hoja ATAF104.
+  function ataf104DeLaSemana() {
+    if (!verAtaf104 || !selectSemana.value) return [];
+    return festivosParaAtaf104({ festivos, viernes: selectSemana.value }).map(f => {
+      const { personas, pendientes } = personasAtaf104({ listaHoras, mapUsuarios, fecha: f.fecha });
+      const envio = fechaEnvioAtaf104(f.fecha, festivos);
+      const estado = estadoAtaf104[f.fecha] || {};
+      return { festivo: f, personas, pendientes, envio, estado };
+    }).filter(x => x.personas.length || x.pendientes.length);
   }
-  function yoFestivo() {
-    const u = getAuth().currentUser;
-    const datos = (u && mapUsuarios.get(u.uid)) || {};
-    return { nombre: datos.nombre || (u && u.displayName) || "", puesto: datos.puesto || "" };
-  }
 
-  function renderFestivo() {
-    if (!seccionFestivo) return;
-    const tbodyF = seccionFestivo.querySelector("#tbody-rep-festivo");
-    const estatus = seccionFestivo.querySelector("#rep-festivo-estatus");
-    const btnVer = seccionFestivo.querySelector("#btn-festivo-ver");
-    const btnEnviar = seccionFestivo.querySelector("#btn-festivo-enviar");
-    btnVer.disabled = true; btnEnviar.disabled = true;
-    btnVer.onclick = null; btnEnviar.onclick = null;
-    estatus.innerHTML = "";
-    const festivo = festivoElegido();
-    if (!festivo) { tbodyF.innerHTML = `<tr><td colspan="2">Elige un festivo.</td></tr>`; return; }
-    const grupos = agruparFestivoPorArea(listaHoras, mapUsuarios, festivo.fecha);
-    if (grupos.length === 0) {
-      tbodyF.innerHTML = `<tr><td colspan="2">Nadie ha capturado horas extra para este festivo todavía.</td></tr>`;
-      return;
-    }
-    const personasDe = (g) => new Set(g.aprobadas.map(s => s.empleadoId)).size;
-    const total = grupos.reduce((acc, g) => acc + personasDe(g), 0);
-    const pendientes = grupos.flatMap(g => g.pendientes);
-    tbodyF.innerHTML = grupos.map(g => `<tr>
-        <td>${escapeHtmlCompartido(g.area)}</td>
-        <td>${personasDe(g)}${g.pendientes.length ? ` <span class="ff-chip ff-pend">${g.pendientes.length} pendiente${g.pendientes.length === 1 ? "" : "s"}</span>` : ""}</td>
-      </tr>`).join("") + `<tr><td><strong>Total</strong></td><td><strong>${total}</strong></td></tr>`;
-
-    const envios = ((cfgFestivo.envios || {})[claveFestivo(festivo.fecha)] || []).slice().sort((a, b) => (b.ms || 0) - (a.ms || 0));
-    const ultimo = envios[0];
-    estatus.innerHTML = "Estatus: " + (ultimo
-      ? `<span class="ff-chip ff-env">Enviado ${fechaHoraCorta(ultimo.ms)} a ${escapeHtmlCompartido((ultimo.para || []).join(", "))}</span>${envios.length > 1 ? ` <span class="nota">(${envios.length} envíos)</span>` : ""}`
-      : `<span class="ff-chip ff-sin">Sin enviar</span>`);
-
-    const armar = () => {
-      const d = datosFormatoFestivo({ festivo, grupos, mapUsuarios, responsable: yoFestivo().nombre });
-      d.observaciones = (cfgFestivo.observaciones || {})[claveFestivo(festivo.fecha)] || "";
-      return d;
-    };
-    btnVer.disabled = false;
-    btnVer.onclick = () => abrirVerFestivo({ d: armar(), pendientes, cfg: cfgFestivo, yo: yoFestivo() });
-    btnEnviar.disabled = total === 0;
-    btnEnviar.textContent = ultimo ? "✉️ Reenviar" : "✉️ Enviar";
-    btnEnviar.onclick = () => abrirEnvioFestivo({ d: armar(), cfg: cfgFestivo, yo: yoFestivo() });
+  // Aviso junto a "VISTA PREVIA / IMPRIMIR".
+  function renderAvisoAtaf104() {
+    const caja = contenedor.querySelector("#rep-ataf104-aviso");
+    if (!caja) return;
+    const lista = ataf104DeLaSemana();
+    if (!lista.length) { caja.innerHTML = ""; return; }
+    const ahora = new Date();
+    const hoy = hoyLocalStr();
+    const chip = (txt, fondo, color) => `<span style="display:inline-block;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;background:${fondo};color:${color};white-space:nowrap;">${txt}</span>`;
+    caja.innerHTML = lista.map(x => {
+      const { festivo: f, personas, pendientes, envio, estado } = x;
+      const yaToca = hoy > envio || (hoy === envio && ahora.getHours() >= HORA_ENVIO_ATAF104);
+      const estatus = estado.enviadoEn
+        ? chip(`Enviado ${new Date(estado.enviadoEn).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`, "#DCEAF7", "#185FA5")
+        : hoy > f.fecha
+          ? chip("No se envió", "#eee", "#555")
+          : yaToca
+            ? chip("Todavía no sale · revisa GitHub › Actions", "#FDECEA", "#8a2318")
+            : chip("Programado", "#e3f1dc", "#3B7A1E");
+      const incluye = personas.length
+        ? `<b>Este reporte incluye el ATAF104 de ${escapeHtmlCompartido(f.nombre || "festivo")} (${escapeHtmlCompartido(formatearFechaLargaCap(f.fecha))})</b> · ${personas.length} persona${personas.length === 1 ? "" : "s"}`
+        : `<b>ATAF104 de ${escapeHtmlCompartido(f.nombre || "festivo")} (${escapeHtmlCompartido(formatearFechaLargaCap(f.fecha))})</b> · todavía nadie aprobado, no entra a la vista previa`;
+      return `<div style="display:flex;gap:10px;align-items:flex-start;background:#FFF6E0;border:1px solid #E9C46A;border-radius:10px;padding:10px 12px;margin-top:10px;font-size:13px;color:#6b4a06;">
+        <span style="font-size:20px;line-height:1;">🎉</span>
+        <div style="flex:1;min-width:0;">
+          ${incluye}${pendientes.length ? ` ${chip(`${pendientes.length} pendiente${pendientes.length === 1 ? "" : "s"}`, "#FFF1CC", "#8a5a00")}` : ""}<br>
+          Sale solo, en su propio correo, el <b>${escapeHtmlCompartido(fechaLargaConDia(envio))} a las ${HORA_ENVIO_ATAF104}:00 am</b> · ${estatus}
+          <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <button type="button" class="secundario btn-obs-ataf104" data-fecha="${f.fecha}">Observaciones</button>
+            <span class="nota" style="margin:0;">Para reenviar o mandarlo antes: GitHub › Actions › "ATAF104" › Run workflow.</span>
+          </div>
+        </div>
+      </div>`;
+    }).join("");
+    caja.querySelectorAll(".btn-obs-ataf104").forEach(b => b.addEventListener("click", () => {
+      const f = festivos.find(x => x.fecha === b.dataset.fecha) || { fecha: b.dataset.fecha };
+      abrirObservacionesAtaf104({ fecha: f.fecha, nombre: f.nombre, texto: ((cfgAtaf104.observaciones || {})[f.fecha]) || "" });
+    }));
   }
 
   [selectSemana, chkIncluirTodo].forEach(el => el.addEventListener("change", renderTodo));
@@ -340,7 +306,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
 
     resumen = construirResumen(filtradasHoras, filtradasVacaciones, filtradasFaltas, pendientes);
     renderResumen();
-    renderFestivo();
+    renderAvisoAtaf104();
   }
 
   // Junta horas extra, vacaciones y faltas del mismo rango en una fila por
@@ -355,16 +321,24 @@ function construirVista(contenedor, { esAdmin, uid }) {
     function obtener(id, nombre) {
       if (!id) return null;
       if (!porEmpleado.has(id)) {
-        porEmpleado.set(id, { nombre: nombre || "", horas: 0, vacaciones: 0, faltas: 0, atrasados: [] });
+        porEmpleado.set(id, { nombre: nombre || "", horas: 0, festivo: 0, fechasFestivo: new Set(), vacaciones: 0, faltas: 0, atrasados: [] });
       }
       const e = porEmpleado.get(id);
       if (nombre && !e.nombre) e.nombre = nombre;
       return e;
     }
 
+    // Horas en día festivo van aparte (columna Festivo): se pagan distinto.
+    const fechasFestivas = new Set(festivos.map(f => f.fecha));
+    const sumarHoras = (e, s) => {
+      const horas = Number(s.horas) || 0;
+      if (fechasFestivas.has(s.fecha)) { e.festivo += horas; e.fechasFestivo.add(s.fecha); }
+      else e.horas += horas;
+      return horas;
+    };
     filtradasHoras.forEach(s => {
       const e = obtener(s.empleadoId, s.empleadoNombre);
-      if (e) e.horas += Number(s.horas) || 0;
+      if (e) sumarHoras(e, s);
     });
     filtradasVacaciones.forEach(s => {
       const e = obtener(s.empleadoId, s.empleadoNombre);
@@ -378,9 +352,8 @@ function construirVista(contenedor, { esAdmin, uid }) {
     pendientes.horas.forEach(s => {
       const e = obtener(s.empleadoId, s.empleadoNombre);
       if (!e) return;
-      const horas = Number(s.horas) || 0;
-      e.horas += horas;
-      e.atrasados.push({ tipo: "Horas extra", semana: semanaOriginalDe(s.fecha), cantidad: `${horas} h` });
+      const horas = sumarHoras(e, s);
+      e.atrasados.push({ tipo: fechasFestivas.has(s.fecha) ? "Horas en festivo" : "Horas extra", semana: semanaOriginalDe(s.fecha), cantidad: `${horas} h` });
     });
     pendientes.vacaciones.forEach(v => {
       const e = obtener(v.empleadoId, v.empleadoNombre);
@@ -401,7 +374,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
 
   function renderResumen() {
     if (resumen.length === 0) {
-      tbodyResumen.innerHTML = `<tr><td colspan="4">Sin registros para este filtro.</td></tr>`;
+      tbodyResumen.innerHTML = `<tr><td colspan="5">Sin registros para este filtro.</td></tr>`;
       return;
     }
     tbodyResumen.innerHTML = resumen.map(e => {
@@ -418,6 +391,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
         <tr class="${tieneAtrasados ? "fila-con-atrasado" : ""}">
           <td>${escapeHtmlCompartido(e.nombre)}${detalleAtrasados}</td>
           <td>${e.horas}</td>
+          <td${e.festivo ? ` style="background:#FFF6E0;font-weight:700;color:#8a5a00;"` : ""}>${e.festivo ? `${e.festivo} h · ${[...e.fechasFestivo].sort().map(formatearFechaCorta).join(", ")}` : "—"}</td>
           <td>${e.vacaciones}</td>
           <td>${e.faltas}</td>
         </tr>
@@ -428,8 +402,8 @@ function construirVista(contenedor, { esAdmin, uid }) {
   contenedor.querySelector("#btn-exportar-resumen").addEventListener("click", () => {
     const numero = selectSemana.value ? numeroSemanaISO(sumarDias(selectSemana.value, 6)) : sufijoFecha();
     exportarCSV(`resumen_semana_${numero}.csv`,
-      ["Empleado", "Horas extra", "Días de vacaciones", "Faltas"],
-      resumen.map(e => [e.nombre, e.horas, e.vacaciones, e.faltas])
+      ["Empleado", "Horas extra", "Horas en festivo", "Días de vacaciones", "Faltas"],
+      resumen.map(e => [e.nombre, e.horas, e.festivo, e.vacaciones, e.faltas])
     );
   });
 
@@ -652,16 +626,26 @@ function construirVista(contenedor, { esAdmin, uid }) {
       }
     }
 
-    const paginaRH = construirPaginaRH({ listaHoras, mapUsuarios, viernes, jueves, numeroSemana, logoSrc });
-    const paginaNomina = construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, jueves, numeroSemana, logoSrc });
+    const paginaRH = construirPaginaRH({ listaHoras, mapUsuarios, viernes, jueves, numeroSemana, logoSrc, festivos });
+    const paginaNomina = construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, jueves, numeroSemana, logoSrc, festivos });
+    // Hojas ATAF104 (solo quien autoriza): festivos de esta semana o la
+    // siguiente con personal aprobado. Fecha de solicitud = día en que salió
+    // (o sale) el correo.
+    const paginasExtra = ataf104DeLaSemana().filter(x => x.personas.length).map(x => construirPaginaAtaf104({
+      fecha: x.festivo.fecha, festivoNombre: x.festivo.nombre || "", personas: x.personas,
+      responsable: responsableAtaf104(mapUsuarios),
+      fechaSolicitud: x.estado.enviadoEn ? hoyLocalDe(x.estado.enviadoEn) : x.envio,
+      observaciones: ((cfgAtaf104.observaciones || {})[x.festivo.fecha]) || "",
+      logoSrc, conSalto: true
+    }));
     // 2026-11-05: en celular (y en la app instalada) el reporte se abre DENTRO
     // de la app, con barra "‹ Regresar" e "Imprimir / PDF". Antes abría una
     // ventana nueva que en la app instalada no tenía cómo regresar.
     if (esVistaMovil()) {
-      abrirReporteEnApp(construirHtmlReporteCompleto({ paginaRH, paginaNomina, numeroSemana, mostrarBarraImprimir: false }), numeroSemana);
+      abrirReporteEnApp(construirHtmlReporteCompleto({ paginaRH, paginaNomina, numeroSemana, mostrarBarraImprimir: false, paginasExtra }), numeroSemana);
       return;
     }
-    const html = construirHtmlReporteCompleto({ paginaRH, paginaNomina, numeroSemana });
+    const html = construirHtmlReporteCompleto({ paginaRH, paginaNomina, numeroSemana, paginasExtra });
 
     const ventana = window.open("", "_blank");
     if (!ventana) {

@@ -1,0 +1,75 @@
+# ##########################################################################
+# PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+# RUTA:     /workspaces/adrematasa_interno/.github/workflows/ataf104-festivos.yml
+# ##########################################################################
+name: ATAF104 · personal en día festivo (correo automático)
+
+# ATAF104 (2026-11-18): sale solo 2 días hábiles antes de cada festivo a las
+# 9:00 am de Nuevo Laredo (automatizacion/generar-y-enviar-ataf104.mjs), y un
+# día hábil antes le avisa a Ivan. Corre TODOS los días, varias veces: el
+# script revisa la hora real y si ya se mandó, así que da igual si GitHub se
+# atrasa o si es horario de verano/invierno (mismo criterio que el reporte de
+# los jueves). Los días sin festivo cerca sale en segundos sin hacer nada.
+#   14:00 UTC = 9:00 am verano (CDT) / 8:00 am invierno (CST)
+#   15:00 UTC = 10:00 am verano / 9:00 am invierno
+#   17:00, 20:00 y 23:00 UTC = respaldos por si GitHub se atrasa o falla
+on:
+  schedule:
+    - cron: '0 14 * * *'
+    - cron: '0 15 * * *'
+    - cron: '0 17 * * *'
+    - cron: '0 20 * * *'
+    - cron: '0 23 * * *'
+  workflow_dispatch:
+    inputs:
+      forzar:
+        description: 'Mandar el ATAF104 ahora (reenviar o adelantar), sin esperar la ventana'
+        type: boolean
+        default: false
+      fecha:
+        description: 'Fecha del festivo (yyyy-mm-dd). Vacío = el próximo festivo'
+        type: string
+        required: false
+        default: ''
+
+jobs:
+  ataf104:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el repo
+        uses: actions/checkout@v4
+
+      - name: Instalar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Instalar dependencias
+        working-directory: automatizacion
+        run: npm install
+
+      - name: Revisar si hoy toca algo
+        id: revisar
+        working-directory: automatizacion
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FORZAR_ENVIO: ${{ inputs.forzar }}
+          FECHA_FESTIVO: ${{ inputs.fecha }}
+          SOLO_REVISAR: 'true'
+        run: node generar-y-enviar-ataf104.mjs
+
+      - name: Instalar Chromium (para generar el PDF)
+        if: steps.revisar.outputs.accion == 'si'
+        working-directory: automatizacion
+        run: npx playwright install --with-deps chromium
+
+      - name: Mandar el ATAF104 o el recordatorio
+        if: steps.revisar.outputs.accion == 'si'
+        working-directory: automatizacion
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
+          FORZAR_ENVIO: ${{ inputs.forzar }}
+          FECHA_FESTIVO: ${{ inputs.fecha }}
+        run: node generar-y-enviar-ataf104.mjs

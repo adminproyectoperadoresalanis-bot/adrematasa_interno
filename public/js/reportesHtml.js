@@ -135,7 +135,8 @@ export function escapeHtml(texto) {
 //   listaHoras: arreglo de solicitudes de horas extra (todas, sin filtrar).
 //   mapUsuarios: Map(empleadoId -> datos de usuarios).
 //   logoSrc: URL o data: URI del logo, ya resuelto por quien llama.
-export function construirPaginaRH({ listaHoras, mapUsuarios, viernes, jueves, numeroSemana, logoSrc }) {
+export function construirPaginaRH({ listaHoras, mapUsuarios, viernes, jueves, numeroSemana, logoSrc, festivos = [] }) {
+  const fechasFestivas = new Set((festivos || []).map(f => f && f.fecha).filter(Boolean));
   const filtradas = listaHoras
     .filter(s => s.estatus === "aprobada")
     .filter(s => s.fecha >= viernes && s.fecha <= jueves);
@@ -182,7 +183,7 @@ export function construirPaginaRH({ listaHoras, mapUsuarios, viernes, jueves, nu
           </tr>
           ${e.filas.map(s => `
             <tr>
-              <td class="centrado">${formatearFechaCorta(s.fecha)}</td>
+              <td class="centrado">${formatearFechaCorta(s.fecha)}${fechasFestivas.has(s.fecha) ? `<br><span class="tag-festivo">FESTIVO</span>` : ""}</td>
               <td class="centrado">${s.horas}</td>
               <td class="centrado">${formatearHora12(s.horaInicio)} - ${formatearHora12(s.horaFin)}</td>
               <td>${escapeHtml(s.motivo || "")}</td>
@@ -290,7 +291,8 @@ const ETIQUETAS_TIPO_PENDIENTE = {
 // de abajo porque esa cuadrícula tiene una columna por día de ESTA semana y
 // un atrasado de hace 3 semanas no tiene en qué columna caer) con el detalle
 // de lo atrasado, para que nóminas lo vea y decida cómo aplicarlo.
-function construirSeccionPendientes({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes }) {
+function construirSeccionPendientes({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, festivos = [] }) {
+  const fechasFestivas = new Set((festivos || []).map(f => f && f.fecha).filter(Boolean));
   const p = filtrarPendientes({ listaHoras, listaVacaciones, listaFaltas, viernes });
   const pendientes = [
     ...p.horas.map(s => ({ tipo: "horaExtra", empleadoId: s.empleadoId, empleadoNombre: s.empleadoNombre, fecha: s.fecha, horas: s.horas, motivo: s.motivo })),
@@ -328,7 +330,7 @@ function construirSeccionPendientes({ listaHoras, listaVacaciones, listaFaltas, 
         <tr>
           <td class="centrado">${escapeHtml(numeroEmpleado)}</td>
           <td>${escapeHtml(nombre)}</td>
-          <td class="centrado">${ETIQUETAS_TIPO_PENDIENTE[item.tipo] || item.tipo}</td>
+          <td class="centrado">${item.tipo === "horaExtra" && fechasFestivas.has(item.fecha) ? "Horas en festivo" : (ETIQUETAS_TIPO_PENDIENTE[item.tipo] || item.tipo)}</td>
           <td class="centrado">${fechaReal}</td>
           <td class="centrado">Semana ${semanaOriginal}</td>
           <td>${detalle}</td>
@@ -367,7 +369,10 @@ function construirSeccionPendientes({ listaHoras, listaVacaciones, listaFaltas, 
 // jueves) de la semana [viernes, jueves]. Incluye horas extra, faltas y
 // vacaciones aprobadas — más, en su propia sección aparte, lo atrasado de
 // semanas anteriores (ver "Pendientes de semanas anteriores" arriba).
-export function construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, jueves, numeroSemana, logoSrc }) {
+// 2026-11-18 (ATAF104): `festivos` = catálogo de configuracion/diasFestivos. Si
+// la semana trae un festivo, sus horas salen de "H Ext" y van en "H Fest"
+// (se pagan distinto), y el día se marca FESTIVO en el encabezado.
+export function construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, jueves, numeroSemana, logoSrc, festivos = [] }) {
   const diasSemana = Array.from({ length: 7 }, (_, i) => sumarDias(viernes, i));
   const dentroDeSemana = (fechaStr) => fechaStr >= viernes && fechaStr <= jueves;
   const actuales = filtrarActuales({ listaHoras, listaVacaciones, listaFaltas, viernes, jueves });
@@ -426,19 +431,24 @@ export function construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas
   const anio = viernes.slice(0, 4);
   const periodoTexto = `Del ${formatearFechaLargaCap(viernes)} al ${formatearFechaLargaCap(jueves)} ${anio}`;
   const tituloCentro = `REPORTE SEMANAL PARA NOMINAS - SEMANA ${numeroSemana}`;
-  const encabezadosDia = diasSemana.map(f => `<th>${diaSemana(f)}<br>${formatearFechaCorta(f)}</th>`).join("");
+  const fechasFestivas = new Set((festivos || []).map(f => f && f.fecha).filter(Boolean));
+  const hayFestivo = diasSemana.some(f => fechasFestivas.has(f));
+  const encabezadosDia = diasSemana.map(f => fechasFestivas.has(f)
+    ? `<th class="dia-festivo">${diaSemana(f)}<br>${formatearFechaCorta(f)}<br><span class="tag-festivo">FESTIVO</span></th>`
+    : `<th>${diaSemana(f)}<br>${formatearFechaCorta(f)}</th>`).join("");
 
   const filasHtml = empleados.length === 0
-    ? `<tr><td colspan="${3 + diasSemana.length + 4}" class="centrado">Sin horas extra, vacaciones ni faltas aprobadas para esta semana.</td></tr>`
+    ? `<tr><td colspan="${3 + diasSemana.length + 4 + (hayFestivo ? 1 : 0)}" class="centrado">Sin horas extra, vacaciones ni faltas aprobadas para esta semana.</td></tr>`
     : empleados.map(e => {
       const celdasDias = diasSemana.map(f => {
         const tipoFalta = e.faltasPorDia[f];
         if (tipoFalta) return `<td class="centrado celda-falta">FALTA</td>`;
         if (e.vacacionesPorDia[f]) return `<td class="centrado celda-vacacion">VACACIONES</td>`;
         const horas = e.horasPorDia[f];
-        return `<td class="centrado">${horas ? horas : "—"}</td>`;
+        return `<td class="centrado${fechasFestivas.has(f) ? " celda-festivo" : ""}">${horas ? horas : "—"}</td>`;
       }).join("");
-      const totalSemana = Object.values(e.horasPorDia).reduce((acc, h) => acc + h, 0);
+      const totalSemana = Object.entries(e.horasPorDia).reduce((acc, [f, h]) => acc + (fechasFestivas.has(f) ? 0 : h), 0);
+      const totalFestivo = Object.entries(e.horasPorDia).reduce((acc, [f, h]) => acc + (fechasFestivas.has(f) ? h : 0), 0);
       const totalVacaciones = Object.keys(e.vacacionesPorDia).length;
       const tiposFalta = Object.values(e.faltasPorDia);
       const celdaTipo = tiposFalta.length === 0
@@ -451,6 +461,7 @@ export function construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas
           <td class="col-puesto">${escapeHtml(e.puesto)}</td>
           ${celdasDias}
           <td class="centrado celda-total">${totalSemana}</td>
+          ${hayFestivo ? `<td class="centrado celda-total celda-festivo">${totalFestivo || "—"}</td>` : ""}
           <td class="centrado">${totalVacaciones || "—"}</td>
           <td class="centrado">${e.faltas || "—"}</td>
           <td class="centrado${tiposFalta.some(t => FALTAS_SIN_GOCE.includes(t)) ? " celda-sin-goce" : ""}">${escapeHtml(celdaTipo)}</td>
@@ -481,6 +492,7 @@ export function construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas
                   <th class="col-puesto">Puesto</th>
                   ${encabezadosDia}
                   <th>H Ext</th>
+                  ${hayFestivo ? `<th class="dia-festivo">H Fest</th>` : ""}
                   <th>Días<br>Vac</th>
                   <th>Faltas</th>
                   <th>Tipo<br>Falta</th>
@@ -491,7 +503,7 @@ export function construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas
               </tbody>
             </table>
 
-            ${construirSeccionPendientes({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes })}
+            ${construirSeccionPendientes({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, festivos })}
 
             <div class="pie-nomina">
               <div class="pie-nomina-contenido">
@@ -515,7 +527,7 @@ export const CSS_REPORTE = `
   @page { size: letter portrait; margin: 12mm 10mm; }
   @page nomina { size: letter landscape; margin: 12mm 10mm; }
   * { box-sizing: border-box; }
-  body { font-family: Arial, Helvetica, sans-serif; color:#1a1a1a; margin:0; padding:0; }
+  body { font-family: Arial, Helvetica, sans-serif; color:#1a1a1a; margin:0; padding:0; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   .pagina { padding: 6mm; }
   .pagina-nomina { page: nomina; break-before: page; page-break-before: always; }
   .encabezado { display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #1a1a1a; padding-bottom:6px; margin-bottom:6px; }
@@ -566,6 +578,35 @@ export const CSS_REPORTE = `
   .pagina-nomina .autorizo { text-align:left; font-size:10.5px; width:220px; padding-top:6px; }
   .pagina-nomina .meta-impresion { font-size:8.5px; color:#555; text-align:right; line-height:1.4; }
 
+  .tag-festivo { display:inline-block; font-size:7px; font-weight:bold; color:#7a4a00; letter-spacing:.3px; }
+  .pagina-nomina th.dia-festivo, .pagina-nomina td.celda-festivo { background:#fff1cc; }
+
+  /* ATAF104 — Formato de planeación de personal a laborar día festivo (2026-11-18) */
+  .pagina-ataf104 { max-width:190mm; margin:0 auto; font-size:10.5px; color:#222; }
+  .pagina-ataf104.con-salto { break-before: page; page-break-before: always; }
+  .pagina-ataf104 .a-logo img { max-width:120px; max-height:56px; }
+  .pagina-ataf104 .a-tit { text-align:center; font-size:15px; font-weight:bold; margin-top:6px; }
+  .pagina-ataf104 .a-tit2 { text-align:center; font-size:10.5px; font-weight:bold; margin-bottom:10px; }
+  .pagina-ataf104 .a-enc { width:100%; border-collapse:collapse; font-size:10px; }
+  .pagina-ataf104 .a-enc td { padding:6px 8px; }
+  .pagina-ataf104 .a-enc .k { background:#3d2b26; color:#fff; font-weight:bold; font-size:8px; width:17%; text-transform:uppercase; }
+  .pagina-ataf104 .a-enc .v { background:#efe9df; width:33%; }
+  .pagina-ataf104 .a-sec { font-size:10.5px; font-weight:bold; border-bottom:1px solid #c9b58f; margin:14px 0 4px; padding-bottom:3px; }
+  .pagina-ataf104 .a-nota { font-size:8.5px; margin-bottom:4px; }
+  .pagina-ataf104 .a-tabla { width:100%; border-collapse:collapse; }
+  .pagina-ataf104 .a-tabla th { background:#3d2b26; color:#fff; font-size:8.5px; padding:3px; }
+  .pagina-ataf104 .a-tabla td { border:1px solid #444; padding:5px 6px; font-size:10px; }
+  .pagina-ataf104 .a-tabla tr { break-inside: avoid; }
+  .pagina-ataf104 .a-caja { border:1px solid #444; padding:6px 9px; font-size:10px; min-height:40px; }
+  .pagina-ataf104 .a-caja ol { margin:0; padding-left:18px; }
+  .pagina-ataf104 .a-caja li { margin:2px 0; }
+  .pagina-ataf104 .a-firmas { display:flex; justify-content:space-around; margin-top:34px; font-size:9px; text-align:center; break-inside: avoid; }
+  .pagina-ataf104 .a-firmas div { width:30%; }
+  .pagina-ataf104 .a-firmas .l { border-top:1px solid #999; margin:0 12% 3px; }
+  .pagina-ataf104 .a-firmas b { display:block; }
+  .pagina-ataf104 .a-leyenda { text-align:center; font-size:8px; font-style:italic; color:#666; margin-top:10px; }
+  .pagina-ataf104 .a-pie { display:flex; justify-content:space-between; font-size:8.5px; margin-top:14px; }
+
   .barra-imprimir { text-align:center; margin:14px 0; }
   .barra-imprimir button { padding:8px 18px; font-size:13px; cursor:pointer; }
   @media print { .barra-imprimir { display:none; } }
@@ -584,7 +625,7 @@ export const CSS_REPORTE = `
 // / Guardar como PDF"); false para el render headless de Node — ahí no hay
 // nadie que la vaya a hacer clic y así el HTML se queda más limpio (aunque
 // de cualquier forma el CSS ya la oculta con @media print).
-export function construirHtmlReporteCompleto({ paginaRH, paginaNomina, numeroSemana, mostrarBarraImprimir = true }) {
+export function construirHtmlReporteCompleto({ paginaRH, paginaNomina, numeroSemana, mostrarBarraImprimir = true, paginasExtra = [] }) {
   const barra = mostrarBarraImprimir
     ? `<div class="barra-imprimir"><button onclick="window.print()">Imprimir / Guardar como PDF</button></div>`
     : "";
@@ -599,6 +640,168 @@ export function construirHtmlReporteCompleto({ paginaRH, paginaNomina, numeroSem
   ${barra}
   ${paginaRH}
   ${paginaNomina}
+  ${(paginasExtra || []).join("\n")}
+</body>
+</html>`;
+}
+
+// ============================================================================
+// ATAF104 — Formato de planeación de personal a laborar en día festivo
+// (2026-11-18, pedido de Ivan / RH). Mismo criterio que el resto de este
+// módulo: lógica pura, la usan la vista previa (js/reportes.js) y el envío
+// automático (automatizacion/generar-y-enviar-ataf104.mjs), así lo que se ve
+// es exactamente lo que se manda.
+//   - Sirve para 2 cosas en 2 momentos: (1) nóminas avisa a seguridad quién
+//     entra → se manda SOLO, 2 días hábiles antes del festivo a las 9:00 am;
+//     (2) el pago va en el reporte semanal, columna "H Fest" (arriba).
+//   - Entran solo las solicitudes APROBADAS de la fecha del festivo.
+//   - Área fija "Importaciones"; Puesto = "Puesto · Área" del catálogo.
+//   - Sin filas vacías; el horario es el que capturó el empleado.
+// ============================================================================
+export const AREA_ATAF104 = "Importaciones";
+export const HORA_ENVIO_ATAF104 = 9; // 9:00 am hora de Nuevo Laredo
+export const CORREO_AUTORIZA_ATAF104 = "ilanda@alanis.com.mx";
+
+function esDiaHabil(fechaStr, fechasFestivas) {
+  const dow = new Date(fechaStr + "T00:00:00").getDay();
+  return dow !== 0 && dow !== 6 && !fechasFestivas.has(fechaStr);
+}
+// n días hábiles antes de fechaStr (sábado, domingo y festivos del catálogo no cuentan).
+export function diasHabilesAntes(fechaStr, n, festivos = []) {
+  const fechasFestivas = new Set((festivos || []).map(f => f && f.fecha).filter(Boolean));
+  let d = fechaStr, cuenta = 0;
+  while (cuenta < n) {
+    d = sumarDias(d, -1);
+    if (esDiaHabil(d, fechasFestivas)) cuenta++;
+  }
+  return d;
+}
+// Día en que sale el ATAF104 de un festivo: 2 días hábiles antes.
+export function fechaEnvioAtaf104(fechaFestivo, festivos = []) {
+  return diasHabilesAntes(fechaFestivo, 2, festivos);
+}
+// Día del recordatorio: 1 día hábil antes del envío.
+export function fechaRecordatorioAtaf104(fechaFestivo, festivos = []) {
+  return diasHabilesAntes(fechaEnvioAtaf104(fechaFestivo, festivos), 1, festivos);
+}
+
+// "2026-12-23" -> "miércoles 23 de diciembre"
+export function fechaLargaConDia(fechaStr) {
+  const DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+  const [a, m, d] = (fechaStr || "").split("-").map(Number);
+  if (!a || !m || !d) return fechaStr || "";
+  return `${DIAS[new Date(fechaStr + "T00:00:00").getDay()]} ${d} de ${MESES_LARGO[m - 1]}`;
+}
+
+function fechaDDMMYYYY(fechaStr) {
+  const [a, m, d] = (fechaStr || "").split("-");
+  return a && m && d ? `${d}/${m}/${a}` : (fechaStr || "");
+}
+
+// Festivos que se reportan junto con la semana [viernes, jueves]: los de esa
+// semana y los de la siguiente (el ATAF104 se manda antes del festivo, así
+// que casi siempre cae en la semana anterior).
+export function festivosParaAtaf104({ festivos, viernes }) {
+  const hasta = sumarDias(viernes, 13);
+  return (festivos || []).filter(f => f && f.fecha && f.fecha >= viernes && f.fecha <= hasta)
+    .sort((a, b) => a.fecha.localeCompare(b.fecha));
+}
+
+// Nombre de quien autoriza (Jefe / Gerente responsable).
+export function responsableAtaf104(mapUsuarios) {
+  for (const u of mapUsuarios.values()) {
+    if (String((u && u.email) || "").trim().toLowerCase() === CORREO_AUTORIZA_ATAF104) return u.nombre || "Iván Landa";
+  }
+  return "Iván Landa";
+}
+
+// Personas del festivo: una por empleado (si trae 2 bloques ese día se juntan).
+// Regresa { personas: [{ nombre, puesto, horario, motivo }], pendientes: [solicitudes] }.
+export function personasAtaf104({ listaHoras, mapUsuarios, fecha }) {
+  const delDia = listaHoras.filter(s => s.fecha === fecha);
+  const pendientes = delDia.filter(s => s.estatus === "pendiente");
+  const porEmpleado = new Map();
+  delDia.filter(s => s.estatus === "aprobada")
+    .sort((a, b) => (a.horaInicio || "").localeCompare(b.horaInicio || ""))
+    .forEach(s => {
+      const u = mapUsuarios.get(s.empleadoId) || {};
+      if (!porEmpleado.has(s.empleadoId)) {
+        porEmpleado.set(s.empleadoId, {
+          nombre: u.nombre || s.empleadoNombre || "",
+          area: u.area || "",
+          puesto: [u.puesto, u.area].filter(Boolean).join(" · ") || "—",
+          horarios: [], motivos: []
+        });
+      }
+      const p = porEmpleado.get(s.empleadoId);
+      p.horarios.push(`${s.horaInicio} – ${s.horaFin}`);
+      if (s.motivo) p.motivos.push(String(s.motivo).trim());
+    });
+  const personas = [...porEmpleado.values()]
+    .sort((a, b) => a.area.localeCompare(b.area, "es") || a.nombre.localeCompare(b.nombre, "es"))
+    .map(p => ({ nombre: p.nombre, puesto: p.puesto, horario: p.horarios.join(" y "), motivo: p.motivos.join("; ") }));
+  return { personas, pendientes };
+}
+
+// Hoja ATAF104 (carta vertical). conSalto: true cuando va después de otras
+// hojas (vista previa del reporte semanal).
+export function construirPaginaAtaf104({ fecha, festivoNombre, personas, responsable, fechaSolicitud, observaciones, logoSrc, conSalto = false }) {
+  const filas = personas.map((p, i) => `
+      <tr>
+        <td class="centrado" style="width:6%;">${i + 1}</td>
+        <td>${escapeHtml(p.nombre)}</td>
+        <td>${escapeHtml(p.puesto)}</td>
+        <td class="centrado">${escapeHtml(p.horario)}</td>
+      </tr>`).join("");
+  return `
+    <div class="pagina pagina-ataf104${conSalto ? " con-salto" : ""}">
+      <div class="a-logo"><img src="${logoSrc}" alt="" onerror="this.style.display='none'"></div>
+      <div class="a-tit">FORMATO DE PLANEACIÓN DE PERSONAL A LABORAR</div>
+      <div class="a-tit2">DÍA FESTIVO</div>
+      <table class="a-enc">
+        <tr><td class="k">Fecha del día festivo</td><td class="v">${fechaDDMMYYYY(fecha)}${festivoNombre ? ` — ${escapeHtml(festivoNombre)}` : ""}</td>
+            <td class="k">Área / Departamento</td><td class="v">${AREA_ATAF104}</td></tr>
+        <tr><td class="k">Jefe / Gerente responsable</td><td class="v">${escapeHtml(responsable || "")}</td>
+            <td class="k">Fecha de solicitud</td><td class="v">${fechaDDMMYYYY(fechaSolicitud)}</td></tr>
+      </table>
+      <div class="a-sec">1. RELACIÓN DEL PERSONAL PROGRAMADO</div>
+      <div class="a-nota"><i>Registrar únicamente al personal estrictamente necesario para garantizar la continuidad de la operación.</i></div>
+      <table class="a-tabla">
+        <thead><tr><th>No.</th><th>Nombre del colaborador</th><th>Puesto</th><th>Horario de entrada y salida</th></tr></thead>
+        <tbody>${filas || `<tr><td colspan="4" class="centrado">Sin personal aprobado.</td></tr>`}</tbody>
+      </table>
+      <div class="a-sec">2. JUSTIFICACIÓN DE LA PROGRAMACIÓN</div>
+      <div class="a-nota">Describir el motivo por trabajador, por el cual se requiere la presencia del personal durante el día festivo y la actividad operativa que deberá atender.</div>
+      <div class="a-caja"><ol>${personas.map(p => `<li>${escapeHtml(p.motivo)}</li>`).join("")}</ol></div>
+      <div class="a-sec">3. OBSERVACIONES ADICIONALES</div>
+      <div class="a-caja" style="white-space:pre-wrap;">${escapeHtml(observaciones || "")}</div>
+      <div class="a-sec">4. AUTORIZACIONES</div>
+      <div class="a-firmas">
+        <div><div class="l"></div><b>GERENTE DEL ÁREA</b>Nombre y firma<br><br>Fecha: ____ / ____ / ______</div>
+        <div><div class="l"></div><b>GERENCIA DE RECURSOS HUMANOS</b>Nombre y firma<br><br>Fecha: ____ / ____ / ______</div>
+        <div><div class="l"></div><b>DIRECCIÓN FINANCIERA</b>Nombre y firma<br><br>Fecha: ____ / ____ / ______</div>
+      </div>
+      <div class="a-leyenda">La programación de personal para días festivos deberá contar con las autorizaciones correspondientes antes de su ejecución.</div>
+      <div class="a-pie"><span>ATAF104</span><span>Rev 0.&nbsp;&nbsp;&nbsp;13/11/2026</span></div>
+    </div>
+  `;
+}
+
+// Documento completo solo con el ATAF104 (correo automático).
+export function construirHtmlAtaf104({ paginaAtaf104, titulo, mostrarBarraImprimir = false }) {
+  const barra = mostrarBarraImprimir
+    ? `<div class="barra-imprimir"><button onclick="window.print()">Imprimir / Guardar como PDF</button></div>`
+    : "";
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>${escapeHtml(titulo || "ATAF104")}</title>
+<style>${CSS_REPORTE}</style>
+</head>
+<body>
+  ${barra}
+  ${paginaAtaf104}
 </body>
 </html>`;
 }
