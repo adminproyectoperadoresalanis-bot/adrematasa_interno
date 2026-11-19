@@ -9,8 +9,11 @@
 // De dónde sale cada dato:
 //   - El empleado captura sus horas extra con la fecha del festivo (aunque
 //     todavía no ocurra) y una justificación breve (solicitudes.js).
-//   - Entran SOLO las solicitudes APROBADAS de esa fecha, una hoja por área
-//     (usuarios.area). Las pendientes se avisan pero no entran.
+//   - Entran SOLO las solicitudes APROBADAS de esa fecha, TODAS las áreas en
+//     un solo formato (opción B de Ivan, 2026-11-18): encabezado "Varias (N
+//     áreas)" y columna Área en la tabla. Las pendientes se avisan pero no entran.
+//   - Un solo correo por festivo, igual que el reporte semanal de nómina:
+//     una sola lista de destinatarios en Configuración › 1 · RH.
 //   - Jefe/Gerente responsable = quien autoriza (Ivan). Fecha de solicitud =
 //     el día en que se descarga o se envía.
 //   - La tabla crece con el número de personas (mínimo 6 renglones, como el
@@ -22,9 +25,9 @@
 //
 // Datos en configuracion/ataf104 (configuracion: lectura con sesión,
 // escritura solo admin — no se tocan reglas):
-//   destinatarios: { "<área>": { para: [correos], cc: [correos] } }  ← Configuración › RH
-//   observaciones: { "<fecha>__<área>": "texto" }                    ← Reportes
-//   envios:        { "<fecha>__<área>": [{ ms, para, cc, personas, por }] } ← la función
+//   destinatarios: { para: [correos], cc: [correos] }               ← Configuración › RH
+//   observaciones: { "<fecha>": "texto" }                            ← Reportes
+//   envios:        { "<fecha>": [{ ms, para, cc, personas, por }] }  ← la función
 
 import { db } from "./firebase-config.js";
 import {
@@ -33,7 +36,6 @@ import {
 import { getAuth } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
 import { LOGO_ALANIS } from "./comercialLogo.js";
-import { AREAS_DEFAULT } from "./estructuraOrganizacional.js";
 
 // Si algún día se delega, se agrega el correo aquí Y en functions/ataf104Correo.js.
 export const AUTORIZA_ATAF104 = ["ilanda@alanis.com.mx"];
@@ -53,7 +55,7 @@ const dd = (n) => String(n).padStart(2, "0");
 export const fechaNum = (iso) => { const [y, m, d] = String(iso || "").split("-"); return y ? `${d}/${m}/${y}` : ""; };
 const fechaLarga = (iso) => { const [y, m, d] = String(iso || "").split("-").map(Number); return y ? `${d} de ${MESES[m - 1]} de ${y}` : ""; };
 const hoyIso = () => { const d = new Date(); return `${d.getFullYear()}-${dd(d.getMonth() + 1)}-${dd(d.getDate())}`; };
-export const claveFestivo = (fecha, area) => `${fecha}__${area}`;
+export const claveFestivo = (fecha) => String(fecha || "");
 const slug = (t) => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "");
 const listaCorreos = (txt) => String(txt || "").split(/[,;\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
 export const fechaHoraCorta = (ms) => { const d = new Date(ms); return `${d.getDate()} ${MESES[d.getMonth()].slice(0, 3)} ${dd(d.getHours())}:${dd(d.getMinutes())}`; };
@@ -82,18 +84,25 @@ export function agruparFestivoPorArea(solicitudes, mapUsuarios, fecha) {
   return [...m.values()].sort((a, b) => a.area.localeCompare(b.area, "es"));
 }
 
-// Un renglón por persona; si alguien trae dos bloques ese día, se juntan.
-export function personasDeGrupo(grupo, mapUsuarios) {
+// Un renglón por persona, todas las áreas; si alguien trae dos bloques ese
+// día, se juntan. Orden: área y luego nombre.
+export function personasDeGrupos(grupos, mapUsuarios) {
   const m = new Map();
-  (grupo.aprobadas || []).slice().sort((a, b) => (a.horaInicio || "").localeCompare(b.horaInicio || "")).forEach(s => {
+  grupos.forEach(g => (g.aprobadas || []).slice().sort((a, b) => (a.horaInicio || "").localeCompare(b.horaInicio || "")).forEach(s => {
     const u = mapUsuarios.get(s.empleadoId) || {};
-    if (!m.has(s.empleadoId)) m.set(s.empleadoId, { nombre: u.nombre || s.empleadoNombre || "", puesto: u.puesto || "", horarios: [], motivos: [] });
+    if (!m.has(s.empleadoId)) m.set(s.empleadoId, { nombre: u.nombre || s.empleadoNombre || "", area: g.area, puesto: u.puesto || "", horarios: [], motivos: [] });
     const p = m.get(s.empleadoId);
     p.horarios.push(`${s.horaInicio} – ${s.horaFin}`);
     if (s.motivo) p.motivos.push(String(s.motivo).trim());
-  });
-  return [...m.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, "es"))
-    .map(p => ({ nombre: p.nombre, puesto: p.puesto, horario: p.horarios.join(" y "), motivo: p.motivos.join("; ") }));
+  }));
+  return [...m.values()].sort((a, b) => a.area.localeCompare(b.area, "es") || a.nombre.localeCompare(b.nombre, "es"))
+    .map(p => ({ nombre: p.nombre, area: p.area, puesto: p.puesto, horario: p.horarios.join(" y "), motivo: p.motivos.join("; ") }));
+}
+
+// "Operaciones MEX" si es una sola área; "Varias (3 áreas)" si son más.
+export function textoArea(personas) {
+  const areas = [...new Set(personas.map(p => p.area))];
+  return areas.length === 1 ? areas[0] : areas.length ? `Varias (${areas.length} áreas)` : "";
 }
 
 // =============================================================================
@@ -119,8 +128,7 @@ const ESTILOS = `
 .ff-campo input,.ff-campo textarea{width:100%;box-sizing:border-box}
 .ff-chip{display:inline-block;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;white-space:nowrap}
 .ff-pend{background:#FFF1CC;color:#8a5a00}.ff-env{background:#DCEAF7;color:#185FA5}.ff-sin{background:#eee;color:#555}
-.ff-fila-cfg{display:grid;grid-template-columns:170px 1fr 1fr;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #f2eee8}
-@media (max-width:640px){.ff-hoja{padding:14px 10px}.ff-enc .k{font-size:8px}.ff-fila-cfg{grid-template-columns:1fr}.ff-acc{justify-content:flex-start}}
+@media (max-width:640px){.ff-hoja{padding:14px 10px}.ff-enc .k{font-size:8px}.ff-acc{justify-content:flex-start}}
 `;
 export function inyectarEstilosFestivo() {
   if (document.getElementById("estilos-formato-festivo")) return;
@@ -139,8 +147,8 @@ export function htmlHojaFestivo(d) {
     </table>
     <div class="ff-sec">1. RELACIÓN DEL PERSONAL PROGRAMADO</div>
     <div class="ff-nota"><i>Registrar únicamente al personal estrictamente necesario para garantizar la continuidad de la operación.</i></div>
-    <table class="ff-tf"><tr><th>No.</th><th>Nombre del colaborador</th><th>Puesto</th><th>Horario de entrada y salida</th></tr>
-      ${Array.from({ length: filas }, (_, i) => { const p = d.personas[i]; return `<tr><td>${i + 1}</td><td>${p ? esc(p.nombre) : ""}</td><td>${p ? esc(p.puesto) : ""}</td><td>${p ? esc(p.horario) : ""}</td></tr>`; }).join("")}
+    <table class="ff-tf"><tr><th>No.</th><th>Nombre del colaborador</th><th>Área</th><th>Puesto</th><th>Horario de entrada y salida</th></tr>
+      ${Array.from({ length: filas }, (_, i) => { const p = d.personas[i]; return `<tr><td>${i + 1}</td><td>${p ? esc(p.nombre) : ""}</td><td>${p ? esc(p.area) : ""}</td><td>${p ? esc(p.puesto) : ""}</td><td>${p ? esc(p.horario) : ""}</td></tr>`; }).join("")}
     </table>
     <div class="ff-sec">2. JUSTIFICACIÓN DE LA PROGRAMACIÓN</div>
     <div class="ff-nota">Describir el motivo por trabajador, por el cual se requiere la presencia del personal durante el día festivo y la actividad operativa que deberá atender.</div>
@@ -162,21 +170,21 @@ export function htmlHojaFestivo(d) {
 // Ver / PDF  (lo abre Reportes)
 // =============================================================================
 // d: datos del formato (sin observaciones; se toman de cfg)
-// pendientes: solicitudes pendientes de esa área (solo para avisar)
+// pendientes: solicitudes pendientes de esa fecha, todas las áreas (solo para avisar)
 // cfg: configuracion/ataf104 tal como está ahora
 // yo: { nombre, puesto }
 export function abrirVerFestivo({ d, pendientes, cfg, yo }) {
   inyectarEstilosFestivo();
-  const k = claveFestivo(d.fecha, d.area);
+  const k = claveFestivo(d.fecha);
   let datos = { ...d, observaciones: ((cfg && cfg.observaciones) || {})[k] || "" };
   const ov = document.createElement("div");
   ov.className = "modal-overlay";
   ov.innerHTML = `<div class="modal-tarjeta ff-campo" style="max-width:880px;width:100%;max-height:94vh;overflow:auto;">
-    <h2 style="margin:0 0 4px;">ATAF104 · ${esc(d.area)}</h2>
-    <p class="nota" style="margin:0;">${esc(fechaNum(d.fecha))} ${esc(d.festivoNombre)} · ${d.personas.length} persona${d.personas.length === 1 ? "" : "s"} aprobada${d.personas.length === 1 ? "" : "s"}</p>
-    ${pendientes.length ? `<div class="ff-aviso">Hay <b>${pendientes.length} solicitud${pendientes.length === 1 ? "" : "es"} pendiente${pendientes.length === 1 ? "" : "s"}</b> en esta área (${pendientes.map(s => esc(s.empleadoNombre || "")).join(", ")}). No entra${pendientes.length === 1 ? "" : "n"} al formato hasta que la${pendientes.length === 1 ? "" : "s"} apruebes.</div>` : ""}
+    <h2 style="margin:0 0 4px;">ATAF104 · ${esc(fechaNum(d.fecha))} ${esc(d.festivoNombre)}</h2>
+    <p class="nota" style="margin:0;">${d.personas.length} persona${d.personas.length === 1 ? "" : "s"} aprobada${d.personas.length === 1 ? "" : "s"}${d.area ? ` · ${esc(d.area)}` : ""}</p>
+    ${pendientes.length ? `<div class="ff-aviso">Hay <b>${pendientes.length} solicitud${pendientes.length === 1 ? "" : "es"} pendiente${pendientes.length === 1 ? "" : "s"}</b> (${pendientes.map(s => esc(s.empleadoNombre || "")).join(", ")}). No entra${pendientes.length === 1 ? "" : "n"} al formato hasta que la${pendientes.length === 1 ? "" : "s"} apruebes.</div>` : ""}
     <div id="ff-hoja" style="margin-top:10px;">${htmlHojaFestivo(datos)}</div>
-    <label>Observaciones adicionales (sección 3) · se guardan para esta área y fecha</label>
+    <label>Observaciones adicionales (sección 3) · se guardan para este festivo</label>
     <textarea id="ff-obs" rows="2" maxlength="600" placeholder="Opcional">${esc(datos.observaciones)}</textarea>
     <div class="nota" id="ff-obs-estado" style="margin:3px 0 0;"></div>
     <div class="error" id="ff-err"></div>
@@ -213,27 +221,33 @@ export function abrirVerFestivo({ d, pendientes, cfg, yo }) {
 }
 
 // =============================================================================
-// Envío por correo (función segura enviarAtaf104)
+// Envío por correo (función segura enviarAtaf104) — un solo correo por festivo
 // =============================================================================
 function mensajeDefault(d, yo) {
   const n = d.personas.length;
-  return `Buen día.\n\nPor medio del presente les comparto el formato ATAF104 de planeación del personal que laborará el día festivo ${fechaLarga(d.fecha)}${d.festivoNombre ? ` (${d.festivoNombre})` : ""}, en el área de ${d.area}.\n\nPersonal programado (${n} colaborador${n === 1 ? "" : "es"}):\n${d.personas.map(p => `- ${p.nombre}${p.puesto ? `, ${p.puesto}` : ""}: ${p.horario}`).join("\n")}\n\nAdjunto el formato para su revisión y autorización.\n\nQuedo a sus órdenes.\n\nUn saludo.\n\n${[yo.nombre, yo.puesto, "Autotransportes Alanis"].filter(Boolean).join("\n")}`;
+  return `Buen día.\n\nPor medio del presente les comparto el formato ATAF104 de planeación del personal que laborará el día festivo ${fechaLarga(d.fecha)}${d.festivoNombre ? ` (${d.festivoNombre})` : ""}.\n\nPersonal programado (${n} colaborador${n === 1 ? "" : "es"}):\n${d.personas.map(p => `- ${p.nombre}${p.puesto ? `, ${p.puesto}` : ""} (${p.area}): ${p.horario}`).join("\n")}\n\nAdjunto el formato para su revisión y autorización.\n\nQuedo a sus órdenes.\n\nUn saludo.\n\n${[yo.nombre, yo.puesto, "Autotransportes Alanis"].filter(Boolean).join("\n")}`;
 }
+
+// Destinatarios guardados: { para, cc }.
+const destinatariosDe = (cfg) => {
+  const d = (cfg && cfg.destinatarios) || {};
+  return { para: Array.isArray(d.para) ? d.para : [], cc: Array.isArray(d.cc) ? d.cc : [] };
+};
 
 export function abrirEnvioFestivo({ d, cfg, yo, alEnviar }) {
   inyectarEstilosFestivo();
-  const guardados = ((cfg && cfg.destinatarios) || {})[d.area] || { para: [], cc: [] };
+  const guardados = destinatariosDe(cfg);
   const md = document.createElement("div");
   md.className = "modal-overlay";
   md.style.zIndex = "10001";
   md.innerHTML = `<div class="modal-tarjeta ff-campo" style="max-width:620px;width:100%;max-height:92vh;overflow:auto;">
-    <h2 style="margin:0 0 4px;">Enviar ATAF104 · ${esc(d.area)}</h2>
-    <p class="nota" style="margin:0;">${esc(fechaNum(d.fecha))} ${esc(d.festivoNombre)} · ${d.personas.length} persona${d.personas.length === 1 ? "" : "s"} · sale de tu correo con el PDF adjunto.</p>
-    <label>Para</label><input type="text" id="fe-para" value="${esc((guardados.para || []).join(", "))}" placeholder="rh@alanis.com.mx, finanzas@alanis.com.mx">
-    <label>CC</label><input type="text" id="fe-cc" value="${esc((guardados.cc || []).join(", "))}">
-    <p class="nota" style="margin:4px 0 0;">${(guardados.para || []).length ? "Vienen de Configuración › RH › Formato día festivo. Lo que cambies aquí aplica solo a este envío." : `Todavía no hay destinatarios para ${esc(d.area)} en Configuración › RH › Formato día festivo.`}</p>
+    <h2 style="margin:0 0 4px;">Enviar ATAF104 · ${esc(fechaNum(d.fecha))} ${esc(d.festivoNombre)}</h2>
+    <p class="nota" style="margin:0;">${d.personas.length} persona${d.personas.length === 1 ? "" : "s"}${d.area ? ` · ${esc(d.area)}` : ""} · sale de tu correo con el PDF adjunto.</p>
+    <label>Para</label><input type="text" id="fe-para" value="${esc(guardados.para.join(", "))}" placeholder="rh@alanis.com.mx, finanzas@alanis.com.mx">
+    <label>CC</label><input type="text" id="fe-cc" value="${esc(guardados.cc.join(", "))}">
+    <p class="nota" style="margin:4px 0 0;">${guardados.para.length ? "Vienen de Configuración › 1 · RH › Formato día festivo ATAF104. Lo que cambies aquí aplica solo a este envío." : "Todavía no hay destinatarios en Configuración › 1 · RH › Formato día festivo ATAF104."}</p>
     <label style="display:flex;gap:6px;align-items:center;font-weight:400;font-size:12.5px;color:inherit;"><input type="checkbox" id="fe-yo" checked style="width:auto;"> Copia oculta para mí</label>
-    <label>Asunto</label><input type="text" id="fe-asunto" value="${esc(`ATAF104 · Personal a laborar día festivo ${fechaNum(d.fecha)} · ${d.area}`)}">
+    <label>Asunto</label><input type="text" id="fe-asunto" value="${esc(`ATAF104 · Personal a laborar día festivo ${fechaNum(d.fecha)}${d.festivoNombre ? " · " + d.festivoNombre : ""}`)}">
     <label>Mensaje</label><textarea id="fe-msg" rows="12">${esc(mensajeDefault(d, yo))}</textarea>
     <div class="error" id="fe-err"></div>
     <div class="modal-acciones"><button type="button" class="secundario" id="fe-cancelar">Cancelar</button><button type="button" id="fe-ok">Enviar</button></div></div>`;
@@ -260,7 +274,7 @@ export function abrirEnvioFestivo({ d, cfg, yo, alEnviar }) {
       });
       md.remove();
       if (alEnviar) alEnviar();
-      alert(`ATAF104 de ${d.area} enviado a ${para.join(", ")}.`);
+      alert(`ATAF104 del ${fechaNum(d.fecha)} enviado a ${para.join(", ")}.`);
     } catch (x) {
       b.disabled = false; b.textContent = "Enviar";
       err("No se pudo enviar: " + (x.message || x));
@@ -269,52 +283,47 @@ export function abrirEnvioFestivo({ d, cfg, yo, alEnviar }) {
 }
 
 // =============================================================================
-// Configuración › 1 · RH › "Formato día festivo ATAF104 (correo por área)"
-// (lo llama configuracion.js, igual que iniciarAjustesComercial)
+// Configuración › 1 · RH › "Formato día festivo ATAF104 (correo)"
+// Igual que "Reporte semanal de nómina": Para y CC (lo llama configuracion.js).
 // =============================================================================
 export function iniciarConfigFestivo(cuerpo, resumen) {
   inyectarEstilosFestivo();
   cuerpo.innerHTML = `
-    <p class="nota">A quién se envía el formato ATAF104 (personal en día festivo) de cada área, desde Reportes.
-      Las áreas salen de "Áreas y puestos". Separa varios correos con comas.</p>
+    <p class="nota">Cuando envías el formato ATAF104 de un festivo desde Reportes, sale un solo correo con el PDF
+      de todo el personal programado. Aquí defines a quién llega. Separa varios correos con comas.</p>
     <div id="ffc-error" class="error"></div>
     <p id="ffc-exito" class="nota oculto" style="color:#1c7a41;"></p>
-    <div class="ff-fila-cfg" style="font-size:11px;color:#6b5f52;text-transform:uppercase;"><span>Área</span><span>Para</span><span>CC (opcional)</span></div>
-    <div id="ffc-filas"><p class="nota">Cargando…</p></div>
+    <div>
+      <label for="ffc-para" style="display:block; font-weight:600; margin-bottom:4px;">Destinatarios (Para)</label>
+      <input type="text" id="ffc-para" style="width:100%;" placeholder="rh@alanis.com.mx, finanzas@alanis.com.mx">
+    </div>
+    <div style="margin-top:12px;">
+      <label for="ffc-cc" style="display:block; font-weight:600; margin-bottom:4px;">Con copia (CC) — opcional</label>
+      <input type="text" id="ffc-cc" style="width:100%;" placeholder="ilanda@alanis.com.mx">
+    </div>
     <div class="acciones-form" style="margin-top:14px;"><button type="button" id="ffc-guardar">Guardar cambios</button></div>`;
-  const filas = cuerpo.querySelector("#ffc-filas");
-  let areas = null, dest = {};
-  const pintar = () => {
-    if (!areas) return;
-    const nombres = [...new Set([...areas, ...Object.keys(dest)])];
-    const conDest = nombres.filter(a => dest[a] && (dest[a].para || []).length).length;
-    if (resumen) resumen.textContent = conDest ? `${conDest} área${conDest === 1 ? "" : "s"} con destinatarios` : "Sin destinatarios todavía";
-    filas.innerHTML = nombres.map(a => `<div class="ff-fila-cfg" data-area="${esc(a)}"><b>${esc(a)}</b>
-      <input type="text" class="ffc-para" value="${esc(((dest[a] || {}).para || []).join(", "))}" placeholder="rh@alanis.com.mx">
-      <input type="text" class="ffc-cc" value="${esc(((dest[a] || {}).cc || []).join(", "))}"></div>`).join("") || `<p class="nota">No hay áreas en "Áreas y puestos".</p>`;
-  };
-  getDoc(doc(db, "configuracion", "estructura")).then(s => {
-    const lista = (s.exists() && Array.isArray(s.data().areas)) ? s.data().areas : AREAS_DEFAULT;
-    areas = lista.map(a => a && a.nombre).filter(Boolean);
-    pintar();
-  }).catch(() => { areas = []; pintar(); });
-  onSnapshot(REF_CFG_FESTIVO(), (s) => { dest = (s.exists() && s.data().destinatarios) || {}; pintar(); });
+  const inPara = cuerpo.querySelector("#ffc-para"), inCc = cuerpo.querySelector("#ffc-cc");
+  onSnapshot(REF_CFG_FESTIVO(), (s) => {
+    const d = destinatariosDe(s.exists() ? s.data() : {});
+    inPara.value = d.para.join(", ");
+    inCc.value = d.cc.join(", ");
+    if (resumen) resumen.textContent = d.para.length
+      ? `Un correo por festivo · ${d.para.length} destinatario${d.para.length === 1 ? "" : "s"}${d.cc.length ? ` + ${d.cc.length} CC` : ""}`
+      : "Sin destinatarios todavía";
+  });
   cuerpo.querySelector("#ffc-guardar").addEventListener("click", async () => {
     const e = cuerpo.querySelector("#ffc-error"), ok = cuerpo.querySelector("#ffc-exito");
     e.textContent = ""; ok.classList.add("oculto");
-    const nuevo = {}; const malos = [];
-    filas.querySelectorAll("[data-area]").forEach(f => {
-      const para = listaCorreos(f.querySelector(".ffc-para").value), cc = listaCorreos(f.querySelector(".ffc-cc").value);
-      [...para, ...cc].filter(c => !correoValido(c)).forEach(c => malos.push(c));
-      if (para.length || cc.length) nuevo[f.dataset.area] = { para, cc };
-    });
+    const para = listaCorreos(inPara.value), cc = listaCorreos(inCc.value).filter(c => !para.includes(c));
+    const malos = [...para, ...cc].filter(c => !correoValido(c));
+    if (!para.length) { e.textContent = 'Agrega al menos un correo en "Destinatarios (Para)".'; return; }
     if (malos.length) { e.textContent = "Correo no válido: " + malos.join(", "); return; }
     try {
-      // updateDoc reemplaza el mapa completo (así se pueden borrar áreas) sin
-      // tocar observaciones ni envíos. Si el documento todavía no existe, se crea.
+      // updateDoc reemplaza "destinatarios" completo sin tocar observaciones ni envíos.
       const actual = await getDoc(REF_CFG_FESTIVO());
-      if (actual.exists()) await updateDoc(REF_CFG_FESTIVO(), { destinatarios: nuevo, actualizadoEn: new Date().toISOString() });
-      else await setDoc(REF_CFG_FESTIVO(), { destinatarios: nuevo, actualizadoEn: new Date().toISOString() });
+      const datos = { destinatarios: { para, cc }, actualizadoEn: new Date().toISOString() };
+      if (actual.exists()) await updateDoc(REF_CFG_FESTIVO(), datos);
+      else await setDoc(REF_CFG_FESTIVO(), datos);
       ok.textContent = "Guardado. Se usa la próxima vez que envíes un formato ATAF104.";
       ok.classList.remove("oculto");
     } catch (x) { e.textContent = "No se pudo guardar: " + x.message; }
@@ -370,12 +379,12 @@ export async function generarPdfFestivo(d) {
   pdf.setFont("helvetica", "italic"); pdf.setFontSize(7); pdf.setTextColor(...NEGRO);
   pdf.text("Registrar únicamente al personal estrictamente necesario para garantizar la continuidad de la operación.", X0, y);
   y += 2;
-  const cols = [11, 70, 52, W - 133];
+  const cols = [10, 50, 40, 40, W - 140];
   const encabezadoTabla = () => {
     pdf.setFillColor(...CAFE); pdf.rect(X0, y, W, 5, "F");
     pdf.setFont("helvetica", "bold"); pdf.setFontSize(7); pdf.setTextColor(255, 255, 255);
     let x = X0;
-    ["No.", "Nombre del colaborador", "Puesto", "Horario de entrada y salida"].forEach((t, i) => { pdf.text(t, x + cols[i] / 2, y + 3.4, { align: "center" }); x += cols[i]; });
+    ["No.", "Nombre del colaborador", "Área", "Puesto", "Horario de entrada y salida"].forEach((t, i) => { pdf.text(t, x + cols[i] / 2, y + 3.4, { align: "center" }); x += cols[i]; });
     y += 5;
   };
   encabezadoTabla();
@@ -383,7 +392,7 @@ export async function generarPdfFestivo(d) {
   for (let i = 0; i < filas; i++) {
     const p = d.personas[i];
     pdf.setFont("helvetica", "normal"); pdf.setFontSize(8.5);
-    const celdas = [String(i + 1), p ? p.nombre : "", p ? p.puesto : "", p ? p.horario : ""].map((t, j) => pdf.splitTextToSize(t, cols[j] - 3));
+    const celdas = [String(i + 1), p ? p.nombre : "", p ? p.area : "", p ? p.puesto : "", p ? p.horario : ""].map((t, j) => pdf.splitTextToSize(t, cols[j] - 3));
     const h = Math.max(8, Math.max(...celdas.map(c => c.length)) * 3.6 + 3);
     if (y + h > LIMITE) { nuevaHoja(); encabezadoTabla(); pdf.setFont("helvetica", "normal"); pdf.setFontSize(8.5); }
     pdf.setDrawColor(68, 68, 68); pdf.setLineWidth(0.25); pdf.setTextColor(...NEGRO);
@@ -451,16 +460,18 @@ export async function generarPdfFestivo(d) {
     if (total > 1) pdf.text(`Hoja ${i} de ${total}`, (X0 + X1) / 2, 271, { align: "center" });
   }
 
-  const nombre = `ATAF104_${slug(d.area) || "Area"}_${d.fecha}.pdf`;
+  const nombre = `ATAF104_${d.fecha}${d.festivoNombre ? "_" + slug(d.festivoNombre) : ""}.pdf`;
   const base64 = pdf.output("datauristring").split(",")[1];
   return { nombre, base64, descargar: () => pdf.save(nombre) };
 }
 
 // Fecha de solicitud = hoy (el día en que se descarga o se envía).
-export function datosFormatoFestivo({ festivo, grupo, mapUsuarios, responsable }) {
+// grupos: los de agruparFestivoPorArea (todas las áreas en un solo formato).
+export function datosFormatoFestivo({ festivo, grupos, mapUsuarios, responsable }) {
+  const personas = personasDeGrupos(grupos, mapUsuarios);
   return {
-    fecha: festivo.fecha, festivoNombre: festivo.nombre || "", area: grupo.area,
+    fecha: festivo.fecha, festivoNombre: festivo.nombre || "", area: textoArea(personas),
     responsable: responsable || "", fechaSolicitud: hoyIso(),
-    personas: personasDeGrupo(grupo, mapUsuarios), observaciones: "",
+    personas, observaciones: "",
   };
 }

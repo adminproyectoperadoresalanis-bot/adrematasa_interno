@@ -3,7 +3,8 @@
 // RUTA:     /workspaces/adrematasa_interno/functions/ataf104Correo.js
 // ##########################################################################
 // ATAF104 — Planeación de personal a laborar en día festivo (2026-11-18).
-// enviarAtaf104 (callable): manda el formato de un festivo y un área por correo
+// enviarAtaf104 (callable): manda el formato de un festivo por correo (un solo
+// correo por festivo con todas las áreas, igual que el reporte de nómina)
 // con el PDF adjunto, por Brevo, con el MISMO secreto que nómina y Comercial
 // (BREVO_API_KEY). La clave nunca llega al navegador: el navegador manda
 // destinatarios, asunto, mensaje y el PDF que ya armó (jsPDF).
@@ -11,7 +12,7 @@
 // Quién: solo quien autoriza (AUTORIZA_ATAF104), con rol admin y cuenta activa.
 // Remitente: su correo @alanis.com.mx; si Brevo no lo acepta, sale del
 // verificado (ilanda@alanis.com.mx) con "Responder a" = quien envía.
-// Al enviar: agrega el envío a configuracion/ataf104.envios["<fecha>__<área>"].
+// Al enviar: agrega el envío a configuracion/ataf104.envios["<fecha>"].
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
@@ -24,7 +25,7 @@ const REMITENTE_RESPALDO = { name: "Ivan Landa", email: "ilanda@alanis.com.mx" }
 const MAX_DESTINATARIOS = 15;
 const MAX_PDF_BYTES = 3 * 1024 * 1024;
 const brevoApiKeyAtaf104 = defineSecret("BREVO_API_KEY");
-const VERSION = "2026-11-18a";
+const VERSION = "2026-11-18b";
 
 const txt = (v, max) => (typeof v === "string" ? v.trim().slice(0, max || 200) : "");
 const correoValido = (t) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t);
@@ -61,15 +62,15 @@ exports.enviarAtaf104 = onCall({ region: REGION, secrets: [brevoApiKeyAtaf104] }
 
   const e = request.data || {};
   const fecha = txt(e.fecha, 10);
-  const area = txt(e.area, 80);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha) || !area) throw new HttpsError("invalid-argument", "Falta la fecha o el área.");
+  const area = txt(e.area, 80); // "Operaciones MEX" o "Varias (3 áreas)", solo informativo
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) throw new HttpsError("invalid-argument", "Falta la fecha del festivo.");
 
   const para = listaDirecciones(e.para);
   const vistos = new Set(para.map((d) => d.email));
   const cc = listaDirecciones(e.cc).filter((d) => !vistos.has(d.email) && vistos.add(d.email));
   if (!para.length) throw new HttpsError("invalid-argument", "Falta al menos un destinatario válido.");
   if (para.length + cc.length > MAX_DESTINATARIOS) throw new HttpsError("invalid-argument", `Máximo ${MAX_DESTINATARIOS} destinatarios.`);
-  const asunto = txt(e.asunto, 200) || `ATAF104 · Personal a laborar día festivo ${fecha} · ${area}`;
+  const asunto = txt(e.asunto, 200) || `ATAF104 · Personal a laborar día festivo ${fecha}`;
   const mensaje = txt(e.mensaje, 6000);
   if (!mensaje) throw new HttpsError("invalid-argument", "Falta el mensaje.");
   const pdf = typeof e.pdfBase64 === "string" ? e.pdfBase64.replace(/\s/g, "") : "";
@@ -106,11 +107,11 @@ exports.enviarAtaf104 = onCall({ region: REGION, secrets: [brevoApiKeyAtaf104] }
   const envio = {
     ms: Date.now(), remitente: remitente.email,
     para: para.map((d) => d.email), cc: cc.map((d) => d.email),
-    personas: Number(e.personas) || 0, festivoNombre: txt(e.festivoNombre, 80),
+    personas: Number(e.personas) || 0, festivoNombre: txt(e.festivoNombre, 80), area,
     por: { uid: request.auth.uid, nombre: nombreActor }, messageId: txt(r.datos && r.datos.messageId, 200),
   };
   await db.collection("configuracion").doc("ataf104").set(
-    { envios: { [`${fecha}__${area}`]: FieldValue.arrayUnion(envio) } }, { merge: true });
+    { envios: { [fecha]: FieldValue.arrayUnion(envio) } }, { merge: true });
   logger.info("enviarAtaf104: enviado", { fecha, area, para: envio.para, cc: envio.cc, personas: envio.personas });
   return { ok: true, remitente: remitente.email };
 });

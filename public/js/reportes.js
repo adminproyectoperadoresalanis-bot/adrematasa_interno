@@ -147,8 +147,9 @@ function construirVista(contenedor, { esAdmin, uid }) {
     <section class="panel" style="margin-top:20px;" id="rep-festivo">
       <h2>Personal en día festivo (ATAF104)</h2>
       <p class="nota">
-        Se arma con las solicitudes de horas extra <strong>aprobadas</strong> de la fecha del festivo, una hoja por área.
-        Las pendientes se avisan pero no entran. Los destinatarios de cada área están en Configuración › 1 · RH.
+        Se arma con las solicitudes de horas extra <strong>aprobadas</strong> de la fecha del festivo, todas las áreas en
+        un solo formato. Las pendientes se avisan pero no entran. Un solo correo por festivo; los destinatarios
+        están en Configuración › 1 · RH.
       </p>
       <div class="fila-captura">
         <label>Festivo
@@ -157,9 +158,14 @@ function construirVista(contenedor, { esAdmin, uid }) {
       </div>
       <div class="tabla-wrap">
         <table class="tabla">
-          <thead><tr><th>Área</th><th>Personas</th><th>Estatus</th><th>Acción</th></tr></thead>
-          <tbody id="tbody-rep-festivo"><tr><td colspan="4">Cargando...</td></tr></tbody>
+          <thead><tr><th>Área</th><th>Personas</th></tr></thead>
+          <tbody id="tbody-rep-festivo"><tr><td colspan="2">Cargando...</td></tr></tbody>
         </table>
+      </div>
+      <p class="nota" id="rep-festivo-estatus" style="margin:10px 0 0;"></p>
+      <div class="acciones-form">
+        <button type="button" class="secundario" id="btn-festivo-ver" disabled>Ver / PDF</button>
+        <button type="button" id="btn-festivo-enviar" disabled>✉️ Enviar</button>
       </div>
     </section>
     ` : ""}
@@ -260,43 +266,43 @@ function construirVista(contenedor, { esAdmin, uid }) {
   function renderFestivo() {
     if (!seccionFestivo) return;
     const tbodyF = seccionFestivo.querySelector("#tbody-rep-festivo");
+    const estatus = seccionFestivo.querySelector("#rep-festivo-estatus");
+    const btnVer = seccionFestivo.querySelector("#btn-festivo-ver");
+    const btnEnviar = seccionFestivo.querySelector("#btn-festivo-enviar");
+    btnVer.disabled = true; btnEnviar.disabled = true;
+    btnVer.onclick = null; btnEnviar.onclick = null;
+    estatus.innerHTML = "";
     const festivo = festivoElegido();
-    if (!festivo) { tbodyF.innerHTML = `<tr><td colspan="4">Elige un festivo.</td></tr>`; return; }
+    if (!festivo) { tbodyF.innerHTML = `<tr><td colspan="2">Elige un festivo.</td></tr>`; return; }
     const grupos = agruparFestivoPorArea(listaHoras, mapUsuarios, festivo.fecha);
     if (grupos.length === 0) {
-      tbodyF.innerHTML = `<tr><td colspan="4">Nadie ha capturado horas extra para este festivo todavía.</td></tr>`;
+      tbodyF.innerHTML = `<tr><td colspan="2">Nadie ha capturado horas extra para este festivo todavía.</td></tr>`;
       return;
     }
-    tbodyF.innerHTML = grupos.map((g, i) => {
-      const personas = new Set(g.aprobadas.map(s => s.empleadoId)).size;
-      const envios = ((cfgFestivo.envios || {})[claveFestivo(festivo.fecha, g.area)] || []).slice().sort((a, b) => (b.ms || 0) - (a.ms || 0));
-      const ultimo = envios[0];
-      return `<tr data-i="${i}">
+    const personasDe = (g) => new Set(g.aprobadas.map(s => s.empleadoId)).size;
+    const total = grupos.reduce((acc, g) => acc + personasDe(g), 0);
+    const pendientes = grupos.flatMap(g => g.pendientes);
+    tbodyF.innerHTML = grupos.map(g => `<tr>
         <td>${escapeHtmlCompartido(g.area)}</td>
-        <td>${personas}${g.pendientes.length ? ` <span class="ff-chip ff-pend">${g.pendientes.length} pendiente${g.pendientes.length === 1 ? "" : "s"}</span>` : ""}</td>
-        <td>${ultimo
-          ? `<span class="ff-chip ff-env" title="Para: ${escapeHtmlCompartido((ultimo.para || []).join(", "))}">Enviado ${fechaHoraCorta(ultimo.ms)}</span>`
-          : `<span class="ff-chip ff-sin">Sin enviar</span>`}</td>
-        <td class="acciones">
-          <button type="button" class="secundario btn-festivo-ver">Ver / PDF</button>
-          <button type="button" class="btn-festivo-enviar"${personas ? "" : " disabled"}>✉️ ${ultimo ? "Reenviar" : "Enviar"}</button>
-        </td>
-      </tr>`;
-    }).join("");
-    tbodyF.querySelectorAll("tr[data-i]").forEach(fila => {
-      const g = grupos[Number(fila.dataset.i)];
-      const armar = () => {
-        const d = datosFormatoFestivo({ festivo, grupo: g, mapUsuarios, responsable: yoFestivo().nombre });
-        d.observaciones = (cfgFestivo.observaciones || {})[claveFestivo(festivo.fecha, g.area)] || "";
-        return d;
-      };
-      fila.querySelector(".btn-festivo-ver").addEventListener("click", () => {
-        abrirVerFestivo({ d: armar(), pendientes: g.pendientes, cfg: cfgFestivo, yo: yoFestivo() });
-      });
-      fila.querySelector(".btn-festivo-enviar").addEventListener("click", () => {
-        abrirEnvioFestivo({ d: armar(), cfg: cfgFestivo, yo: yoFestivo() });
-      });
-    });
+        <td>${personasDe(g)}${g.pendientes.length ? ` <span class="ff-chip ff-pend">${g.pendientes.length} pendiente${g.pendientes.length === 1 ? "" : "s"}</span>` : ""}</td>
+      </tr>`).join("") + `<tr><td><strong>Total</strong></td><td><strong>${total}</strong></td></tr>`;
+
+    const envios = ((cfgFestivo.envios || {})[claveFestivo(festivo.fecha)] || []).slice().sort((a, b) => (b.ms || 0) - (a.ms || 0));
+    const ultimo = envios[0];
+    estatus.innerHTML = "Estatus: " + (ultimo
+      ? `<span class="ff-chip ff-env">Enviado ${fechaHoraCorta(ultimo.ms)} a ${escapeHtmlCompartido((ultimo.para || []).join(", "))}</span>${envios.length > 1 ? ` <span class="nota">(${envios.length} envíos)</span>` : ""}`
+      : `<span class="ff-chip ff-sin">Sin enviar</span>`);
+
+    const armar = () => {
+      const d = datosFormatoFestivo({ festivo, grupos, mapUsuarios, responsable: yoFestivo().nombre });
+      d.observaciones = (cfgFestivo.observaciones || {})[claveFestivo(festivo.fecha)] || "";
+      return d;
+    };
+    btnVer.disabled = false;
+    btnVer.onclick = () => abrirVerFestivo({ d: armar(), pendientes, cfg: cfgFestivo, yo: yoFestivo() });
+    btnEnviar.disabled = total === 0;
+    btnEnviar.textContent = ultimo ? "✉️ Reenviar" : "✉️ Enviar";
+    btnEnviar.onclick = () => abrirEnvioFestivo({ d: armar(), cfg: cfgFestivo, yo: yoFestivo() });
   }
 
   [selectSemana, chkIncluirTodo].forEach(el => el.addEventListener("change", renderTodo));
