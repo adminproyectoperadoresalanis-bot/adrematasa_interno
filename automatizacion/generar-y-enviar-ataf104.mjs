@@ -133,16 +133,11 @@ async function enviarAtaf104({ db, festivo, festivos, listaHoras, mapUsuarios, c
 
   const nombreFestivo = festivo.nombre ? ` (${festivo.nombre})` : "";
   const asunto = `ATAF104 · Personal a laborar día festivo ${festivo.fecha.split("-").reverse().join("/")}${festivo.nombre ? " · " + festivo.nombre : ""}`;
+  // Cuerpo corto (2026-11-18, pedido de Ivan): el detalle va en el PDF.
   const cuerpo = `
-    <p>Buen día.</p>
     <p>Se adjunta el formato ATAF104 con el personal autorizado por gerencia para laborar el día festivo
-      <strong>${escapeHtml(fechaLargaConDia(festivo.fecha))}${escapeHtml(nombreFestivo)}</strong>:
-      ${personas.length} colaborador${personas.length === 1 ? "" : "es"}.</p>
-    <ul style="margin:0 0 12px 18px;padding:0;">
-      ${personas.map(p => `<li>${escapeHtml(p.nombre)} — ${escapeHtml(p.puesto)} — ${escapeHtml(p.horario)}</li>`).join("")}
-    </ul>
-    <p>Únicamente el personal de esta lista está autorizado para ingresar ese día.</p>
-    <p style="color:#555;font-size:0.9em;">Este correo se generó y envió automáticamente desde Adrematasa Interno con las solicitudes aprobadas a esta hora${forzado ? " (envío manual)" : ""}.</p>
+      ${escapeHtml(fechaLargaConDia(festivo.fecha))}${escapeHtml(nombreFestivo)}.</p>
+    <p>Este correo se generó y envió automáticamente desde Adrematasa Interno con las solicitudes aprobadas a esta hora${forzado ? " (envío manual)" : ""}.</p>
   `;
 
   const respuesta = await fetch("https://api.brevo.com/v3/smtp/email", {

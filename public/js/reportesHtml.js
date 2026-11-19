@@ -601,8 +601,9 @@ export const CSS_REPORTE = `
   .pagina-ataf104 .a-caja ol { margin:0; padding-left:18px; }
   .pagina-ataf104 .a-caja li { margin:2px 0; }
   .pagina-ataf104 .a-firmas { display:flex; justify-content:space-around; margin-top:34px; font-size:9px; text-align:center; break-inside: avoid; }
-  .pagina-ataf104 .a-firmas div { width:30%; }
+  .pagina-ataf104 .a-firmas > div { width:30%; }
   .pagina-ataf104 .a-firmas .l { border-top:1px solid #999; margin:0 12% 3px; }
+  .pagina-ataf104 .a-firmas .a-nombre { font-size:10px; font-weight:bold; margin-bottom:2px; min-height:14px; }
   .pagina-ataf104 .a-firmas b { display:block; }
   .pagina-ataf104 .a-leyenda { text-align:center; font-size:8px; font-style:italic; color:#666; margin-top:10px; }
   .pagina-ataf104 .a-pie { display:flex; justify-content:space-between; font-size:8.5px; margin-top:14px; }
@@ -777,9 +778,9 @@ export function construirPaginaAtaf104({ fecha, festivoNombre, personas, respons
       <div class="a-caja" style="white-space:pre-wrap;">${escapeHtml(observaciones || "")}</div>
       <div class="a-sec">4. AUTORIZACIONES</div>
       <div class="a-firmas">
-        <div><div class="l"></div><b>GERENTE DEL ÁREA</b>Nombre y firma<br><br>Fecha: ____ / ____ / ______</div>
-        <div><div class="l"></div><b>GERENCIA DE RECURSOS HUMANOS</b>Nombre y firma<br><br>Fecha: ____ / ____ / ______</div>
-        <div><div class="l"></div><b>DIRECCIÓN FINANCIERA</b>Nombre y firma<br><br>Fecha: ____ / ____ / ______</div>
+        <div><div class="a-nombre">${escapeHtml(responsable || "")}</div><div class="l"></div><b>GERENTE DEL ÁREA</b>Nombre y firma<br><br>Fecha: ____ / ____ / ______</div>
+        <div><div class="a-nombre"></div><div class="l"></div><b>GERENCIA DE RECURSOS HUMANOS</b>Nombre y firma<br><br>Fecha: ____ / ____ / ______</div>
+        <div><div class="a-nombre"></div><div class="l"></div><b>DIRECCIÓN FINANCIERA</b>Nombre y firma<br><br>Fecha: ____ / ____ / ______</div>
       </div>
       <div class="a-leyenda">La programación de personal para días festivos deberá contar con las autorizaciones correspondientes antes de su ejecución.</div>
       <div class="a-pie"><span>ATAF104</span><span>Rev 0.&nbsp;&nbsp;&nbsp;13/11/2026</span></div>
