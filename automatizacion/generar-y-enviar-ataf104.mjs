@@ -135,7 +135,7 @@ async function enviarAtaf104({ db, festivo, festivos, listaHoras, mapUsuarios, c
   const asunto = `ATAF104 · Personal a laborar día festivo ${festivo.fecha.split("-").reverse().join("/")}${festivo.nombre ? " · " + festivo.nombre : ""}`;
   // Cuerpo corto (2026-11-18, pedido de Ivan): el detalle va en el PDF.
   const cuerpo = `
-    <p>Se adjunta el formato ATAF104 con el personal autorizado por gerencia para laborar el día festivo
+    <p>Se adjunta el formato ATAF104 con el personal autorizado por la gerencia de importaciones para laborar el día festivo
       ${escapeHtml(fechaLargaConDia(festivo.fecha))}${escapeHtml(nombreFestivo)}.</p>
     <p>Este correo se generó y envió automáticamente desde Adrematasa Interno con las solicitudes aprobadas a esta hora${forzado ? " (envío manual)" : ""}.</p>
   `;

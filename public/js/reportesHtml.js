@@ -778,7 +778,7 @@ export function construirPaginaAtaf104({ fecha, festivoNombre, personas, respons
       <div class="a-caja" style="white-space:pre-wrap;">${escapeHtml(observaciones || "")}</div>
       <div class="a-sec">4. AUTORIZACIONES</div>
       <div class="a-firmas">
-        <div><div class="a-nombre">${escapeHtml(responsable || "")}</div><div class="l"></div><b>GERENTE DEL ÁREA</b>Nombre y firma<br><br>Fecha: ____ / ____ / ______</div>
+        <div><div class="a-nombre">${escapeHtml(responsable || "")}</div><div class="l"></div><b>GERENTE DEL ÁREA</b>Nombre y firma<br><br>Fecha: ${fechaSolicitud ? fechaDDMMYYYY(fechaSolicitud).split("/").join(" / ") : "____ / ____ / ______"}</div>
         <div><div class="a-nombre"></div><div class="l"></div><b>GERENCIA DE RECURSOS HUMANOS</b>Nombre y firma<br><br>Fecha: ____ / ____ / ______</div>
         <div><div class="a-nombre"></div><div class="l"></div><b>DIRECCIÓN FINANCIERA</b>Nombre y firma<br><br>Fecha: ____ / ____ / ______</div>
       </div>
