@@ -1,15 +1,19 @@
+// ##########################################################################
+// PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
+// RUTA:     /workspaces/adrematasa_interno/public/js/faltas.js
+// ##########################################################################
+// 2026-11-20 (pedido de Ivan): el tipo de falta dice siempre si se paga — solo
+// CON GOCE DE SUELDO, SIN GOCE DE SUELDO o INCAPACIDAD IMSS; cualquier detalle
+// va en observaciones. Las faltas viejas se muestran convertidas (ver
+// reportesHtml.js); las "Justificadas" salen POR DEFINIR hasta que el admin
+// elija con o sin goce. El admin puede corregir una falta que ya se mandó a
+// nómina (correccionesNomina.js).
 import { db } from "./firebase-config.js";
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, where
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
-
-const TIPOS_FALTA = [
-  { value: "injustificada", label: "Injustificada", afectaPagoDefault: true },
-  { value: "justificada", label: "Justificada", afectaPagoDefault: false },
-  { value: "incapacidad", label: "Incapacidad (IMSS)", afectaPagoDefault: false },
-  { value: "permiso_con_goce", label: "Permiso con goce de sueldo", afectaPagoDefault: false },
-  { value: "permiso_sin_goce", label: "Permiso sin goce de sueldo", afectaPagoDefault: true }
-];
+import { TIPOS_FALTA, etiquetaTipoFalta, faltaEnRojo, tipoFaltaNormalizado } from "./reportesHtml.js";
+import { abrirCorregirFalta, chipCorregida } from "./correccionesNomina.js";
 
 const ETIQUETAS_ESTATUS = {
   pendiente: "Pendiente",
@@ -23,12 +27,14 @@ const CLASES_ESTATUS = {
   rechazada: "badge-rechazada"
 };
 
+// Tipo de falta para las tablas (en rojo lo que no se paga o falta definir).
 function etiquetaTipo(valor) {
-  return (TIPOS_FALTA.find(t => t.value === valor) || {}).label || valor;
+  const txt = escapeHtml(etiquetaTipoFalta(valor));
+  return faltaEnRojo(valor) ? `<b style="color:#a32424;">${txt}</b>` : `<b>${txt}</b>`;
 }
 
 function opcionesTipo() {
-  return TIPOS_FALTA.map(t => `<option value="${t.value}">${t.label}</option>`).join("");
+  return `<option value="">Elige…</option>` + TIPOS_FALTA.map(t => `<option value="${t.value}">${t.label}</option>`).join("");
 }
 
 // Formulario de captura compartido entre admin y supervisor.
@@ -59,11 +65,7 @@ function construirFormularioCaptura(contenedor, { rol, uid, nombre, listaCaptura
             <select id="falta-tipo" required>${opcionesTipo()}</select>
           </label>
         </div>
-        <label class="campo-checkbox">
-          <input type="checkbox" id="falta-afecta-pago">
-          Afecta el pago de ese día
-        </label>
-        <label>Comentario (opcional)
+        <label>Observaciones (opcional)
           <textarea id="falta-comentario" rows="2"></textarea>
         </label>
         <button type="submit">Registrar falta</button>
@@ -75,7 +77,6 @@ function construirFormularioCaptura(contenedor, { rol, uid, nombre, listaCaptura
   const errorDiv = contenedor.querySelector("#falta-error");
   const selEmpleado = contenedor.querySelector("#falta-empleado");
   const selTipo = contenedor.querySelector("#falta-tipo");
-  const chkAfectaPago = contenedor.querySelector("#falta-afecta-pago");
   const inputFecha = contenedor.querySelector("#falta-fecha");
   const inputComentario = contenedor.querySelector("#falta-comentario");
 
@@ -88,12 +89,6 @@ function construirFormularioCaptura(contenedor, { rol, uid, nombre, listaCaptura
   }
   actualizarOpcionesEmpleado(listaCapturables());
 
-  function aplicarDefaultAfectaPago() {
-    const tipo = TIPOS_FALTA.find(t => t.value === selTipo.value);
-    chkAfectaPago.checked = tipo ? tipo.afectaPagoDefault : false;
-  }
-  selTipo.addEventListener("change", aplicarDefaultAfectaPago);
-  aplicarDefaultAfectaPago();
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -111,7 +106,11 @@ function construirFormularioCaptura(contenedor, { rol, uid, nombre, listaCaptura
       return;
     }
     const tipo = selTipo.value;
-    const afectaPago = chkAfectaPago.checked;
+    if (!tipo) {
+      errorDiv.textContent = "Elige el tipo de falta: con goce, sin goce o incapacidad IMSS.";
+      return;
+    }
+    const afectaPago = tipo === "sin_goce";
     const comentario = inputComentario.value.trim();
 
     try {
@@ -133,7 +132,6 @@ function construirFormularioCaptura(contenedor, { rol, uid, nombre, listaCaptura
         creadoEn: new Date().toISOString()
       });
       form.reset();
-      aplicarDefaultAfectaPago();
     } catch (err) {
       errorDiv.textContent = "No se pudo registrar la falta: " + err.message;
     }
@@ -153,9 +151,9 @@ export function iniciarGestionFaltas(contenedor, uid, nombre) {
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-faltas-pendientes">
           <thead>
-            <tr><th>Empleado</th><th>Fecha</th><th>Tipo</th><th>Afecta pago</th><th>Comentario</th><th>Capturó</th><th>Acción</th></tr>
+            <tr><th>Empleado</th><th>Fecha</th><th>Tipo</th><th>Observaciones</th><th>Capturó</th><th>Acción</th></tr>
           </thead>
-          <tbody id="tbody-faltas-pendientes"><tr><td colspan="7">Cargando...</td></tr></tbody>
+          <tbody id="tbody-faltas-pendientes"><tr><td colspan="6">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -165,7 +163,7 @@ export function iniciarGestionFaltas(contenedor, uid, nombre) {
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-faltas-historial">
           <thead>
-            <tr><th>Empleado</th><th>Fecha</th><th>Tipo</th><th>Afecta pago</th><th>Estatus</th><th>Comentario</th><th>Capturó</th><th>Confirmó/Rechazó</th></tr>
+            <tr><th>Empleado</th><th>Fecha</th><th>Tipo</th><th>Estatus</th><th>Observaciones</th><th>Capturó</th><th>Confirmó/Rechazó</th><th>Acción</th></tr>
           </thead>
           <tbody id="tbody-faltas-historial"><tr><td colspan="8">Cargando...</td></tr></tbody>
         </table>
@@ -203,7 +201,7 @@ export function iniciarGestionFaltas(contenedor, uid, nombre) {
 
   function renderPendientes(lista) {
     if (lista.length === 0) {
-      tbodyPendientes.innerHTML = `<tr><td colspan="7">No hay faltas pendientes de confirmar.</td></tr>`;
+      tbodyPendientes.innerHTML = `<tr><td colspan="6">No hay faltas pendientes de confirmar.</td></tr>`;
       return;
     }
     tbodyPendientes.innerHTML = lista.map(f => `
@@ -211,7 +209,6 @@ export function iniciarGestionFaltas(contenedor, uid, nombre) {
         <td>${escapeHtml(f.empleadoNombre || "")}</td>
         <td>${f.fecha}</td>
         <td>${etiquetaTipo(f.tipo)}</td>
-        <td>${f.afectaPago ? "Sí" : "No"}</td>
         <td>${f.comentario ? escapeHtml(f.comentario) : "—"}</td>
         <td>${escapeHtml(f.capturadoPorNombre || "")}</td>
         <td class="acciones">
@@ -234,17 +231,25 @@ export function iniciarGestionFaltas(contenedor, uid, nombre) {
       return;
     }
     tbodyHistorial.innerHTML = lista.map(f => `
-      <tr>
+      <tr data-id="${f.id}">
         <td>${escapeHtml(f.empleadoNombre || "")}</td>
         <td>${f.fecha}</td>
         <td>${etiquetaTipo(f.tipo)}</td>
-        <td>${f.afectaPago ? "Sí" : "No"}</td>
-        <td><span class="badge ${CLASES_ESTATUS[f.estatus] || "badge-pendiente"}">${ETIQUETAS_ESTATUS[f.estatus] || f.estatus}</span></td>
+        <td><span class="badge ${CLASES_ESTATUS[f.estatus] || "badge-pendiente"}">${ETIQUETAS_ESTATUS[f.estatus] || f.estatus}</span>${f.enviadoANominaEn ? ` <span class="badge" style="background:#DCEAF7;color:#185FA5;">Enviada a nómina</span>` : ""}${chipCorregida(f)}</td>
         <td>${f.comentario ? escapeHtml(f.comentario) : "—"}</td>
         <td>${escapeHtml(f.capturadoPorNombre || "")}</td>
         <td>${f.revisadoPorNombre ? escapeHtml(f.revisadoPorNombre) : "—"}</td>
+        <td class="acciones">${f.enviadoANominaEn
+          ? `<button type="button" class="secundario btn-corregir-falta">✏️ Corregir</button>`
+          : (f.estatus === "aprobada" && tipoFaltaNormalizado(f.tipo) === "por_definir"
+            ? `<button type="button" class="secundario btn-definir-falta">Definir tipo</button>` : "—")}</td>
       </tr>
     `).join("");
+    tbodyHistorial.querySelectorAll("tr[data-id]").forEach(fila => {
+      const f = lista.find(x => x.id === fila.dataset.id);
+      fila.querySelector(".btn-corregir-falta")?.addEventListener("click", () => abrirCorregirFalta(f, { uid, nombre }));
+      fila.querySelector(".btn-definir-falta")?.addEventListener("click", () => abrirCorregirFalta(f, { uid, nombre }, { sinNomina: true }));
+    });
   }
 
   async function resolverFalta(id, estatus) {
@@ -272,9 +277,9 @@ export function iniciarVistaSupervisorFaltas(contenedor, uid, nombre) {
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-faltas-equipo">
           <thead>
-            <tr><th>Empleado</th><th>Fecha</th><th>Tipo</th><th>Afecta pago</th><th>Estatus</th><th>Comentario</th><th>Acción</th></tr>
+            <tr><th>Empleado</th><th>Fecha</th><th>Tipo</th><th>Estatus</th><th>Observaciones</th><th>Acción</th></tr>
           </thead>
-          <tbody id="tbody-faltas-equipo"><tr><td colspan="7">Cargando...</td></tr></tbody>
+          <tbody id="tbody-faltas-equipo"><tr><td colspan="6">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -307,7 +312,7 @@ export function iniciarVistaSupervisorFaltas(contenedor, uid, nombre) {
 
   function render(lista) {
     if (lista.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="7">Todavía no has registrado faltas de tu equipo.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6">Todavía no has registrado faltas de tu equipo.</td></tr>`;
       return;
     }
     tbody.innerHTML = lista.map(f => `
@@ -315,8 +320,7 @@ export function iniciarVistaSupervisorFaltas(contenedor, uid, nombre) {
         <td>${escapeHtml(f.empleadoNombre || "")}</td>
         <td>${f.fecha}</td>
         <td>${etiquetaTipo(f.tipo)}</td>
-        <td>${f.afectaPago ? "Sí" : "No"}</td>
-        <td><span class="badge ${CLASES_ESTATUS[f.estatus] || "badge-pendiente"}">${ETIQUETAS_ESTATUS[f.estatus] || f.estatus}</span></td>
+        <td><span class="badge ${CLASES_ESTATUS[f.estatus] || "badge-pendiente"}">${ETIQUETAS_ESTATUS[f.estatus] || f.estatus}</span>${chipCorregida(f)}</td>
         <td>${f.comentario ? escapeHtml(f.comentario) : "—"}</td>
         <td class="acciones">
           ${f.estatus === "pendiente" && f.capturadoPor === uid ? `<button type="button" class="btn-eliminar btn-rechazar">Eliminar</button>` : "—"}
@@ -346,9 +350,9 @@ export function iniciarVistaEmpleadoFaltas(contenedor, datosUsuario, uid) {
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-mis-faltas">
           <thead>
-            <tr><th>Fecha</th><th>Tipo</th><th>Afecta pago</th><th>Estatus</th><th>Comentario</th></tr>
+            <tr><th>Fecha</th><th>Tipo</th><th>Estatus</th><th>Observaciones</th></tr>
           </thead>
-          <tbody id="tbody-mis-faltas"><tr><td colspan="5">Cargando...</td></tr></tbody>
+          <tbody id="tbody-mis-faltas"><tr><td colspan="4">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -360,15 +364,14 @@ export function iniciarVistaEmpleadoFaltas(contenedor, datosUsuario, uid) {
     const lista = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     lista.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
     if (lista.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="5">No tienes faltas registradas.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="4">No tienes faltas registradas.</td></tr>`;
       return;
     }
     tbody.innerHTML = lista.map(f => `
       <tr>
         <td>${f.fecha}</td>
         <td>${etiquetaTipo(f.tipo)}</td>
-        <td>${f.afectaPago ? "Sí" : "No"}</td>
-        <td><span class="badge ${CLASES_ESTATUS[f.estatus] || "badge-pendiente"}">${ETIQUETAS_ESTATUS[f.estatus] || f.estatus}</span></td>
+        <td><span class="badge ${CLASES_ESTATUS[f.estatus] || "badge-pendiente"}">${ETIQUETAS_ESTATUS[f.estatus] || f.estatus}</span>${chipCorregida(f)}</td>
         <td>${f.comentario ? escapeHtml(f.comentario) : "—"}</td>
       </tr>
     `).join("");

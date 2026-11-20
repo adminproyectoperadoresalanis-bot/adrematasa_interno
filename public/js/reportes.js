@@ -19,6 +19,9 @@ import {
 // vista previa (solo quien autoriza). El correo del ATAF104 sale solo, 2 días
 // hábiles antes del festivo (automatizacion/generar-y-enviar-ataf104.mjs).
 import { puedeUsarAtaf104, REF_CFG_FESTIVO, REF_ESTADO_FESTIVO, abrirObservacionesAtaf104 } from "./formatoFestivo.js";
+// 2026-11-20: correcciones después de nómina pendientes de informar (solo admin).
+import { pintarSeccionCorrecciones } from "./correccionesNomina.js";
+import { correccionesPendientes } from "./reportesHtml.js";
 
 // Fecha local (yyyy-mm-dd) de un ISO.
 function hoyLocalDe(iso) {
@@ -125,6 +128,8 @@ function construirVista(contenedor, { esAdmin, uid }) {
         </table>
       </div>
     </section>
+
+    ${esAdmin ? `<div id="rep-correcciones"></div>` : ""}
 
     <section class="panel" style="margin-top:20px;">
       <h2>Formatos para imprimir</h2>
@@ -307,6 +312,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
     resumen = construirResumen(filtradasHoras, filtradasVacaciones, filtradasFaltas, pendientes);
     renderResumen();
     renderAvisoAtaf104();
+    if (esAdmin) pintarSeccionCorrecciones(contenedor.querySelector("#rep-correcciones"), () => ({ listaHoras, listaFaltas, mapUsuarios }));
   }
 
   // Junta horas extra, vacaciones y faltas del mismo rango en una fila por
@@ -750,6 +756,12 @@ function construirVista(contenedor, { esAdmin, uid }) {
     ids.horas.forEach(id => lote.update(doc(db, "solicitudes", id), { enviadoANominaEn: ahoraIso }));
     ids.faltas.forEach(id => lote.update(doc(db, "faltas", id), { enviadoANominaEn: ahoraIso }));
     ids.vacaciones.forEach(id => lote.update(doc(db, "solicitudesVacaciones", id), { enviadoANominaEn: ahoraIso }));
+    // Correcciones después de nómina que iban en este reporte: ya quedan informadas.
+    const porDoc = new Map();
+    correccionesPendientes({ listaHoras, listaFaltas }).forEach(({ col, id, doc: d }) => porDoc.set(`${col}/${id}`, { col, id, d }));
+    porDoc.forEach(({ col, id, d }) => lote.update(doc(db, col, id), {
+      correcciones: d.correcciones.map(c => c.informadaEn ? c : { ...c, informadaEn: ahoraIso, informadaVia: "reporte" })
+    }));
     await lote.commit();
   }
 }

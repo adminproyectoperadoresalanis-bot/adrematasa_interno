@@ -263,13 +263,13 @@ service cloud.firestore {
         && request.resource.data.capturadoPor == request.auth.uid
         && request.resource.data.capturadoPorRol == 'admin'
         && request.resource.data.estatus == 'aprobada'
-        && request.resource.data.tipo in ['injustificada', 'justificada', 'incapacidad', 'permiso_con_goce', 'permiso_sin_goce'];
+        && request.resource.data.tipo in ['con_goce', 'sin_goce', 'incapacidad'];
       allow create: if isSignedIn()
         && esSupervisorDe(request.resource.data.supervisorId)
         && request.resource.data.capturadoPor == request.auth.uid
         && request.resource.data.capturadoPorRol == 'supervisor'
         && request.resource.data.estatus == 'pendiente'
-        && request.resource.data.tipo in ['injustificada', 'justificada', 'incapacidad', 'permiso_con_goce', 'permiso_sin_goce'];
+        && request.resource.data.tipo in ['con_goce', 'sin_goce', 'incapacidad'];
       allow update, delete: if isSignedIn()
         && resource.data.capturadoPor == request.auth.uid
         && resource.data.estatus == 'pendiente';

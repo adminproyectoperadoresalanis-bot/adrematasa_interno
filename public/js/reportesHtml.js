@@ -28,15 +28,40 @@ export const DIAS_ABREV = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 // de "tipo" que usa faltas.js.
 // 2026-11-05 (pedido de Ivan): lo que no se paga dice SIN GOCE DE SUELDO, en
 // rojo y negritas (celda "Tipo Falta" y caja de pendientes).
-export const ETIQUETAS_FALTA_CORTAS = {
-  injustificada: "SIN GOCE DE SUELDO",
-  justificada: "Justificada",
-  incapacidad: "Incapacidad",
-  permiso_con_goce: "Con goce",
-  permiso_sin_goce: "PERMISO · SIN GOCE DE SUELDO"
+// 2026-11-20 (pedido de Ivan): solo 3 tipos — CON GOCE DE SUELDO, SIN GOCE DE
+// SUELDO e INCAPACIDAD IMSS; cualquier detalle va en observaciones. Los tipos
+// viejos se leen convertidos: injustificada y permiso sin goce = sin goce;
+// permiso con goce = con goce; "justificada" no decía si se paga → POR DEFINIR
+// (en rojo) hasta que el admin la corrija.
+export const TIPOS_FALTA = [
+  { value: "con_goce", label: "CON GOCE DE SUELDO" },
+  { value: "sin_goce", label: "SIN GOCE DE SUELDO" },
+  { value: "incapacidad", label: "INCAPACIDAD IMSS" }
+];
+const TIPO_FALTA_EQUIVALENTE = {
+  con_goce: "con_goce", sin_goce: "sin_goce", incapacidad: "incapacidad",
+  injustificada: "sin_goce", permiso_sin_goce: "sin_goce", permiso_con_goce: "con_goce",
+  justificada: "por_definir"
 };
-export const FALTAS_SIN_GOCE = ["injustificada", "permiso_sin_goce"];
-const ETIQUETAS_SIN_GOCE = FALTAS_SIN_GOCE.map(t => ETIQUETAS_FALTA_CORTAS[t]);
+// Tipo de falta normalizado: "con_goce" | "sin_goce" | "incapacidad" | "por_definir".
+export function tipoFaltaNormalizado(tipo) {
+  return TIPO_FALTA_EQUIVALENTE[tipo] || "por_definir";
+}
+export const ETIQUETAS_FALTA_CORTAS = {
+  con_goce: "CON GOCE DE SUELDO",
+  sin_goce: "SIN GOCE DE SUELDO",
+  incapacidad: "INCAPACIDAD IMSS",
+  por_definir: "POR DEFINIR"
+};
+// Etiqueta de cualquier tipo (nuevo o viejo).
+export function etiquetaTipoFalta(tipo) {
+  return ETIQUETAS_FALTA_CORTAS[tipoFaltaNormalizado(tipo)];
+}
+// En rojo: lo que no se paga y lo que falta definir.
+export function faltaEnRojo(tipo) {
+  return ["sin_goce", "por_definir"].includes(tipoFaltaNormalizado(tipo));
+}
+export const FALTAS_SIN_GOCE = ["sin_goce", "injustificada", "permiso_sin_goce"];
 
 export function formatearFechaCorta(fechaStr) {
   // "2026-08-08" -> "08-ago"
@@ -296,7 +321,7 @@ function construirSeccionPendientes({ listaHoras, listaVacaciones, listaFaltas, 
   const p = filtrarPendientes({ listaHoras, listaVacaciones, listaFaltas, viernes });
   const pendientes = [
     ...p.horas.map(s => ({ tipo: "horaExtra", empleadoId: s.empleadoId, empleadoNombre: s.empleadoNombre, fecha: s.fecha, horas: s.horas, motivo: s.motivo })),
-    ...p.faltas.map(f => ({ tipo: "falta", empleadoId: f.empleadoId, empleadoNombre: f.empleadoNombre, fecha: f.fecha, tipoFaltaEtiqueta: ETIQUETAS_FALTA_CORTAS[f.tipo] || f.tipo })),
+    ...p.faltas.map(f => ({ tipo: "falta", empleadoId: f.empleadoId, empleadoNombre: f.empleadoNombre, fecha: f.fecha, tipoFaltaEtiqueta: etiquetaTipoFalta(f.tipo), tipoFalta: f.tipo })),
     ...p.vacaciones.map(v => ({ tipo: "vacacion", empleadoId: v.empleadoId, empleadoNombre: v.empleadoNombre, fechaInicio: v.fechaInicio, fechaFin: v.fechaFin, dias: v.diasHabiles }))
   ];
   if (pendientes.length === 0) return "";
@@ -319,7 +344,7 @@ function construirSeccionPendientes({ listaHoras, listaVacaciones, listaFaltas, 
         detalle = escapeHtml(item.motivo || "");
         cantidad = `${item.horas} h`;
       } else if (item.tipo === "falta") {
-        detalle = ETIQUETAS_SIN_GOCE.includes(item.tipoFaltaEtiqueta)
+        detalle = faltaEnRojo(item.tipoFalta)
           ? `<span class="texto-sin-goce">${escapeHtml(item.tipoFaltaEtiqueta)}</span>`
           : escapeHtml(item.tipoFaltaEtiqueta || "");
         cantidad = "1 día";
@@ -453,7 +478,7 @@ export function construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas
       const tiposFalta = Object.values(e.faltasPorDia);
       const celdaTipo = tiposFalta.length === 0
         ? "—"
-        : [...new Set(tiposFalta.map(t => ETIQUETAS_FALTA_CORTAS[t] || t))].join(", ");
+        : [...new Set(tiposFalta.map(etiquetaTipoFalta))].join(", ");
       return `
         <tr>
           <td class="centrado">${escapeHtml(e.numeroEmpleado)}</td>
@@ -464,7 +489,7 @@ export function construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas
           ${hayFestivo ? `<td class="centrado celda-total celda-festivo">${totalFestivo || "—"}</td>` : ""}
           <td class="centrado">${totalVacaciones || "—"}</td>
           <td class="centrado">${e.faltas || "—"}</td>
-          <td class="centrado${tiposFalta.some(t => FALTAS_SIN_GOCE.includes(t)) ? " celda-sin-goce" : ""}">${escapeHtml(celdaTipo)}</td>
+          <td class="centrado${tiposFalta.some(faltaEnRojo) ? " celda-sin-goce" : ""}">${escapeHtml(celdaTipo)}</td>
         </tr>
       `;
     }).join("");
@@ -504,6 +529,8 @@ export function construirPaginaNomina({ listaHoras, listaVacaciones, listaFaltas
             </table>
 
             ${construirSeccionPendientes({ listaHoras, listaVacaciones, listaFaltas, mapUsuarios, viernes, festivos })}
+
+            ${construirSeccionCorrecciones({ listaHoras, listaFaltas, mapUsuarios })}
 
             <div class="pie-nomina">
               <div class="pie-nomina-contenido">
@@ -612,6 +639,12 @@ export const CSS_REPORTE = `
   .barra-imprimir button { padding:8px 18px; font-size:13px; cursor:pointer; }
   @media print { .barra-imprimir { display:none; } }
 
+  .seccion-correcciones { margin-top: 14px; border: 1.5px solid #6A3A9A; border-radius: 4px; break-inside: avoid; page-break-inside: avoid; }
+  .seccion-correcciones-titulo { background:#F4ECFA; color:#4B2370; font-weight:bold; font-size:10.5px; padding:5px 8px; border-bottom: 1.5px solid #6A3A9A; display:flex; flex-direction:column; gap:2px; }
+  .seccion-correcciones-subtitulo { font-weight:normal; font-size:8.5px; color:#5d3c7c; }
+  .tabla-correcciones { width:100%; border-collapse:collapse; }
+  .tabla-correcciones th, .tabla-correcciones td { border:1px solid #cdb6e0; padding:3px 5px; font-size:8.5px; }
+  .tabla-correcciones th { background:#F4ECFA; font-weight:bold; text-align:center; }
   .seccion-pendientes { margin-top: 14px; border: 1.5px solid #a35a00; border-radius: 4px; break-inside: avoid; page-break-inside: avoid; }
   .seccion-pendientes-titulo { background:#fff4e3; color:#7a3e00; font-weight:bold; font-size:10.5px; padding:5px 8px; border-bottom: 1.5px solid #a35a00; display:flex; flex-direction:column; gap:2px; }
   .seccion-pendientes-subtitulo { font-weight:normal; font-size:8.5px; color:#8a5a20; }
@@ -644,6 +677,89 @@ export function construirHtmlReporteCompleto({ paginaRH, paginaNomina, numeroSem
   ${(paginasExtra || []).join("\n")}
 </body>
 </html>`;
+}
+
+// ============================================================================
+// Correcciones después de nómina (2026-11-20, pedido de Ivan). Cuando algo ya
+// se mandó a nómina (enviadoANominaEn) y estaba mal, el admin lo corrige desde
+// Horas extra o Faltas. Cada solicitud/falta guarda un arreglo `correcciones`
+// con { en, por, motivo, antes, despues, semanaReportada, informadaEn,
+// informadaPor, informadaVia }. Mientras informadaEn sea null, la corrección
+// está "pendiente de informar": sale en Reportes (botón para mandarla ya por
+// correo) y, si no se mandó, en el siguiente reporte del jueves. Una vez
+// informada no se repite.
+// ============================================================================
+export function correccionesPendientes({ listaHoras = [], listaFaltas = [] }) {
+  const items = [];
+  const juntar = (lista, col) => lista.forEach(doc => (Array.isArray(doc.correcciones) ? doc.correcciones : [])
+    .forEach(c => { if (c && !c.informadaEn) items.push({ col, id: doc.id, doc, c }); }));
+  juntar(listaHoras, "solicitudes");
+  juntar(listaFaltas, "faltas");
+  return items.sort((a, b) => (a.doc.fecha || "").localeCompare(b.doc.fecha || "") || (a.c.en || "").localeCompare(b.c.en || ""));
+}
+
+const textoHoras = (x) => x && (x.horas > 0)
+  ? `${formatearHora12(x.horaInicio)} - ${formatearHora12(x.horaFin)} · ${x.horas} h`
+  : "0 h (no procedía)";
+// Lo que se reportó: una "justificada" vieja se nombra tal cual (así salió en el reporte).
+const textoFalta = (x) => x && x.estatus === "rechazada" ? "No hubo falta" : (x && x.tipo === "justificada" ? "Justificada" : etiquetaTipoFalta(x && x.tipo));
+const pagaFalta = (x) => !(x && x.estatus !== "rechazada" && tipoFaltaNormalizado(x.tipo) === "sin_goce");
+
+// Una corrección en palabras (tabla de Reportes, PDF del correo y reporte del jueves).
+export function describirCorreccion(item, mapUsuarios) {
+  const { col, doc, c } = item;
+  const u = (mapUsuarios && mapUsuarios.get(doc.empleadoId)) || {};
+  const semanaReportada = c.semanaReportada || calcularSemanaLaboral(doc.fecha);
+  const base = {
+    numeroEmpleado: u.numeroEmpleado || "—",
+    nombre: doc.empleadoNombre || u.nombre || "",
+    fecha: doc.fecha, fechaCorta: formatearFechaCorta(doc.fecha),
+    semana: numeroSemanaISO(sumarDias(semanaReportada, 6)),
+    motivo: c.motivo || "",
+    por: (c.por && c.por.nombre) || ""
+  };
+  if (col === "solicitudes") {
+    const dif = Math.round(((Number(c.despues && c.despues.horas) || 0) - (Number(c.antes && c.antes.horas) || 0)) * 100) / 100;
+    return { ...base, concepto: "Horas extra", antes: textoHoras(c.antes), despues: textoHoras(c.despues),
+      diferencia: dif === 0 ? "Sin cambio de horas" : dif < 0 ? `-${Math.abs(dif)} h (descontar)` : `+${dif} h (pagar)`,
+      enRojo: dif < 0 };
+  }
+  const antesPaga = pagaFalta(c.antes), despuesPaga = pagaFalta(c.despues);
+  return { ...base, concepto: "Falta", antes: textoFalta(c.antes), despues: textoFalta(c.despues),
+    diferencia: antesPaga === despuesPaga ? (despuesPaga ? "Se paga el día (sin cambio)" : "No se paga el día (sin cambio)") : despuesPaga ? "Sí se paga el día" : "No se paga el día",
+    enRojo: !despuesPaga };
+}
+
+function construirSeccionCorrecciones({ listaHoras, listaFaltas, mapUsuarios }) {
+  const items = correccionesPendientes({ listaHoras, listaFaltas });
+  if (!items.length) return "";
+  const filas = items.map(it => {
+    const d = describirCorreccion(it, mapUsuarios);
+    return `
+        <tr>
+          <td class="centrado">${escapeHtml(d.numeroEmpleado)}</td>
+          <td>${escapeHtml(d.nombre)}</td>
+          <td class="centrado">${d.concepto}</td>
+          <td class="centrado">${d.fechaCorta}</td>
+          <td class="centrado">Semana ${d.semana}</td>
+          <td>${escapeHtml(d.antes)}</td>
+          <td>${d.enRojo ? `<span class="texto-sin-goce">${escapeHtml(d.despues)}</span>` : escapeHtml(d.despues)}</td>
+          <td class="centrado">${d.enRojo ? `<span class="texto-sin-goce">${escapeHtml(d.diferencia)}</span>` : escapeHtml(d.diferencia)}</td>
+          <td>${escapeHtml(d.motivo)}</td>
+        </tr>`;
+  }).join("");
+  return `
+    <div class="seccion-correcciones">
+      <div class="seccion-correcciones-titulo">
+        Correcciones a reportes anteriores
+        <span class="seccion-correcciones-subtitulo">Registros que ya se habían reportado y se corrigieron después</span>
+      </div>
+      <table class="tabla-correcciones">
+        <thead><tr><th>No.<br>Emp.</th><th>Nombre</th><th>Concepto</th><th>Fecha</th><th>Reportado en</th><th>Se reportó</th><th>Debe ser</th><th>Diferencia</th><th>Motivo</th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>
+  `;
 }
 
 // ============================================================================

@@ -2,6 +2,9 @@
 // PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
 // RUTA:     /workspaces/adrematasa_interno/automatizacion/generar-y-enviar-reporte.mjs
 // ##########################################################################
+// 2026-11-20: el REPORTE NOMINA trae "Correcciones a reportes anteriores" (lo
+// corregido después de nómina que no se informó con el botón de Reportes) y,
+// después de enviar, las marca como informadas.
 // 2026-11-18 (ATAF104): lee el catálogo de festivos (configuracion/diasFestivos)
 // para que el REPORTE NOMINA separe las horas en festivo (columna "H Fest").
 // El ATAF104 NO va en este correo: sale solo 2 días hábiles antes del festivo
@@ -98,7 +101,7 @@ import { dirname, join } from "path";
 import {
   calcularSemanaLaboral, sumarDias, numeroSemanaISO, formatearFechaLargaCap,
   construirPaginaRH, construirPaginaNomina, construirHtmlReporteCompleto,
-  idsIncluidosEnReporte
+  idsIncluidosEnReporte, correccionesPendientes
 } from "../public/js/reportesHtml.js";
 // Bloque de "Autorizaciones adicionales" (bonos/gratificaciones capturados en
 // la pestaña Gestión → Extras de la app) para el cuerpo del correo — mismo
@@ -306,6 +309,23 @@ async function main() {
   // js/reportesHtml.js, sección "Pendientes de semanas anteriores", para el
   // porqué completo de esta bandera).
   await marcarComoEnviado({ db, listaHoras, listaVacaciones, listaFaltas, viernes, jueves });
+
+  // --- 7a. Correcciones después de nómina que iban en este reporte (2026-11-20) ---
+  // Salieron en "Correcciones a reportes anteriores"; quedan informadas para no repetirse.
+  try {
+    const pendientesCorr = correccionesPendientes({ listaHoras, listaFaltas });
+    const porDoc = new Map();
+    pendientesCorr.forEach(({ col, id, doc }) => porDoc.set(`${col}/${id}`, { col, id, doc }));
+    const ahoraCorr = new Date().toISOString();
+    for (const { col, id, doc } of porDoc.values()) {
+      await db.collection(col).doc(id).update({
+        correcciones: doc.correcciones.map(c => c.informadaEn ? c : { ...c, informadaEn: ahoraCorr, informadaVia: "reporte" })
+      });
+    }
+    if (porDoc.size) console.log(`Correcciones informadas en este reporte: ${pendientesCorr.length}.`);
+  } catch (errCorr) {
+    console.error("ATENCIÓN: el correo salió, pero no se pudieron marcar las correcciones como informadas — podrían repetirse el próximo jueves:", errCorr);
+  }
 
   // --- 7b. Marcar como enviadas las autorizaciones extra que iban en el correo ---
   // En try/catch aparte a propósito: el correo YA salió, y si esto truena el

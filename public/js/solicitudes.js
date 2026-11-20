@@ -18,6 +18,8 @@ function hoyLocalIso() {
 import { avisarNuevaSolicitud } from "./avisoNuevaSolicitud.js";
 // ATAF104 (2026-11-18): fecha límite = cuando sale el formato a nóminas.
 import { fechaEnvioAtaf104, fechaLargaConDia, HORA_ENVIO_ATAF104 } from "./reportesHtml.js";
+// 2026-11-20: el empleado ve si su solicitud se corrigió después de nómina.
+import { chipCorregida } from "./correccionesNomina.js";
 
 const ETIQUETAS_ESTATUS = {
   pendiente: "Pendiente",
@@ -385,7 +387,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
         <td>${s.horaInicio}–${s.horaFin}</td>
         <td>${s.horas}</td>
         <td>${escapeHtml(s.motivo)}</td>
-        <td><span class="badge badge-${s.estatus}">${ETIQUETAS_ESTATUS[s.estatus] || s.estatus}</span></td>
+        <td><span class="badge badge-${s.estatus}">${ETIQUETAS_ESTATUS[s.estatus] || s.estatus}</span>${chipCorregida(s)}</td>
         <td>${s.comentarioRevisor ? escapeHtml(s.comentarioRevisor) : "—"}</td>
         <td>${s.revisadoPorNombre ? escapeHtml(s.revisadoPorNombre) : "—"}</td>
         <td class="acciones">
@@ -541,7 +543,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
   // quién lo autorizó — consistente con cómo ya se muestra "Autorizó" en el
   // resto de la app).
   function abrirModalHistorialAjustes(solicitud) {
-    const ETIQUETAS_ORIGEN = { directo: "Directo (por el admin)", solicitado: "Solicitado por ti" };
+    const ETIQUETAS_ORIGEN = { directo: "Directo (por el admin)", solicitado: "Solicitado por ti", correccion: "Corrección después de nómina (admin)" };
     const entradas = historialAjustesDe(solicitud);
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";

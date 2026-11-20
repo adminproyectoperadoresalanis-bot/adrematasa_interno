@@ -8,6 +8,8 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { crearNotificacion } from "./notificaciones.js";
 import { enviarCorreoResultado } from "./correo.js";
+// 2026-11-20: corregir horas extra que ya se mandaron a nómina (solo admin).
+import { abrirCorregirHoras, chipCorregida } from "./correccionesNomina.js";
 
 const ETIQUETAS_ESTATUS = {
   pendiente: "Pendiente",
@@ -265,12 +267,13 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
           <td>${s.horaInicio}–${s.horaFin}</td>
           <td>${s.horas}</td>
           <td>${escapeHtml(s.motivo)}</td>
-          <td><span class="badge badge-${s.estatus}">${ETIQUETAS_ESTATUS[s.estatus] || s.estatus}</span>${badgeAjuste(s)}</td>
+          <td><span class="badge badge-${s.estatus}">${ETIQUETAS_ESTATUS[s.estatus] || s.estatus}</span>${badgeAjuste(s)}${s.enviadoANominaEn ? ` <span class="badge" style="background:#DCEAF7;color:#185FA5;">Enviada a nómina ${fechaCortaIso(s.enviadoANominaEn)}</span>` : ""}${chipCorregida(s)}</td>
           <td>${s.comentarioRevisor ? escapeHtml(s.comentarioRevisor) : "—"}</td>
           <td>${s.revisadoPorNombre ? escapeHtml(s.revisadoPorNombre) : "—"}</td>
           <td>
             <button type="button" class="secundario btn-enviar-correo">Enviar correo</button>
             ${permiteRevertir && !s.enviadoANominaEn ? `<button type="button" class="secundario btn-revertir-solicitud">Revertir a pendiente</button>` : ""}
+            ${permiteRevertir && s.enviadoANominaEn ? `<button type="button" class="secundario btn-corregir-nomina">✏️ Corregir</button>` : ""}
             <div class="nota-correo"></div>
           </td>
         </tr>
@@ -292,6 +295,9 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
 
       fila.querySelector(".btn-revertir-solicitud")?.addEventListener("click", () => {
         revertirSolicitud(solicitud);
+      });
+      fila.querySelector(".btn-corregir-nomina")?.addEventListener("click", () => {
+        abrirCorregirHoras(solicitud, { uid: uidRevisor, nombre: nombreRevisor });
       });
     });
   }
