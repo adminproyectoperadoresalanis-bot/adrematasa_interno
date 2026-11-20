@@ -1,509 +1,533 @@
 // ##########################################################################
 // PROYECTO: ADREMATASA INTERNO  (Codespace: adrematasa_interno)
-// RUTA:     /workspaces/adrematasa_interno/public/js/mantenimiento.js
+// RUTA:     /workspaces/adrematasa_interno/public/js/mantenimientoReporte.js
 // ##########################################################################
+// Mantenimiento › pestaña "📊 Reporte" (2026-11-19, pedido de Ivan).
+// Resumen por rango de fechas (fecha en que se CREÓ la OT) que se pinta en
+// pantalla y se descarga en PDF (jsPDF + autoTable) y Excel (SheetJS).
+// Lo ve todo el que tiene acceso a Mantenimiento.
+//
+// Qué trae:
+//   - Totales: solicitudes, terminadas, abiertas (la más vieja), atención
+//     promedio, remolques distintos.
+//   - Horario de atención: el técnico cubre de 8:00 am a 3:00 pm de lunes a
+//     sábado por sueldo; fuera de eso (antes de 8, desde las 3 pm, domingo o
+//     festivo del catálogo) cobra por servicio. Se mide con la hora de
+//     creación de la OT. Ajustable en HORARIO_SUELDO.
+//   - Por tipo de falla, por ubicación, remolques con más solicitudes.
+//   - Comentario de cierre: "Qué se hizo" por palabras clave (CATEGORIAS_CIERRE),
+//     cruce falla → qué se hizo, reincidencias (mismo remolque y misma falla
+//     dentro de 30 días después de cerrada) y calidad del comentario.
+//   - Detalle con todas las columnas.
+
 import { db } from "./firebase-config.js";
 import {
-  collection, doc, getDocs, onSnapshot, addDoc, updateDoc, query, orderBy, limit, serverTimestamp
+  collection, doc, getDoc, getDocs, query, where, orderBy
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
-import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
-
-// ============================================================================
-// Utilidades → Mantenimiento (2026-10-28, pedido de Ivan).
-// Solicitudes de mantenimiento de REMOLQUES (solo tipo REMOLQUE y activos del
-// Inventario). Folio consecutivo OT-IMPO-00001-26 que toma la función
-// crearSolicitudMantenimiento (functions/mantenimiento.js).
-//   - Ubicación: "Bodega Laredo TX" o un lugar de la lista
-//     (mantenimiento_lugares), que los mismos usuarios van agregando con su
-//     nombre y una coordenada GPS o liga de Maps.
-//   - Falla: categorías rápidas (varias) + descripción libre.
-//   - Compartir: en computadora se copia el texto; en celular abre WhatsApp con
-//     el mensaje listo para elegir el grupo.
-//   - Terminar: cualquiera con acceso, con fecha, hora y qué se hizo.
-// ============================================================================
-
-const funciones = getFunctions(undefined, "us-central1");
-const fnCrear = httpsCallable(funciones, "crearSolicitudMantenimiento");
+import { LOGO_ALANIS } from "./comercialLogo.js";
 
 const COL = "mantenimiento_solicitudes";
-const COL_LUGARES = "mantenimiento_lugares";
 const BODEGA = "Bodega Laredo TX";
-const FALLAS = [
-  "Llantas", "Frenos", "Luces / eléctrico", "Suspensión", "Puertas / sellos", "Piso / caja", "Golpe / estructura",
-  "Thermo: no enciende", "Thermo: marca alarmas", "Thermo: tirando diésel", "Thermo: no enfría / no mantiene temperatura",
-  "Thermo: batería", "Thermo: sin diésel", "Otra",
+const URL_JSPDF = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+const URL_AUTOTABLE = "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js";
+const URL_XLSX = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+
+// Horario por sueldo del técnico. Fuera de esto = por servicio.
+const HORARIO_SUELDO = { inicio: 8, fin: 15, dias: [1, 2, 3, 4, 5, 6] }; // 0=dom … 6=sáb
+const TXT_SUELDO = "Sueldo (8:00 am – 3:00 pm, lun a sáb)";
+const TXT_SERVICIO = "Por servicio (fuera de horario)";
+const DIAS_REINCIDENCIA = 30;
+
+// "Qué se hizo": un comentario puede caer en varias. Se compara sin acentos y en minúsculas.
+const CATEGORIAS_CIERRE = [
+  { id: "cambio", nombre: "Cambio / reemplazo de pieza", claves: ["cambi", "reemplaz", "sustitu", "nuevo", "nueva", "instal", "coloc"] },
+  { id: "llantas", nombre: "Llantas", claves: ["llanta", "rin ", "rines", "vulcaniz", "ponch", "birlo", "neumat"] },
+  { id: "reparacion", nombre: "Reparación / soldadura", claves: ["repar", "sold", "parch", "arregl", "compus", "sell"] },
+  { id: "ajuste", nombre: "Ajuste / calibración / reset", claves: ["ajust", "calibr", "apret", "reset", "reinici", "reprogram", "purg", "tens"] },
+  { id: "taller", nombre: "Taller o proveedor externo", claves: ["taller", "proveedor", "agencia", "carrier", "thermo king", "thermoking", "externo", "se llevo a"] },
+  { id: "sinfalla", nombre: "Revisión sin falla", claves: ["sin falla", "no se encontr", "no presenta", "funciona bien", "funcionando correctamente", "todo bien", "sin problema", "no tenia"] },
 ];
+const SIN_CLASIFICAR = "Sin clasificar";
+const GENERICOS = ["listo", "ok", "okay", "hecho", "terminado", "terminada", "se arreglo", "arreglado", "ya quedo", "quedo", "reparado", "atendido", "realizado", "se reparo", "se atendio"];
 
-function esc(t) { const d = document.createElement("div"); d.textContent = t == null ? "" : String(t); return d.innerHTML; }
-function esCelular() {
-  return /iphone|ipad|ipod|android|mobi/i.test(navigator.userAgent) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-}
-function pad(n) { return String(n).padStart(2, "0"); }
-function fechaHoraTexto(ms) {
-  const d = new Date(ms);
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-function valorLocal(ms) { // para <input type="datetime-local">
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
+const DIAS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
-// "27.43, -99.55" o una liga de Maps → { lat, lng, liga }
-export function leerCoordenada(texto) {
-  const t = String(texto || "").trim();
-  if (!t) return null;
-  const num = "(-?\\d{1,3}\\.\\d+)";
-  const pares = [
-    new RegExp(`^${num}\\s*,\\s*${num}$`),
-    new RegExp(`@${num},${num}`),
-    new RegExp(`[?&](?:q|query|ll|destination)=${num}(?:,|%2C)\\s*${num}`, "i"),
-    new RegExp(`!3d${num}!4d${num}`),
-  ];
-  for (const re of pares) {
-    const m = t.match(re);
-    if (m) {
-      const lat = Number(m[1]), lng = Number(m[2]);
-      if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) return { lat, lng, liga: /^https?:\/\//i.test(t) ? t : "" };
-    }
-  }
-  if (/^https?:\/\//i.test(t)) return { lat: null, lng: null, liga: t }; // liga corta (maps.app.goo.gl): se guarda tal cual
-  return null;
-}
-function ligaMapa(u) {
-  if (!u) return "";
-  if (u.lat != null && u.lng != null) return `https://maps.google.com/?q=${u.lat},${u.lng}`;
-  return u.liga || "";
+const esc = (t) => { const d = document.createElement("div"); d.textContent = t == null ? "" : String(t); return d.innerHTML; };
+const pad = (n) => String(n).padStart(2, "0");
+const norm = (t) => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+const isoLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const ddmmyyyy = (iso) => { const [y, m, d] = String(iso || "").split("-"); return y ? `${d}/${m}/${y}` : ""; };
+const msInicio = (iso) => new Date(iso + "T00:00:00").getTime();
+const sumarDiasIso = (iso, n) => { const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n); return isoLocal(d); };
+
+function duracion(ms) {
+  if (!isFinite(ms) || ms < 0) return "";
+  const h = ms / 3600000;
+  return h < 24 ? `${Math.max(1, Math.round(h))} h` : `${(h / 24).toFixed(1)} d`;
 }
 
-export function mensajeSolicitud(s) {
-  const r = s.remolque || {};
-  const u = s.ubicacion || {};
-  const desc = [r.marca, r.modelo, r.placas ? "Placas " + r.placas : ""].filter(Boolean).join(" · ");
-  const lineas = [
-    "*SOLICITUD DE MANTENIMIENTO*",
-    `*${s.folio}*`,
-    "",
-    `Remolque: *${r.id}*${desc ? ` (${desc})` : ""}`,
-    `Fecha: ${s.fechaTexto || ""}`,
-    `Solicita: ${(s.solicitadoPor || {}).nombre || ""}`,
-    `Ubicación: ${u.nombre || ""}${u.detalle ? " — " + u.detalle : ""}`,
-  ];
-  const mapa = ligaMapa(u);
-  if (mapa) lineas.push(`Mapa: ${mapa}`);
-  if ((s.fallas || []).length) lineas.push(`Falla: ${s.fallas.join(", ")}`);
-  if (s.descripcion) lineas.push(`Detalle: ${s.descripcion}`);
-  if (s.estado === "terminada") {
-    lineas.push("", `*TERMINADA* ${s.terminadaMs ? fechaHoraTexto(s.terminadaMs) : ""}${s.comentarioCierre ? " — " + s.comentarioCierre : ""}`);
-  }
-  return lineas.join("\n");
-}
-
-async function copiar(texto) {
-  try { await navigator.clipboard.writeText(texto); return true; } catch (e) { /* respaldo abajo */ }
-  const ta = document.createElement("textarea");
-  ta.value = texto; ta.style.position = "fixed"; ta.style.opacity = "0";
-  document.body.appendChild(ta); ta.select();
-  let ok = false; try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
-  ta.remove();
-  return ok;
-}
-function botonesCompartir(s) {
-  const texto = mensajeSolicitud(s);
-  const wa = `https://wa.me/?text=${encodeURIComponent(texto)}`;
-  return esCelular()
-    ? `<a class="boton mt-wa" href="${esc(wa)}" target="_blank" rel="noopener">Enviar por WhatsApp</a>
-       <button type="button" class="secundario mt-copiar">Copiar texto</button>`
-    : `<button type="button" class="mt-copiar">📋 Copiar para pegar</button>`;
-}
-function enlazarCompartir(caja, s) {
-  caja.querySelectorAll(".mt-copiar").forEach(b => b.addEventListener("click", async () => {
-    const ok = await copiar(mensajeSolicitud(s));
-    const antes = b.textContent;
-    b.textContent = ok ? "✓ Copiado" : "No se pudo copiar";
-    setTimeout(() => { b.textContent = antes; }, 2500);
-  }));
-}
-
-function inyectarEstilos() {
-  if (document.getElementById("estilos-mantenimiento")) return;
-  const s = document.createElement("style");
-  s.id = "estilos-mantenimiento";
-  s.textContent = `
-    .mt-tabs { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 14px; }
-    .mt-tab, .mt-chip { background:#fff; border:1px solid #e2ddd5; border-radius:16px; padding:6px 12px; font:inherit; font-size:13px; color:#6b5f52; cursor:pointer; }
-    .mt-tab.activo, .mt-chip.activo { background:#2c1e0f; border-color:#2c1e0f; color:#fff; }
-    .mt-chips { display:flex; gap:6px; flex-wrap:wrap; }
-    .mt-sug { border:1px solid #e2ddd5; border-radius:9px; margin-top:4px; overflow:hidden; }
-    .mt-sug button { display:block; width:100%; text-align:left; background:#fff; border:0; border-top:1px solid #f0ece6; padding:8px 12px; font:inherit; font-size:13px; color:#2c1e0f; cursor:pointer; }
-    .mt-sug button:first-child { border-top:0; } .mt-sug button:hover { background:#f7f3ee; }
-    .mt-sug small, .mt-elegido small { color:#8a7f73; }
-    .mt-elegido { border:1px solid #2c1e0f; border-radius:9px; padding:9px 12px; margin-top:6px; font-size:13.5px; display:flex; justify-content:space-between; gap:8px; align-items:center; }
-    .mt-dos { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
-    .mt-ro { background:#f7f3ee; border:1px solid #e2ddd5; border-radius:9px; padding:9px 12px; font-size:14px; }
-    .mt-nuevo-lugar { border:1px dashed #cbbfb0; border-radius:10px; padding:10px 12px; margin-top:8px; background:#fbfaf8; }
-    .mt-folio { font-size:24px; font-weight:800; letter-spacing:.5px; }
-    .mt-msg { white-space:pre-wrap; font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace; background:#f7f3ee; border:1px solid #e2ddd5; border-radius:10px; padding:12px; margin-top:10px; }
-    .mt-acciones { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; align-items:center; }
-    .mt-wa { background:#1f9d55 !important; color:#fff !important; border-radius:8px; padding:10px 14px; text-decoration:none; font-weight:700; display:inline-block; }
-    .mt-estado { display:inline-block; font-size:11px; font-weight:800; padding:3px 9px; border-radius:11px; white-space:nowrap; }
-    .mt-ab { background:#FBE3A8; color:#7a3e06; } .mt-te { background:#EAF3DE; color:#3B7A1E; }
-    .mt-tabla tr.clic { cursor:pointer; } .mt-tabla tr.clic:hover td { background:#faf7f2; }
-    .mt-tabla td { vertical-align:top; }
-    @media (max-width:560px) { .mt-dos { grid-template-columns:1fr; } }
-  `;
-  document.head.appendChild(s);
-}
-
-// Remolques activos del Inventario (una lectura por sesión).
-let cacheRemolques = null;
-async function cargarRemolques() {
-  if (cacheRemolques) return cacheRemolques;
-  const [cat, est] = await Promise.all([getDocs(collection(db, "inventario_catalogo")), getDocs(collection(db, "inventario_estatus"))]);
-  const estatus = new Map(est.docs.map(d => [d.id, d.data()]));
-  const lista = [];
-  cat.docs.forEach(d => {
-    if (d.id === "meta") return;
-    (d.data().unidades || []).forEach(u => {
-      if (u.tipo !== "REMOLQUE") return;
-      const e = estatus.get(u.id);
-      const deOtraSerie = e && e.serie && u.serie && e.serie !== u.serie;
-      if (e && !deOtraSerie && e.estatus && e.estatus !== "activa") return; // baja o vendida
-      lista.push({ id: u.id, marca: u.marca || "", modelo: u.modelo || "", placas: u.placas || "", serie: u.serie || "" });
-    });
+function cargarScript(url, global) {
+  if (window[global]) return Promise.resolve(window[global]);
+  return new Promise((ok, mal) => {
+    const s = document.createElement("script");
+    s.src = url; s.onload = () => ok(window[global]); s.onerror = () => mal(new Error("No se pudo cargar " + url));
+    document.head.appendChild(s);
   });
-  lista.sort((a, b) => a.id.localeCompare(b.id, "es", { numeric: true }));
-  cacheRemolques = lista;
-  return lista;
 }
 
-export function iniciarMantenimiento(contenedor, datosUsuario, uid) {
+// Fecha y hora de creación (las que guarda la función, hora de Nuevo Laredo).
+function fechaHoraDe(s) {
+  if (s.fecha && s.hora) return { fecha: s.fecha, hora: s.hora };
+  const d = new Date(s.ms);
+  return { fecha: isoLocal(d), hora: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
+}
+
+// Turno: sueldo o por servicio (con el motivo).
+function turnoDe(s, festivos) {
+  const { fecha, hora } = fechaHoraDe(s);
+  const [h, m] = hora.split(":").map(Number);
+  const dow = new Date(fecha + "T00:00:00").getDay();
+  const decimal = h + (m || 0) / 60;
+  if (festivos.has(fecha)) return { sueldo: false, motivo: "Festivo", hora: h };
+  if (!HORARIO_SUELDO.dias.includes(dow)) return { sueldo: false, motivo: DIAS[dow], hora: h };
+  if (decimal < HORARIO_SUELDO.inicio) return { sueldo: false, motivo: "Antes de 8:00 am", hora: h };
+  if (decimal >= HORARIO_SUELDO.fin) return { sueldo: false, motivo: "Desde las 3:00 pm", hora: h };
+  return { sueldo: true, motivo: "", hora: h };
+}
+
+function categoriasCierre(comentario) {
+  const t = " " + norm(comentario) + " ";
+  const cats = CATEGORIAS_CIERRE.filter(c => c.claves.some(k => t.includes(k))).map(c => c.nombre);
+  return cats.length ? cats : [SIN_CLASIFICAR];
+}
+function sinDetalle(comentario) {
+  const t = norm(comentario).replace(/[.!,;]+$/g, "");
+  return t.length < 12 || GENERICOS.includes(t);
+}
+
+const contar = (arr) => { const m = new Map(); arr.forEach(x => m.set(x, (m.get(x) || 0) + 1)); return [...m.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0]), "es")); };
+const remolqueTxt = (r) => [r && r.id, r && r.marca, r && r.modelo].filter(Boolean).join(" ");
+const ubicacionTxt = (s) => (s.ubicacion && s.ubicacion.tipo === "bodega") ? BODEGA : ((s.ubicacion && s.ubicacion.nombre) || "Otro");
+
+// =============================================================================
+// Análisis (sin DOM)
+// =============================================================================
+function analizar(lista, previas, festivos) {
+  const ahora = Date.now();
+  const terminadas = lista.filter(s => s.estado === "terminada");
+  const abiertas = lista.filter(s => s.estado !== "terminada");
+  const atencion = (s) => (s.terminadaMs && s.ms) ? s.terminadaMs - s.ms : NaN;
+  const promedio = (arr) => { const v = arr.map(atencion).filter(isFinite); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN; };
+  const masVieja = abiertas.length ? Math.max(...abiertas.map(s => ahora - (s.ms || ahora))) : 0;
+
+  // Horario
+  const conTurno = lista.map(s => ({ s, t: turnoDe(s, festivos) }));
+  const grupoTurno = (sueldo) => {
+    const g = conTurno.filter(x => x.t.sueldo === sueldo).map(x => x.s);
+    const term = g.filter(s => s.estado === "terminada");
+    const mismoDia = term.filter(s => s.terminadaMs && isoLocal(new Date(s.terminadaMs)) === fechaHoraDe(s).fecha).length;
+    const fallaTop = contar(g.flatMap(s => s.fallas || []))[0];
+    return { total: g.length, terminadas: term.length, mismoDia, promedio: promedio(term), fallaTop: fallaTop ? `${fallaTop[0]} (${fallaTop[1]})` : "—" };
+  };
+  const sueldo = grupoTurno(true), servicio = grupoTurno(false);
+  const motivosServicio = contar(conTurno.filter(x => !x.t.sueldo).map(x => x.t.motivo));
+  const porHora = Array.from({ length: 24 }, (_, h) => ({ h, sueldo: 0, servicio: 0 }));
+  conTurno.forEach(x => { const b = porHora[x.t.hora] || porHora[0]; x.t.sueldo ? b.sueldo++ : b.servicio++; });
+  const porDia = DIAS.map((nombre, i) => ({ nombre, i, sueldo: 0, servicio: 0 }));
+  conTurno.forEach(x => { const d = new Date(fechaHoraDe(x.s).fecha + "T00:00:00").getDay(); x.t.sueldo ? porDia[d].sueldo++ : porDia[d].servicio++; });
+  const porDiaOrden = [...porDia.slice(1), porDia[0]]; // lunes a domingo
+
+  // Fallas, ubicación, remolques
+  const fallas = contar(lista.flatMap(s => (s.fallas && s.fallas.length) ? s.fallas : ["Sin categoría"]));
+  const ubicaciones = contar(lista.map(ubicacionTxt));
+  const porRem = new Map();
+  lista.forEach(s => {
+    const id = (s.remolque && s.remolque.id) || "—";
+    if (!porRem.has(id)) porRem.set(id, { id, txt: remolqueTxt(s.remolque), n: 0, fallas: [] });
+    const r = porRem.get(id); r.n++; r.fallas.push(...(s.fallas || []));
+  });
+  const remolques = [...porRem.values()].sort((a, b) => b.n - a.n || a.id.localeCompare(b.id, "es", { numeric: true }));
+
+  // Comentario de cierre
+  const cierres = terminadas.map(s => ({ s, cats: categoriasCierre(s.comentarioCierre), vago: sinDetalle(s.comentarioCierre) }));
+  const queSeHizo = contar(cierres.flatMap(c => c.cats));
+  const cruce = contar(terminadas.flatMap(s => s.fallas || [])).slice(0, 8).map(([falla, n]) => {
+    const hechos = contar(cierres.filter(c => (c.s.fallas || []).includes(falla)).flatMap(c => c.cats));
+    return { falla, n, hechos: hechos.slice(0, 3).map(([c, k]) => `${c} (${k})`).join(" · ") };
+  });
+  const sinDet = cierres.filter(c => c.vago).map(c => c.s);
+
+  // Reincidencias: S (en rango) con una P anterior del mismo remolque y misma falla, cerrada ≤30 días antes.
+  const todas = [...previas, ...lista];
+  const reincidencias = [];
+  lista.forEach(s => {
+    const id = s.remolque && s.remolque.id;
+    if (!id) return;
+    const previa = todas
+      .filter(p => p !== s && p.remolque && p.remolque.id === id && p.estado === "terminada" && p.terminadaMs && p.terminadaMs <= s.ms
+        && s.ms - p.terminadaMs <= DIAS_REINCIDENCIA * 864e5 && (p.fallas || []).some(f => (s.fallas || []).includes(f)))
+      .sort((a, b) => b.terminadaMs - a.terminadaMs)[0];
+    if (previa) reincidencias.push({ s, p: previa, falla: (previa.fallas || []).filter(f => (s.fallas || []).includes(f)).join(", "), dias: Math.round((s.ms - previa.terminadaMs) / 864e5) });
+  });
+
+  return {
+    total: lista.length, terminadas: terminadas.length, abiertas: abiertas.length, masVieja,
+    promedio: promedio(terminadas), remolquesDistintos: porRem.size,
+    sueldo, servicio, motivosServicio, porHora, porDia: porDiaOrden,
+    fallas, ubicaciones, remolques, queSeHizo, cruce, sinDet, reincidencias,
+    reincidentesIds: new Set(reincidencias.map(r => r.s.id)),
+    cierres: new Map(cierres.map(c => [c.s.id, c])),
+    turnos: new Map(conTurno.map(x => [x.s.id, x.t])),
+  };
+}
+
+// Renglón de detalle (pantalla, PDF y Excel).
+function filaDetalle(s, a) {
+  const { fecha, hora } = fechaHoraDe(s);
+  const t = a.turnos.get(s.id) || {};
+  const c = a.cierres.get(s.id);
+  const r = s.remolque || {};
+  return {
+    folio: s.folio || s.id, fecha: ddmmyyyy(fecha), hora, remolque: r.id || "", marca: r.marca || "", modelo: r.modelo || "",
+    placas: r.placas || "", ubicacion: ubicacionTxt(s), fallas: (s.fallas || []).join(", "), descripcion: s.descripcion || "",
+    solicito: (s.solicitadoPor && s.solicitadoPor.nombre) || "", area: (s.solicitadoPor && s.solicitadoPor.area) || "",
+    turno: t.sueldo ? "Sueldo" : `Por servicio · ${t.motivo || ""}`,
+    estado: s.estado === "terminada" ? "Terminada" : "Abierta",
+    terminada: s.terminadaMs ? (() => { const d = new Date(s.terminadaMs); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; })() : "",
+    horasAtencion: s.terminadaMs && s.ms ? Math.round((s.terminadaMs - s.ms) / 360000) / 10 : "",
+    atencion: s.terminadaMs && s.ms ? duracion(s.terminadaMs - s.ms) : (s.ms ? `${duracion(Date.now() - s.ms)} (abierta)` : ""),
+    cerro: (s.terminadaPor && s.terminadaPor.nombre) || "",
+    comentario: s.comentarioCierre || "",
+    queSeHizo: c ? (c.vago ? "Sin detalle" : c.cats.join(", ")) : "",
+    reincidencia: a.reincidentesIds.has(s.id) ? "Sí" : "",
+  };
+}
+
+// =============================================================================
+// Pantalla
+// =============================================================================
+const ESTILOS = `
+.mr-filtros { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+.mr-filtros label { font-size:12px; color:#6b5f52; display:flex; flex-direction:column; gap:3px; margin:0; }
+.mr-filtros input, .mr-filtros select { min-width:140px; }
+.mr-atajos { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; }
+.mr-at { border:1px solid #e2ddd5; border-radius:14px; padding:4px 11px; font-size:12px; background:#fff; color:#2c1e0f; cursor:pointer; }
+.mr-at.on { background:#2c1e0f; color:#fff; border-color:#2c1e0f; }
+.mr-kpis { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin-top:12px; }
+.mr-kpi { background:#fff; border:1px solid #e2ddd5; border-radius:12px; padding:12px; }
+.mr-kpi .n { font-size:24px; font-weight:800; } .mr-kpi .t { font-size:12px; color:#6b5f52; }
+.mr-caja { background:#fff; border:1px solid #e2ddd5; border-radius:12px; padding:14px; margin-top:12px; }
+.mr-caja h3 { font-size:15px; margin:0 0 8px; }
+.mr-dos { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.mr-bar { display:grid; grid-template-columns:minmax(110px,190px) 1fr 34px; gap:8px; align-items:center; font-size:12.5px; margin:5px 0; }
+.mr-bar .b { height:12px; border-radius:6px; background:#8a6a4a; } .mr-bar .b.th { background:#185FA5; } .mr-bar .b.ok { background:#3B7A1E; } .mr-bar .b.gr { background:#b9b1a6; }
+.mr-bar .v { text-align:right; font-weight:700; }
+.mr-split { display:flex; height:16px; border-radius:8px; overflow:hidden; margin:6px 0 10px; background:#eee; }
+.mr-turno { border-radius:12px; padding:12px; border:1px solid; }
+.mr-turno.su { background:#EEF4FB; border-color:#bcd3ea; } .mr-turno.se { background:#FDF1E6; border-color:#efc9a4; }
+.mr-turno .t { font-size:12px; font-weight:700; text-transform:uppercase; } .mr-turno.su .t { color:#185FA5; } .mr-turno.se .t { color:#C2610C; }
+.mr-turno .n { font-size:28px; font-weight:800; } .mr-turno .n small { font-size:13px; color:#6b5f52; font-weight:600; }
+.mr-turno ul { margin:6px 0 0; padding-left:18px; font-size:13px; }
+.mr-hist { display:flex; align-items:flex-end; gap:2px; height:130px; border-bottom:1px solid #ccc; margin-top:8px; }
+.mr-hist div { flex:1; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; font-size:9.5px; font-weight:700; }
+.mr-hist i { display:block; width:100%; }
+.mr-ejes { display:flex; gap:2px; font-size:9px; color:#6b5f52; } .mr-ejes span { flex:1; text-align:center; }
+.mr-ley { display:flex; gap:14px; font-size:12px; margin-top:6px; flex-wrap:wrap; } .mr-ley i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:middle; }
+.mr-tabla { width:100%; border-collapse:collapse; font-size:12.5px; }
+.mr-tabla th, .mr-tabla td { padding:6px 8px; border-bottom:1px solid #efebe5; text-align:left; vertical-align:top; }
+.mr-tabla th { font-size:11px; color:#6b5f52; text-transform:uppercase; }
+.mr-chip { display:inline-block; border-radius:10px; padding:1px 7px; font-size:10.5px; font-weight:700; margin:1px 2px 1px 0; white-space:nowrap; }
+.mr-ab { background:#FBE3A8; color:#7a3e06; } .mr-te { background:#EAF3DE; color:#3B7A1E; } .mr-su { background:#DCEAF7; color:#185FA5; } .mr-se { background:#FDF1E6; color:#C2610C; } .mr-rj { background:#FDECEA; color:#8a2318; }
+.mr-aviso { border-radius:10px; padding:9px 12px; font-size:13px; margin-top:8px; }
+.mr-desc { display:flex; gap:8px; flex-wrap:wrap; }
+@media (max-width:760px) { .mr-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); } .mr-dos { grid-template-columns:1fr; } }
+`;
+function inyectarEstilos() {
+  if (document.getElementById("estilos-mantenimiento-reporte")) return;
+  const s = document.createElement("style"); s.id = "estilos-mantenimiento-reporte"; s.textContent = ESTILOS; document.head.appendChild(s);
+}
+
+function atajos() {
+  const hoy = new Date(); const h = isoLocal(hoy);
+  const lunes = new Date(hoy); lunes.setDate(hoy.getDate() - ((hoy.getDay() + 6) % 7));
+  const iniMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+  const iniMesAnt = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1), finMesAnt = new Date(hoy.getFullYear(), hoy.getMonth(), 0);
+  return [
+    { id: "semana", t: "Esta semana", d: isoLocal(lunes), h },
+    { id: "mes", t: "Este mes", d: isoLocal(iniMes), h },
+    { id: "mesant", t: "Mes anterior", d: isoLocal(iniMesAnt), h: isoLocal(finMesAnt) },
+    { id: "30", t: "Últimos 30 días", d: sumarDiasIso(h, -29), h },
+    { id: "anio", t: "Este año", d: `${hoy.getFullYear()}-01-01`, h },
+  ];
+}
+
+export function iniciarReporteMantenimiento(cuerpo) {
   inyectarEstilos();
-  contenedor.innerHTML = `
-    <section class="panel">
-      <h2 style="margin:0 0 4px;">Mantenimiento</h2>
-      <p class="nota" style="margin:0 0 12px;">Solicitudes de mantenimiento de remolques.</p>
-      <div class="mt-tabs" id="mt-tabs"></div>
-      <div id="mt-error" class="error"></div>
-      <div id="mt-cuerpo"></div>
-    </section>`;
-  const $ = (s) => contenedor.querySelector(s);
-  let tab = "nueva";
-  let lugares = [];
-  let solicitudes = null;
-  let filtro = "abiertas";
-  let busqueda = "";
-  // estado del formulario
-  const form = { remolque: null, ubicacion: { tipo: "bodega", nombre: BODEGA }, detalle: "", fallas: new Set(), descripcion: "" };
-  let enviada = null;
-  let enviando = false;
+  const at = atajos();
+  let desde = at[1].d, hasta = at[1].h, atajo = "mes";
+  let estado = "todas", remolque = "";
+  let datos = [], previas = [], festivos = new Set(), cargando = false;
+  let token = 0;
 
-  const cancelarLugares = onSnapshot(collection(db, COL_LUGARES), (snap) => {
-    lugares = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.nombre || "").localeCompare(b.nombre || "", "es"));
-    if (tab === "nueva" && !enviada) pintarLugares();
-  }, (err) => { $("#mt-error").textContent = "No se pudieron leer los lugares: " + err.message; });
-  const cancelarSolicitudes = onSnapshot(query(collection(db, COL), orderBy("ms", "desc"), limit(500)), (snap) => {
-    solicitudes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (tab === "lista") renderLista();
-    renderTabs();
-  }, (err) => { $("#mt-error").textContent = "No se pudieron leer las solicitudes: " + err.message; });
-  const vigilar = setInterval(() => {
-    if (!contenedor.isConnected) { clearInterval(vigilar); cancelarLugares(); cancelarSolicitudes(); }
-  }, 3000);
+  cuerpo.innerHTML = `
+    <div class="mr-filtros">
+      <label>Desde<input type="date" id="mr-desde" value="${desde}"></label>
+      <label>Hasta<input type="date" id="mr-hasta" value="${hasta}"></label>
+      <label>Estado<select id="mr-estado"><option value="todas">Todas</option><option value="abiertas">Abiertas</option><option value="terminadas">Terminadas</option></select></label>
+      <label>Remolque<select id="mr-rem"><option value="">Todos</option></select></label>
+    </div>
+    <div class="mr-atajos">${at.map(a => `<button type="button" class="mr-at${a.id === atajo ? " on" : ""}" data-a="${a.id}">${a.t}</button>`).join("")}</div>
+    <p class="nota" style="margin:8px 0 0;">Cuenta las solicitudes creadas en el rango. Se actualiza al cambiar cualquier filtro.</p>
+    <div class="error" id="mr-err"></div>
+    <div id="mr-res"><p class="nota">Cargando…</p></div>`;
+  const $ = (s) => cuerpo.querySelector(s);
 
-  function renderTabs() {
-    const abiertas = (solicitudes || []).filter(s => s.estado === "abierta").length;
-    $("#mt-tabs").innerHTML = [["nueva", "Nueva solicitud"], ["lista", `Solicitudes${solicitudes ? ` (${abiertas} abierta${abiertas === 1 ? "" : "s"})` : ""}`]]
-      .map(([k, t]) => `<button type="button" class="mt-tab${tab === k ? " activo" : ""}" data-t="${k}">${t}</button>`).join("");
-    $("#mt-tabs").querySelectorAll(".mt-tab").forEach(b => b.addEventListener("click", () => { tab = b.dataset.t; render(); }));
-  }
-  function render() {
-    renderTabs();
-    $("#mt-error").textContent = "";
-    if (tab === "nueva") renderNueva(); else renderLista();
-  }
+  getDoc(doc(db, "configuracion", "diasFestivos")).then(s => {
+    festivos = new Set(((s.exists() && s.data().festivos) || []).map(f => f && f.fecha).filter(Boolean));
+    pintar();
+  }).catch(() => {});
 
-  // ---- Nueva solicitud ----
-  function renderNueva() {
-    if (enviada) return renderEnviada();
-    const c = $("#mt-cuerpo");
-    c.innerHTML = `
-      <label for="mt-rem">Remolque</label>
-      <input type="text" id="mt-rem" placeholder="Escribe el número económico o las placas…" autocomplete="off">
-      <div id="mt-rem-sug"></div>
-      <div id="mt-rem-elegido"></div>
-      <div class="mt-dos" style="margin-top:10px;">
-        <div><label>Fecha y hora</label><div class="mt-ro" id="mt-ahora">${fechaHoraTexto(Date.now())}</div></div>
-        <div><label>Solicita</label><div class="mt-ro">${esc((datosUsuario && datosUsuario.nombre) || "")}</div></div>
-      </div>
-      <label>¿Dónde está el remolque?</label>
-      <div class="mt-chips"><button type="button" class="mt-chip" id="mt-bodega">${BODEGA}</button></div>
-      <select id="mt-lugar" style="margin-top:8px;"></select>
-      <div id="mt-nuevo-lugar"></div>
-      <input type="text" id="mt-detalle" maxlength="300" placeholder="Detalle (opcional): cajón, andén, cliente, km…" style="margin-top:8px;">
-      <label>Falla que presenta <span class="nota" style="font-weight:400;text-transform:none;">(puedes marcar varias)</span></label>
-      <div class="mt-chips" id="mt-fallas">${FALLAS.map(f => `<button type="button" class="mt-chip" data-f="${esc(f)}">${esc(f)}</button>`).join("")}</div>
-      <label for="mt-desc">Descripción</label>
-      <textarea id="mt-desc" rows="3" maxlength="1000" placeholder="Más detalles de la falla…"></textarea>
-      <div class="error" id="mt-ferror"></div>
-      <div class="acciones-form" style="margin-top:12px;"><button type="button" id="mt-enviar">Enviar solicitud</button></div>`;
-    const reloj = setInterval(() => { const a = $("#mt-ahora"); if (a) a.textContent = fechaHoraTexto(Date.now()); else clearInterval(reloj); }, 30000);
-
-    // Remolque
-    const inp = $("#mt-rem");
-    inp.addEventListener("input", () => sugerir(inp.value));
-    pintarElegido();
-    cargarRemolques().catch(e => { $("#mt-error").textContent = "No se pudo leer el Inventario: " + e.message; });
-
-    // Ubicación
-    $("#mt-bodega").addEventListener("click", () => { form.ubicacion = { tipo: "bodega", nombre: BODEGA }; pintarLugares(); });
-    $("#mt-lugar").addEventListener("change", (e) => {
-      const v = e.target.value;
-      if (v === "__nuevo") { abrirNuevoLugar(); return; }
-      if (!v) { form.ubicacion = { tipo: "bodega", nombre: BODEGA }; pintarLugares(); return; }
-      const l = lugares.find(x => x.id === v);
-      if (l) form.ubicacion = { tipo: "lugar", lugarId: l.id, nombre: l.nombre, lat: l.lat ?? null, lng: l.lng ?? null, liga: l.liga || "" };
-      pintarLugares();
-    });
-    pintarLugares();
-    $("#mt-detalle").value = form.detalle;
-    $("#mt-detalle").addEventListener("input", (e) => { form.detalle = e.target.value; });
-
-    // Fallas
-    $("#mt-fallas").querySelectorAll(".mt-chip").forEach(b => {
-      b.classList.toggle("activo", form.fallas.has(b.dataset.f));
-      b.addEventListener("click", () => {
-        const f = b.dataset.f;
-        if (form.fallas.has(f)) form.fallas.delete(f); else form.fallas.add(f);
-        b.classList.toggle("activo", form.fallas.has(f));
-      });
-    });
-    $("#mt-desc").value = form.descripcion;
-    $("#mt-desc").addEventListener("input", (e) => { form.descripcion = e.target.value; });
-    $("#mt-enviar").addEventListener("click", enviar);
-  }
-
-  async function sugerir(texto) {
-    const caja = $("#mt-rem-sug");
-    const t = String(texto || "").trim().toUpperCase();
-    if (!t) { caja.innerHTML = ""; return; }
-    let lista;
-    try { lista = await cargarRemolques(); } catch (e) { caja.innerHTML = ""; return; }
-    const exactos = lista.filter(r => r.id.toUpperCase() === t);
-    const empiezan = lista.filter(r => r.id.toUpperCase() !== t && r.id.toUpperCase().startsWith(t));
-    const contienen = lista.filter(r => !r.id.toUpperCase().startsWith(t) && (r.id.toUpperCase().includes(t) || r.placas.toUpperCase().includes(t)));
-    const res = [...exactos, ...empiezan, ...contienen].slice(0, 8);
-    caja.innerHTML = res.length
-      ? `<div class="mt-sug">${res.map(r => `<button type="button" data-id="${esc(r.id)}"><b>${esc(r.id)}</b> · ${esc([r.marca, r.modelo].filter(Boolean).join(" "))}${r.placas ? ` <small>· Placas ${esc(r.placas)}</small>` : ""}</button>`).join("")}</div>`
-      : `<p class="nota" style="margin:6px 0 0;">No encontré un remolque activo con "${esc(texto)}".</p>`;
-    caja.querySelectorAll("button[data-id]").forEach(b => b.addEventListener("click", () => {
-      form.remolque = lista.find(r => r.id === b.dataset.id) || null;
-      caja.innerHTML = ""; $("#mt-rem").value = "";
-      pintarElegido();
-    }));
-  }
-  function pintarElegido() {
-    const caja = $("#mt-rem-elegido");
-    if (!caja) return;
-    const r = form.remolque;
-    caja.innerHTML = r ? `<div class="mt-elegido"><span><b>${esc(r.id)}</b> · ${esc([r.marca, r.modelo].filter(Boolean).join(" "))}${r.placas ? ` <small>· Placas ${esc(r.placas)}</small>` : ""}</span>
-      <button type="button" class="secundario" id="mt-rem-quitar" style="padding:4px 9px;font-size:12px;">Cambiar</button></div>` : "";
-    const q = $("#mt-rem-quitar");
-    if (q) q.addEventListener("click", () => { form.remolque = null; pintarElegido(); $("#mt-rem").focus(); });
-  }
-
-  function pintarLugares() {
-    const sel = $("#mt-lugar"), bod = $("#mt-bodega");
-    if (!sel || !bod) return;
-    const u = form.ubicacion;
-    bod.classList.toggle("activo", u.tipo === "bodega");
-    sel.innerHTML = `<option value="">${lugares.length ? "Otro lugar…" : "Otro lugar… (todavía no hay lugares guardados)"}</option>` +
-      lugares.map(l => `<option value="${esc(l.id)}"${u.tipo === "lugar" && u.lugarId === l.id ? " selected" : ""}>${esc(l.nombre)}</option>`).join("") +
-      `<option value="__nuevo">+ Agregar lugar nuevo…</option>`;
-  }
-
-  function abrirNuevoLugar() {
-    const caja = $("#mt-nuevo-lugar");
-    caja.innerHTML = `<div class="mt-nuevo-lugar">
-      <label style="margin-top:0;" for="mt-nl-nombre">Nombre del lugar</label>
-      <input type="text" id="mt-nl-nombre" maxlength="120" placeholder="Ej: Patio Fénix, Bodega Sigma Monterrey">
-      <label for="mt-nl-coord">Coordenada GPS o liga de Maps</label>
-      <input type="text" id="mt-nl-coord" maxlength="500" placeholder="27.4343, -99.5573  ó  https://maps.app.goo.gl/…">
-      ${navigator.geolocation ? `<button type="button" class="secundario" id="mt-nl-gps" style="margin-top:6px;">📍 Usar mi ubicación actual</button>` : ""}
-      <div class="error" id="mt-nl-error"></div>
-      <div class="mt-acciones"><button type="button" id="mt-nl-guardar">Guardar lugar</button><button type="button" class="secundario" id="mt-nl-cancelar">Cancelar</button></div>
-    </div>`;
-    const cerrar = () => { caja.innerHTML = ""; pintarLugares(); };
-    $("#mt-nl-cancelar").addEventListener("click", cerrar);
-    const gps = $("#mt-nl-gps");
-    if (gps) gps.addEventListener("click", () => {
-      gps.disabled = true; gps.textContent = "Buscando ubicación…";
-      navigator.geolocation.getCurrentPosition((p) => {
-        $("#mt-nl-coord").value = `${p.coords.latitude.toFixed(6)}, ${p.coords.longitude.toFixed(6)}`;
-        gps.disabled = false; gps.textContent = "📍 Usar mi ubicación actual";
-      }, (e) => {
-        $("#mt-nl-error").textContent = "No se pudo obtener la ubicación: " + e.message;
-        gps.disabled = false; gps.textContent = "📍 Usar mi ubicación actual";
-      }, { enableHighAccuracy: true, timeout: 15000 });
-    });
-    $("#mt-nl-guardar").addEventListener("click", async (ev) => {
-      const err = $("#mt-nl-error");
-      err.textContent = "";
-      const nombre = $("#mt-nl-nombre").value.trim();
-      const coord = leerCoordenada($("#mt-nl-coord").value);
-      if (!nombre) { err.textContent = "Escribe el nombre del lugar."; return; }
-      if (lugares.some(l => (l.nombre || "").toLowerCase() === nombre.toLowerCase()) || nombre.toLowerCase() === BODEGA.toLowerCase()) { err.textContent = "Ya existe un lugar con ese nombre."; return; }
-      if (!coord) { err.textContent = "Escribe una coordenada (latitud, longitud) o pega una liga de Maps."; return; }
-      ev.target.disabled = true;
-      try {
-        const ref = await addDoc(collection(db, COL_LUGARES), {
-          nombre, lat: coord.lat, lng: coord.lng, liga: coord.liga,
-          creadoPor: { uid, nombre: (datosUsuario && datosUsuario.nombre) || "" }, creadoEn: serverTimestamp(),
-        });
-        form.ubicacion = { tipo: "lugar", lugarId: ref.id, nombre, lat: coord.lat, lng: coord.lng, liga: coord.liga };
-        cerrar();
-      } catch (e) {
-        err.textContent = "No se pudo guardar: " + e.message;
-        ev.target.disabled = false;
-      }
-    });
-    $("#mt-nl-nombre").focus();
-  }
-
-  async function enviar() {
-    if (enviando) return;
-    const err = $("#mt-ferror");
-    err.textContent = "";
-    if (!form.remolque) { err.textContent = "Elige el remolque."; return; }
-    const descripcion = form.descripcion.trim();
-    if (!form.fallas.size && !descripcion) { err.textContent = "Marca la falla o escribe una descripción."; return; }
-    enviando = true;
-    const btn = $("#mt-enviar"); btn.disabled = true; btn.textContent = "Enviando…";
-    const datos = {
-      remolque: form.remolque,
-      ubicacion: { ...form.ubicacion, detalle: form.detalle.trim() },
-      fallas: [...form.fallas],
-      descripcion,
-    };
+  async function cargar() {
+    const mio = ++token;
+    cargando = true; pintar();
     try {
-      const r = await fnCrear(datos);
-      const d = r.data || {};
-      enviada = { ...datos, folio: d.folio, fechaTexto: d.fechaTexto, solicitadoPor: { nombre: d.solicitadoPor }, estado: "abierta" };
-      form.remolque = null; form.fallas = new Set(); form.descripcion = ""; form.detalle = "";
-      form.ubicacion = { tipo: "bodega", nombre: BODEGA };
-      renderEnviada();
+      const ini = msInicio(sumarDiasIso(desde, -(DIAS_REINCIDENCIA + 1)));
+      const fin = msInicio(sumarDiasIso(hasta, 1));
+      const snap = await getDocs(query(collection(db, COL), where("ms", ">=", ini), where("ms", "<", fin), orderBy("ms", "desc")));
+      if (mio !== token) return;
+      const todas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const corte = msInicio(desde);
+      datos = todas.filter(s => s.ms >= corte);
+      previas = todas.filter(s => s.ms < corte);
+      $("#mr-err").textContent = "";
     } catch (e) {
-      err.textContent = e.message || String(e);
-      btn.disabled = false; btn.textContent = "Enviar solicitud";
+      if (mio !== token) return;
+      datos = []; previas = [];
+      $("#mr-err").textContent = "No se pudieron leer las solicitudes: " + e.message;
     }
-    enviando = false;
+    cargando = false;
+    pintarRemolques();
+    pintar();
   }
 
-  function renderEnviada() {
-    const c = $("#mt-cuerpo");
-    const s = enviada;
-    c.innerHTML = `
-      <p class="nota" style="margin:0;">Solicitud enviada</p>
-      <div class="mt-folio">${esc(s.folio)}</div>
-      <div class="nota" style="margin:2px 0 0;">${esc(s.fechaTexto)} · ${esc(s.solicitadoPor.nombre)}</div>
-      <div class="mt-msg">${esc(mensajeSolicitud(s))}</div>
-      <div class="mt-acciones">${botonesCompartir(s)}<button type="button" class="secundario" id="mt-otra">Nueva solicitud</button></div>
-      <p class="nota">${esCelular() ? "Enviar por WhatsApp abre WhatsApp con el mensaje listo; elige el grupo de Mantenimiento." : "Copiar para pegar deja el texto listo para pegarlo en WhatsApp Web o en un correo."}</p>`;
-    enlazarCompartir(c, s);
-    $("#mt-otra").addEventListener("click", () => { enviada = null; renderNueva(); });
+  function pintarRemolques() {
+    const ids = [...new Set(datos.map(s => s.remolque && s.remolque.id).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es", { numeric: true }));
+    if (remolque && !ids.includes(remolque)) remolque = "";
+    $("#mr-rem").innerHTML = `<option value="">Todos</option>` + ids.map(i => `<option value="${esc(i)}"${i === remolque ? " selected" : ""}>${esc(i)}</option>`).join("");
   }
 
-  // ---- Lista ----
-  function renderLista() {
-    const c = $("#mt-cuerpo");
-    if (!solicitudes) { c.innerHTML = `<p class="nota">Cargando…</p>`; return; }
-    const abiertas = solicitudes.filter(s => s.estado === "abierta").length;
-    const terminadas = solicitudes.filter(s => s.estado === "terminada").length;
-    const t = busqueda.trim().toUpperCase();
-    const vista = solicitudes.filter(s =>
-      (filtro === "todas" || (filtro === "abiertas" ? s.estado === "abierta" : s.estado === "terminada")) &&
-      (!t || (s.folio || "").toUpperCase().includes(t) || ((s.remolque || {}).id || "").toUpperCase().includes(t)));
-    c.innerHTML = `
-      <div class="mt-chips" style="margin-bottom:10px;align-items:center;">
-        ${[["abiertas", `Abiertas ${abiertas}`], ["terminadas", `Terminadas ${terminadas}`], ["todas", `Todas ${solicitudes.length}`]]
-          .map(([k, txt]) => `<button type="button" class="mt-chip${filtro === k ? " activo" : ""}" data-fl="${k}">${txt}</button>`).join("")}
-        <input type="text" id="mt-buscar" placeholder="Buscar remolque o folio" value="${esc(busqueda)}" style="width:auto;min-width:200px;">
+  const filtrados = () => datos.filter(s =>
+    (estado === "todas" || (estado === "abiertas" ? s.estado !== "terminada" : s.estado === "terminada")) &&
+    (!remolque || (s.remolque && s.remolque.id === remolque)));
+
+  function barras(lista, clase, max) {
+    const tope = max || Math.max(1, ...lista.map(x => x[1]));
+    return lista.map(([k, v]) => `<div class="mr-bar"><span>${esc(k)}</span><span class="b ${typeof clase === "function" ? clase(k) : clase || ""}" style="width:${Math.max(3, v / tope * 100)}%"></span><span class="v">${v}</span></div>`).join("") || `<p class="nota">Sin datos.</p>`;
+  }
+
+  function pintar() {
+    const res = $("#mr-res");
+    if (cargando) { res.innerHTML = `<p class="nota">Cargando…</p>`; return; }
+    const lista = filtrados();
+    if (!lista.length) { res.innerHTML = `<p class="nota" style="margin-top:12px;">No hay solicitudes en este rango.</p>`; return; }
+    const a = analizar(lista, previas, festivos);
+    const pct = (n) => a.total ? Math.round(n / a.total * 100) : 0;
+    const maxHora = Math.max(1, ...a.porHora.map(h => h.sueldo + h.servicio));
+    const filas = lista.map(s => ({ s, f: filaDetalle(s, a) }));
+    res.innerHTML = `
+      <div class="mr-kpis">
+        <div class="mr-kpi"><div class="n">${a.total}</div><div class="t">Solicitudes</div></div>
+        <div class="mr-kpi"><div class="n">${a.terminadas}</div><div class="t">Terminadas</div></div>
+        <div class="mr-kpi"><div class="n" style="color:#7a3e06">${a.abiertas}</div><div class="t">Abiertas${a.abiertas ? ` · la más vieja ${duracion(a.masVieja)}` : ""}</div></div>
+        <div class="mr-kpi"><div class="n">${isFinite(a.promedio) ? duracion(a.promedio) : "—"}</div><div class="t">Atención promedio</div></div>
+        <div class="mr-kpi"><div class="n">${a.remolquesDistintos}</div><div class="t">Remolques distintos</div></div>
       </div>
-      ${vista.length ? `<div class="tabla-wrap"><table class="tabla mt-tabla">
-        <thead><tr><th>Folio</th><th>Remolque</th><th>Fecha</th><th>Solicita</th><th>Ubicación</th><th>Falla</th><th>Estado</th></tr></thead>
-        <tbody>${vista.map(s => `<tr class="clic" data-id="${esc(s.id)}">
-          <td><b>${esc(s.folio)}</b></td><td>${esc((s.remolque || {}).id)}</td><td>${esc(s.fechaTexto)}</td>
-          <td>${esc((s.solicitadoPor || {}).nombre)}</td>
-          <td>${esc((s.ubicacion || {}).nombre)}${(s.ubicacion || {}).detalle ? `<br><small class="nota">${esc(s.ubicacion.detalle)}</small>` : ""}</td>
-          <td>${esc((s.fallas || []).join(", "))}${s.descripcion ? `<br><small class="nota">${esc(s.descripcion.length > 70 ? s.descripcion.slice(0, 70) + "…" : s.descripcion)}</small>` : ""}</td>
-          <td>${s.estado === "terminada" ? `<span class="mt-estado mt-te">TERMINADA</span>${s.terminadaMs ? `<br><small class="nota">${esc(fechaHoraTexto(s.terminadaMs))}</small>` : ""}` : `<span class="mt-estado mt-ab">ABIERTA</span>`}</td>
-        </tr>`).join("")}</tbody></table></div>`
-        : `<p class="nota" style="text-align:center;padding:16px;">${solicitudes.length ? "No hay solicitudes con este filtro." : "Todavía no hay solicitudes."}</p>`}
-      <p class="nota">Toca una solicitud para compartirla o terminarla.</p>`;
-    c.querySelectorAll("[data-fl]").forEach(b => b.addEventListener("click", () => { filtro = b.dataset.fl; renderLista(); }));
-    const bus = $("#mt-buscar");
-    bus.addEventListener("input", () => {
-      busqueda = bus.value;
-      const pos = bus.selectionStart;
-      renderLista();
-      const n = $("#mt-buscar"); n.focus(); n.setSelectionRange(pos, pos);
-    });
-    c.querySelectorAll("tr.clic").forEach(tr => tr.addEventListener("click", () => abrirDetalle(tr.dataset.id)));
-  }
 
-  function abrirDetalle(id) {
-    const s = (solicitudes || []).find(x => x.id === id);
-    if (!s) return;
-    const overlay = document.createElement("div");
-    overlay.className = "modal-overlay";
-    overlay.innerHTML = `
-      <div class="modal-tarjeta" style="max-width:640px;width:100%;max-height:90vh;overflow:auto;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-          <div><div class="mt-folio" style="font-size:20px;">${esc(s.folio)}</div>
-            <span class="mt-estado ${s.estado === "terminada" ? "mt-te" : "mt-ab"}">${s.estado === "terminada" ? "TERMINADA" : "ABIERTA"}</span></div>
-          <button type="button" class="secundario mt-cerrar">✕</button>
+      <div class="mr-caja">
+        <h3>⏰ Horario de atención (hora en que se creó la OT)</h3>
+        <div class="mr-split"><div style="width:${pct(a.sueldo.total)}%;background:#185FA5"></div><div style="width:${pct(a.servicio.total)}%;background:#C2610C"></div></div>
+        <div class="mr-dos">
+          ${[["su", TXT_SUELDO, a.sueldo], ["se", TXT_SERVICIO, a.servicio]].map(([k, t, g]) => `
+          <div class="mr-turno ${k}"><div class="t">${t}</div><div class="n">${g.total} <small>${pct(g.total)}%</small></div>
+            <ul><li>Atención promedio: <b>${isFinite(g.promedio) ? duracion(g.promedio) : "—"}</b></li>
+              <li>Terminadas el mismo día: <b>${g.mismoDia} de ${g.terminadas}</b></li>
+              <li>Falla más común: ${esc(g.fallaTop)}</li>
+              ${k === "se" && a.motivosServicio.length ? `<li>${a.motivosServicio.map(([m, n]) => `${esc(m)}: <b>${n}</b>`).join(" · ")}</li>` : ""}</ul></div>`).join("")}
         </div>
-        <div class="mt-msg">${esc(mensajeSolicitud(s))}</div>
-        <div class="mt-acciones">${botonesCompartir(s)}</div>
-        ${s.estado === "abierta" ? `
-          <hr style="border:none;border-top:1px solid #efebe5;margin:16px 0;">
-          <h3 style="margin:0 0 6px;font-size:15px;">Terminar</h3>
-          <label for="mt-t-fecha">Fecha y hora en que quedó</label>
-          <input type="datetime-local" id="mt-t-fecha" value="${valorLocal(Date.now())}" max="${valorLocal(Date.now() + 60000)}">
-          <label for="mt-t-com">¿Qué se hizo?</label>
-          <textarea id="mt-t-com" rows="3" maxlength="500" placeholder="Ej: se cambió la válvula de freno del eje trasero"></textarea>
-          <div class="error" id="mt-t-err"></div>
-          <div class="mt-acciones"><button type="button" id="mt-t-ok">Terminar solicitud</button></div>` : ""}
-        <div class="modal-acciones"><button type="button" class="secundario mt-cerrar">Cerrar</button></div>
+        <div class="mr-hist">${a.porHora.map(h => `<div>${h.sueldo + h.servicio || ""}<i style="height:${h.servicio / maxHora * 105}px;background:#C2610C"></i><i style="height:${h.sueldo / maxHora * 105}px;background:#185FA5"></i></div>`).join("")}</div>
+        <div class="mr-ejes">${a.porHora.map(h => `<span>${h.h % 3 === 0 ? (h.h === 0 ? "12a" : h.h < 12 ? h.h + "a" : h.h === 12 ? "12p" : (h.h - 12) + "p") : ""}</span>`).join("")}</div>
+        <div class="mr-ley"><span><i style="background:#185FA5"></i>Sueldo</span><span><i style="background:#C2610C"></i>Por servicio</span></div>
+        <div style="overflow-x:auto;margin-top:10px;"><table class="mr-tabla"><tr><th>Día</th><th>Sueldo</th><th>Por servicio</th><th>Total</th></tr>
+          ${a.porDia.map(d => `<tr><td>${d.nombre}</td><td>${d.sueldo}</td><td>${d.servicio}</td><td>${d.sueldo + d.servicio}</td></tr>`).join("")}</table></div>
+      </div>
+
+      <div class="mr-dos">
+        <div class="mr-caja"><h3>Por tipo de falla</h3>${barras(a.fallas, (k) => /^thermo/i.test(k) ? "th" : "")}
+          <p class="nota" style="margin:6px 0 0;">Una solicitud puede traer varias fallas. Azul = thermo.</p></div>
+        <div class="mr-caja"><h3>Remolques con más solicitudes</h3>
+          <div style="overflow-x:auto;"><table class="mr-tabla"><tr><th>Remolque</th><th>Solicitudes</th><th>Fallas</th></tr>
+          ${a.remolques.slice(0, 8).map(r => `<tr><td><b>${esc(r.id)}</b> ${esc(r.txt.replace(r.id, "").trim())}</td><td>${r.n}</td><td>${esc(contar(r.fallas).map(([f, n]) => n > 1 ? `${f} (${n})` : f).join(", "))}</td></tr>`).join("")}</table></div>
+          <h3 style="margin-top:12px;">Por ubicación</h3>${barras(a.ubicaciones.slice(0, 8))}</div>
+      </div>
+
+      <div class="mr-caja"><h3>¿Qué se hizo? (comentario de cierre · ${a.terminadas} terminada${a.terminadas === 1 ? "" : "s"})</h3>
+        ${a.terminadas ? `<div class="mr-dos"><div>${barras(a.queSeHizo, (k) => k === SIN_CLASIFICAR || k === "Revisión sin falla" ? "gr" : "ok")}</div>
+        <div style="overflow-x:auto;"><table class="mr-tabla"><tr><th>Falla reportada</th><th>Qué se hizo (más común)</th></tr>
+          ${a.cruce.map(c => `<tr><td>${esc(c.falla)} (${c.n})</td><td>${esc(c.hechos || "—")}</td></tr>`).join("")}</table></div></div>` : `<p class="nota">Todavía no hay terminadas en este rango.</p>`}
+      </div>
+
+      <div class="mr-dos">
+        <div class="mr-caja"><h3>🔁 Reincidencias</h3>
+          <p class="nota" style="margin:0 0 6px;">Mismo remolque y misma falla otra vez dentro de ${DIAS_REINCIDENCIA} días después de cerrada.</p>
+          ${a.reincidencias.length ? `<div style="overflow-x:auto;"><table class="mr-tabla"><tr><th>Remolque</th><th>Falla</th><th>Cerrada</th><th>Volvió</th></tr>
+            ${a.reincidencias.map(r => `<tr><td><b>${esc(r.s.remolque.id)}</b></td><td>${esc(r.falla)}</td><td>${esc(ddmmyyyy(isoLocal(new Date(r.p.terminadaMs))))} · ${esc(r.p.folio || "")}<br><small class="nota">"${esc(r.p.comentarioCierre || "")}"</small></td><td>${esc(ddmmyyyy(fechaHoraDe(r.s).fecha))} (${r.dias} d)<br><small class="nota">${esc(r.s.folio || "")}</small></td></tr>`).join("")}</table></div>
+            <div class="mr-aviso" style="background:#FDECEA;border:1px solid #F3C2BC;color:#8a2318;">${a.reincidencias.length} reincidencia${a.reincidencias.length === 1 ? "" : "s"} en el periodo.</div>`
+          : `<p class="nota">Sin reincidencias en el periodo.</p>`}
+        </div>
+        <div class="mr-caja"><h3>📝 Calidad del comentario</h3>
+          <p class="nota" style="margin:0 0 6px;">Cierres muy cortos o genéricos ("listo", "ok") no dicen qué se hizo.</p>
+          ${a.sinDet.length ? `<div style="overflow-x:auto;"><table class="mr-tabla"><tr><th>Folio</th><th>Comentario</th><th>Cerró</th></tr>
+            ${a.sinDet.map(s => `<tr><td>${esc(s.folio || s.id)}</td><td>"${esc(s.comentarioCierre || "")}"</td><td>${esc((s.terminadaPor && s.terminadaPor.nombre) || "—")}</td></tr>`).join("")}</table></div>
+            <div class="mr-aviso" style="background:#FFF6E0;border:1px solid #E9C46A;color:#6b4a06;">${a.sinDet.length} de ${a.terminadas} sin detalle (${Math.round(a.sinDet.length / Math.max(1, a.terminadas) * 100)}%).</div>`
+          : `<p class="nota">${a.terminadas ? "Todos los cierres traen detalle. 👍" : "Todavía no hay terminadas."}</p>`}
+        </div>
+      </div>
+
+      <div class="mr-caja">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+          <h3 style="margin:0;">Detalle (${lista.length})</h3>
+          <div class="mr-desc"><button type="button" class="secundario" id="mr-xlsx">⬇️ Excel</button><button type="button" id="mr-pdf">⬇️ PDF</button></div>
+        </div>
+        <div style="overflow-x:auto;margin-top:8px;"><table class="mr-tabla">
+          <tr><th>Folio</th><th>Fecha</th><th>Remolque</th><th>Ubicación</th><th>Fallas</th><th>Turno</th><th>Estado</th><th>Atención</th><th>Qué se hizo</th></tr>
+          ${filas.map(({ s, f }) => `<tr>
+            <td>${esc(f.folio)}${f.reincidencia ? `<br><span class="mr-chip mr-rj">Reincidencia</span>` : ""}</td>
+            <td style="white-space:nowrap;">${esc(f.fecha.slice(0, 5))} ${esc(f.hora)}</td>
+            <td>${esc(f.remolque)}</td><td>${esc(f.ubicacion)}</td><td>${esc(f.fallas)}</td>
+            <td><span class="mr-chip ${(a.turnos.get(s.id) || {}).sueldo ? "mr-su" : "mr-se"}">${(a.turnos.get(s.id) || {}).sueldo ? "Sueldo" : "Servicio"}</span></td>
+            <td><span class="mr-chip ${s.estado === "terminada" ? "mr-te" : "mr-ab"}">${f.estado.toUpperCase()}</span></td>
+            <td>${esc(f.atencion)}</td>
+            <td>${f.comentario ? `${esc(f.queSeHizo)}<br><small class="nota">${esc(f.comentario)}</small>` : "—"}</td></tr>`).join("")}
+        </table></div>
       </div>`;
-    document.body.appendChild(overlay);
-    const cerrar = () => overlay.remove();
-    overlay.querySelectorAll(".mt-cerrar").forEach(b => b.addEventListener("click", cerrar));
-    overlay.addEventListener("click", (e) => { if (e.target === overlay) cerrar(); });
-    enlazarCompartir(overlay, s);
-    const ok = overlay.querySelector("#mt-t-ok");
-    if (ok) ok.addEventListener("click", async () => {
-      const err = overlay.querySelector("#mt-t-err");
-      err.textContent = "";
-      const ms = new Date(overlay.querySelector("#mt-t-fecha").value).getTime();
-      const com = overlay.querySelector("#mt-t-com").value.trim();
-      if (!isFinite(ms)) { err.textContent = "Indica la fecha y hora."; return; }
-      if (ms > Date.now() + 2 * 60 * 1000) { err.textContent = "La fecha no puede ser futura."; return; }
-      if (s.ms && ms < s.ms - 60 * 1000) { err.textContent = "La fecha no puede ser anterior a la solicitud."; return; }
-      if (!com) { err.textContent = "Escribe qué se hizo."; return; }
-      ok.disabled = true;
-      try {
-        await updateDoc(doc(db, COL, s.id), {
-          estado: "terminada", terminadaMs: ms, comentarioCierre: com,
-          terminadaPor: { uid, nombre: (datosUsuario && datosUsuario.nombre) || "" },
-        });
-        cerrar();
-      } catch (e) {
-        err.textContent = "No se pudo terminar: " + e.message;
-        ok.disabled = false;
-      }
-    });
+    $("#mr-pdf").addEventListener("click", () => descargarPdf(lista, a).catch(e => { $("#mr-err").textContent = "No se pudo generar el PDF: " + e.message; }));
+    $("#mr-xlsx").addEventListener("click", () => descargarExcel(lista, a).catch(e => { $("#mr-err").textContent = "No se pudo generar el Excel: " + e.message; }));
   }
 
-  render();
+  // ---- Descargas ----
+  const etiquetaRango = () => `Del ${ddmmyyyy(desde)} al ${ddmmyyyy(hasta)} · ${estado === "todas" ? "Todas" : estado === "abiertas" ? "Abiertas" : "Terminadas"}${remolque ? ` · Remolque ${remolque}` : ""}`;
+  const nombreArchivo = (ext) => `reporte_mantenimiento_${desde}_a_${hasta}.${ext}`;
+
+  async function descargarPdf(lista, a) {
+    const { jsPDF } = await cargarScript(URL_JSPDF, "jspdf");
+    if (typeof jsPDF.API.autoTable !== "function") await cargarScript(URL_AUTOTABLE, "__sinGlobal__");
+    const pdf = new jsPDF({ unit: "mm", format: "letter", orientation: "landscape" });
+    if (typeof pdf.autoTable !== "function") throw new Error("No se cargó la librería de tablas.");
+    const W = pdf.internal.pageSize.getWidth(), X0 = 12, X1 = W - 12;
+    const CAFE = [61, 43, 38];
+    const altoLogo = 30 * LOGO_ALANIS.alto / LOGO_ALANIS.ancho;
+    pdf.addImage(LOGO_ALANIS.datos, "JPEG", X0, 8, 30, altoLogo);
+    pdf.setFont("helvetica", "bold"); pdf.setFontSize(13); pdf.setTextColor(34, 34, 34);
+    pdf.text("REPORTE DE MANTENIMIENTO DE REMOLQUES", X1, 14, { align: "right" });
+    pdf.setFont("helvetica", "normal"); pdf.setFontSize(9);
+    pdf.text(etiquetaRango(), X1, 19, { align: "right" });
+    pdf.setDrawColor(34, 34, 34); pdf.line(X0, 10 + altoLogo, X1, 10 + altoLogo);
+    let y = 14 + altoLogo;
+    const estilo = { styles: { fontSize: 8, cellPadding: 1.6 }, headStyles: { fillColor: CAFE, textColor: 255, fontSize: 7.5 }, margin: { left: X0, right: 12 } };
+    const tabla = (titulo, head, body, extra = {}) => {
+      if (y > pdf.internal.pageSize.getHeight() - 30) { pdf.addPage(); y = 14; }
+      pdf.setFont("helvetica", "bold"); pdf.setFontSize(9.5); pdf.text(titulo, extra.x || X0, y);
+      pdf.autoTable({ ...estilo, startY: y + 2, head: [head], body, ...extra.opts });
+      return pdf.lastAutoTable.finalY;
+    };
+    // Totales
+    pdf.autoTable({ ...estilo, startY: y, head: [["Solicitudes", "Terminadas", "Abiertas", "Atención promedio", "Remolques distintos"]],
+      body: [[a.total, a.terminadas, `${a.abiertas}${a.abiertas ? ` (la más vieja ${duracion(a.masVieja)})` : ""}`, isFinite(a.promedio) ? duracion(a.promedio) : "—", a.remolquesDistintos]],
+      styles: { fontSize: 10, halign: "center", cellPadding: 2 } });
+    y = pdf.lastAutoTable.finalY + 7;
+    // Horario
+    const pct = (n) => a.total ? `${Math.round(n / a.total * 100)}%` : "0%";
+    y = tabla("Horario de atención (hora en que se creó la OT)", ["Turno", "Solicitudes", "%", "Atención promedio", "Terminadas el mismo día", "Falla más común"], [
+      [TXT_SUELDO, a.sueldo.total, pct(a.sueldo.total), isFinite(a.sueldo.promedio) ? duracion(a.sueldo.promedio) : "—", `${a.sueldo.mismoDia} de ${a.sueldo.terminadas}`, a.sueldo.fallaTop],
+      [TXT_SERVICIO + (a.motivosServicio.length ? `\n${a.motivosServicio.map(([m, n]) => `${m}: ${n}`).join(" · ")}` : ""), a.servicio.total, pct(a.servicio.total), isFinite(a.servicio.promedio) ? duracion(a.servicio.promedio) : "—", `${a.servicio.mismoDia} de ${a.servicio.terminadas}`, a.servicio.fallaTop],
+    ]) + 7;
+    y = tabla("Por día de la semana", ["", ...a.porDia.map(d => d.nombre)], [
+      ["Sueldo", ...a.porDia.map(d => d.sueldo)], ["Por servicio", ...a.porDia.map(d => d.servicio)], ["Total", ...a.porDia.map(d => d.sueldo + d.servicio)],
+    ], { opts: { styles: { fontSize: 8, halign: "center", cellPadding: 1.6 } } }) + 7;
+    // Tablas resumen, una debajo de otra (las tablas lado a lado se desacomodan al cambiar de hoja).
+    const angosta = { opts: { tableWidth: (W - 24) * 0.55 } };
+    const sinDatos = (b, n) => b.length ? b : [["Sin datos", ...Array(n - 1).fill("")]];
+    y = tabla("Por tipo de falla", ["Falla", "Solicitudes"], sinDatos(a.fallas.map(([k, v]) => [k, v]), 2), angosta) + 7;
+    y = tabla("Remolques con más solicitudes", ["Remolque", "Solicitudes", "Fallas"], sinDatos(a.remolques.slice(0, 10).map(r => [r.txt || r.id, r.n, contar(r.fallas).map(([f, n]) => n > 1 ? `${f} (${n})` : f).join(", ")]), 3)) + 7;
+    y = tabla("Por ubicación", ["Ubicación", "Solicitudes"], sinDatos(a.ubicaciones.map(([k, v]) => [k, v]), 2), angosta) + 7;
+    y = tabla("¿Qué se hizo? (comentario de cierre)", ["Categoría", "Solicitudes"], sinDatos(a.queSeHizo.map(([k, v]) => [k, v]), 2), angosta) + 7;
+    y = tabla("Falla reportada vs. qué se hizo", ["Falla", "Qué se hizo (más común)"], sinDatos(a.cruce.map(c => [`${c.falla} (${c.n})`, c.hechos || "—"]), 2)) + 7;
+    y = tabla(`Reincidencias (${DIAS_REINCIDENCIA} días)`, ["Remolque", "Falla", "Cerrada", "Volvió"], sinDatos(a.reincidencias.map(r => [r.s.remolque.id, r.falla, `${ddmmyyyy(isoLocal(new Date(r.p.terminadaMs)))} ${r.p.folio || ""}\n"${r.p.comentarioCierre || ""}"`, `${ddmmyyyy(fechaHoraDe(r.s).fecha)} (${r.dias} d) ${r.s.folio || ""}`]), 4)) + 7;
+    y = tabla("Calidad del comentario (cierres sin detalle)", ["Folio", "Comentario", "Cerró"], sinDatos(a.sinDet.map(s => [s.folio || s.id, s.comentarioCierre || "", (s.terminadaPor && s.terminadaPor.nombre) || ""]), 3), angosta) + 7;
+    // Detalle
+    pdf.addPage(); y = 14;
+    tabla(`Detalle (${lista.length})`, ["Folio", "Fecha", "Remolque", "Ubicación", "Fallas", "Turno", "Estado", "Atención", "Cerró", "Comentario de cierre", "Qué se hizo"],
+      lista.map(s => { const f = filaDetalle(s, a); return [f.folio + (f.reincidencia ? "\nReincidencia" : ""), `${f.fecha} ${f.hora}`, f.remolque, f.ubicacion, f.fallas, f.turno, f.estado, f.atencion, f.cerro, f.comentario, f.queSeHizo]; }),
+      { opts: { styles: { fontSize: 7, cellPadding: 1.3, overflow: "linebreak" }, columnStyles: { 9: { cellWidth: 55 } } } });
+    // Pie
+    const total = pdf.getNumberOfPages(), H = pdf.internal.pageSize.getHeight();
+    const gen = new Date();
+    for (let i = 1; i <= total; i++) {
+      pdf.setPage(i); pdf.setFont("helvetica", "normal"); pdf.setFontSize(7); pdf.setTextColor(110, 110, 110);
+      pdf.text(`Generado el ${gen.getDate()} ${MESES[gen.getMonth()]} ${gen.getFullYear()}, ${pad(gen.getHours())}:${pad(gen.getMinutes())}`, X0, H - 6);
+      pdf.setFont("helvetica", "bold"); pdf.text("AUTOTRANSPORTES ALANIS, S.A. DE C.V.", W / 2, H - 6, { align: "center" });
+      pdf.setFont("helvetica", "normal"); pdf.text(`${i}/${total}`, X1, H - 6, { align: "right" });
+    }
+    pdf.save(nombreArchivo("pdf"));
+  }
+
+  async function descargarExcel(lista, a) {
+    const XLSX = await cargarScript(URL_XLSX, "XLSX");
+    const libro = XLSX.utils.book_new();
+    const filas = lista.map(s => filaDetalle(s, a));
+    const encabezados = [["Folio", "folio"], ["Fecha", "fecha"], ["Hora", "hora"], ["Remolque", "remolque"], ["Marca", "marca"], ["Modelo", "modelo"], ["Placas", "placas"],
+      ["Ubicación", "ubicacion"], ["Fallas", "fallas"], ["Descripción", "descripcion"], ["Solicitó", "solicito"], ["Área", "area"], ["Turno", "turno"], ["Estado", "estado"],
+      ["Terminada", "terminada"], ["Horas de atención", "horasAtencion"], ["Cerró", "cerro"], ["Comentario de cierre", "comentario"], ["Qué se hizo", "queSeHizo"], ["Reincidencia", "reincidencia"]];
+    const hoja = XLSX.utils.aoa_to_sheet([encabezados.map(e => e[0]), ...filas.map(f => encabezados.map(e => f[e[1]]))]);
+    hoja["!cols"] = encabezados.map(([t, k]) => ({ wch: Math.min(60, Math.max(t.length + 2, ...filas.map(f => String(f[k] ?? "").length + 1))) }));
+    hoja["!autofilter"] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: filas.length, c: encabezados.length - 1 } }) };
+    XLSX.utils.book_append_sheet(libro, hoja, "Detalle");
+
+    const r = [];
+    const pctN = (n) => a.total ? Math.round(n / a.total * 1000) / 10 : 0;
+    r.push(["REPORTE DE MANTENIMIENTO DE REMOLQUES"], [etiquetaRango()], []);
+    r.push(["Solicitudes", "Terminadas", "Abiertas", "Atención promedio", "Remolques distintos"],
+      [a.total, a.terminadas, a.abiertas, isFinite(a.promedio) ? duracion(a.promedio) : "", a.remolquesDistintos], []);
+    r.push(["Horario de atención (hora de creación de la OT)"], ["Turno", "Solicitudes", "%", "Atención promedio", "Terminadas el mismo día", "Falla más común"],
+      [TXT_SUELDO, a.sueldo.total, pctN(a.sueldo.total), isFinite(a.sueldo.promedio) ? duracion(a.sueldo.promedio) : "", `${a.sueldo.mismoDia} de ${a.sueldo.terminadas}`, a.sueldo.fallaTop],
+      [TXT_SERVICIO, a.servicio.total, pctN(a.servicio.total), isFinite(a.servicio.promedio) ? duracion(a.servicio.promedio) : "", `${a.servicio.mismoDia} de ${a.servicio.terminadas}`, a.servicio.fallaTop]);
+    a.motivosServicio.forEach(([m, n]) => r.push([`   · ${m}`, n]));
+    r.push([], ["Por hora", "Sueldo", "Por servicio", "Total"], ...a.porHora.map(h => [`${pad(h.h)}:00`, h.sueldo, h.servicio, h.sueldo + h.servicio]));
+    r.push([], ["Por día", "Sueldo", "Por servicio", "Total"], ...a.porDia.map(d => [d.nombre, d.sueldo, d.servicio, d.sueldo + d.servicio]));
+    r.push([], ["Por tipo de falla", "Solicitudes"], ...a.fallas);
+    r.push([], ["Por ubicación", "Solicitudes"], ...a.ubicaciones);
+    r.push([], ["Remolque", "Solicitudes", "Fallas"], ...a.remolques.map(x => [x.txt || x.id, x.n, contar(x.fallas).map(([f, n]) => n > 1 ? `${f} (${n})` : f).join(", ")]));
+    r.push([], ["Qué se hizo (comentario de cierre)", "Solicitudes"], ...a.queSeHizo);
+    r.push([], ["Falla reportada", "Solicitudes", "Qué se hizo (más común)"], ...a.cruce.map(c => [c.falla, c.n, c.hechos]));
+    r.push([], [`Reincidencias (${DIAS_REINCIDENCIA} días)`, "Falla", "Folio cerrado", "Cerrada", "Comentario", "Folio nuevo", "Volvió", "Días"],
+      ...a.reincidencias.map(x => [x.s.remolque.id, x.falla, x.p.folio || "", ddmmyyyy(isoLocal(new Date(x.p.terminadaMs))), x.p.comentarioCierre || "", x.s.folio || "", ddmmyyyy(fechaHoraDe(x.s).fecha), x.dias]));
+    r.push([], ["Comentarios sin detalle", "Comentario", "Cerró"], ...a.sinDet.map(s => [s.folio || s.id, s.comentarioCierre || "", (s.terminadaPor && s.terminadaPor.nombre) || ""]));
+    const hojaR = XLSX.utils.aoa_to_sheet(r);
+    hojaR["!cols"] = [{ wch: 42 }, { wch: 14 }, { wch: 40 }, { wch: 18 }, { wch: 40 }, { wch: 20 }, { wch: 14 }, { wch: 8 }];
+    XLSX.utils.book_append_sheet(libro, hojaR, "Resumen");
+    XLSX.writeFile(libro, nombreArchivo("xlsx"));
+  }
+
+  // ---- Eventos de filtros ----
+  $("#mr-desde").addEventListener("change", (e) => { if (!e.target.value) return; desde = e.target.value; if (desde > hasta) { hasta = desde; $("#mr-hasta").value = hasta; } marcarAtajo(""); cargar(); });
+  $("#mr-hasta").addEventListener("change", (e) => { if (!e.target.value) return; hasta = e.target.value; if (hasta < desde) { desde = hasta; $("#mr-desde").value = desde; } marcarAtajo(""); cargar(); });
+  $("#mr-estado").addEventListener("change", (e) => { estado = e.target.value; pintar(); });
+  $("#mr-rem").addEventListener("change", (e) => { remolque = e.target.value; pintar(); });
+  function marcarAtajo(id) { atajo = id; cuerpo.querySelectorAll(".mr-at").forEach(b => b.classList.toggle("on", b.dataset.a === id)); }
+  cuerpo.querySelectorAll(".mr-at").forEach(b => b.addEventListener("click", () => {
+    const x = at.find(z => z.id === b.dataset.a); if (!x) return;
+    desde = x.d; hasta = x.h; $("#mr-desde").value = desde; $("#mr-hasta").value = hasta; marcarAtajo(x.id); cargar();
+  }));
+  cargar();
 }
