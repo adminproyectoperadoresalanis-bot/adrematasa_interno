@@ -13,6 +13,8 @@ import {
 // cargas / Turno sin personal asignado); ya no hay texto libre ni justificación.
 // En festivo se muestran las actividades del puesto+área (Configuración › RH ›
 // Actividades por puesto); eso es lo que sale en la sección 2 del ATAF104.
+// En festivo NO se pide motivo ni "a quién cubres": solo cuentan las
+// actividades. Se guarda motivoTipo "festivo" y motivo "Día festivo: <nombre>".
 function hoyLocalIso() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -115,7 +117,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
         </div>
         <div id="sol-aviso-festivo"></div>
         <div id="sol-aviso-choque"></div>
-        <label>Motivo
+        <label id="sol-motivo-caja">Motivo
           <select id="sol-motivo" required>
             <option value="">Elige el motivo…</option>
             ${MOTIVOS_HORAS_EXTRA.map(m => `<option value="${m.id}">${escapeHtml(m.etiqueta)}</option>`).join("")}
@@ -195,8 +197,12 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
     selectCubre.innerHTML = html;
     selectCubre.value = elegido;
   }
+  const cajaMotivo = contenedor.querySelector("#sol-motivo-caja");
+  let enFestivo = false; // la fecha elegida es día festivo: sin motivo, solo actividades
   function pintarMotivo() {
-    const esCubrir = inputMotivo.value === "cubrir_falta";
+    cajaMotivo.classList.toggle("oculto", enFestivo);
+    inputMotivo.required = !enFestivo;
+    const esCubrir = !enFestivo && inputMotivo.value === "cubrir_falta";
     cajaCubre.classList.toggle("oculto", !esCubrir);
     selectCubre.required = esCubrir;
   }
@@ -210,15 +216,17 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
     revisarFestivo();
   }, () => {});
   const misActividades = () => actividadesDePuesto(actividadesPuesto, datosUsuario.area, datosUsuario.puesto);
-  function pintarActividades(enFestivo) {
+  function pintarActividades(festivoActivo) {
+    enFestivo = !!festivoActivo;
+    pintarMotivo();
     if (!enFestivo) { cajaActividades.innerHTML = ""; return; }
     const act = misActividades();
     const etiqueta = [datosUsuario.puesto, datosUsuario.area].filter(Boolean).map(escapeHtml).join(" · ") || "Sin puesto asignado";
     cajaActividades.innerHTML = act
       ? `<div style="font-weight:600;margin:10px 0 5px;">Actividades que vas a realizar</div>
          <div style="border:1px solid #cfe0cf;background:#F1F8F1;border-radius:10px;padding:10px 12px;font-size:13.5px;line-height:1.5;"><div style="font-size:12px;font-weight:700;color:#2E7D46;margin-bottom:3px;">SEGÚN TU PUESTO · ${etiqueta}</div>${escapeHtml(act)}</div>
-         <div class="nota" style="margin-top:5px;">Lo define la gerencia en Configuración › RH. Es lo que sale en el formato ATAF104; ya no lo escribes tú.</div>`
-      : `<div style="border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:10px 0;background:#FDECEA;border:1px solid #F3C2BC;color:#8a2318;">Tu puesto (${etiqueta}) todavía no tiene actividades capturadas; en el formato ATAF104 se usará el motivo. Avísale a tu jefe.</div>`;
+         <div class="nota" style="margin-top:5px;">Lo define la gerencia en Configuración › RH. Es lo que sale en la justificación del formato ATAF104; ya no lo escribes tú.</div>`
+      : `<div style="border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:10px 0;background:#FDECEA;border:1px solid #F3C2BC;color:#8a2318;">Tu puesto (${etiqueta}) todavía no tiene actividades capturadas para día festivo. Puedes enviar la solicitud, pero avísale a tu jefe para que las capture antes de que salga el formato ATAF104.</div>`;
   }
   // Pinta el aviso del festivo y regresa "futuro" si la fecha es futura y NO es festivo.
   function revisarFestivo() {
@@ -338,7 +346,8 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
     const fecha = inputFecha.value;
     const horaInicio = inputInicio.value;
     const horaFin = inputFin.value;
-    const motivoTipo = inputMotivo.value;
+    const festivo = festivoDe(fecha);
+    const motivoTipo = festivo ? "festivo" : inputMotivo.value;
     let cubreA = null;
     if (motivoTipo === "cubrir_falta") {
       const opcion = selectCubre.options[selectCubre.selectedIndex];
@@ -348,13 +357,14 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
       }
       cubreA = { uid: selectCubre.value, nombre: opcion.textContent };
     }
-    const motivo = textoMotivoHorasExtra(motivoTipo, cubreA && cubreA.nombre);
+    const motivo = festivo
+      ? `Día festivo: ${festivo.nombre || festivo.fecha}`
+      : textoMotivoHorasExtra(motivoTipo, cubreA && cubreA.nombre);
 
     if (!fecha || !horaInicio || !horaFin || !motivo) {
       errorDiv.textContent = "Completa todos los campos.";
       return;
     }
-    const festivo = festivoDe(fecha);
     const datoFestivo = festivo ? { fecha: festivo.fecha, nombre: festivo.nombre || "" } : null;
 
     const horas = calcularHoras(horaInicio, horaFin);
@@ -413,8 +423,9 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
           mensaje: `<p style="margin:0 0 12px;">${escapeHtml(datosUsuario.nombre)} envió una nueva solicitud de horas extra:</p>
 <p style="margin:0 0 4px;"><strong>Fecha:</strong> ${fecha}${festivo ? ` (día festivo: ${escapeHtml(festivo.nombre || "")})` : ""}</p>
 <p style="margin:0 0 4px;"><strong>Horario:</strong> ${horaInicio}–${horaFin} (${horas} h)</p>
-<p style="margin:0 0 ${festivo ? 4 : 12}px;"><strong>Motivo:</strong> ${escapeHtml(motivo)}</p>
-${festivo ? `<p style="margin:0 0 12px;"><strong>Actividades (según su puesto):</strong> ${escapeHtml(misActividades() || "Sin actividades capturadas para su puesto")}</p>` : ""}
+${festivo
+  ? `<p style="margin:0 0 12px;"><strong>Actividades (según su puesto):</strong> ${escapeHtml(misActividades() || "Sin actividades capturadas para su puesto")}</p>`
+  : `<p style="margin:0 0 12px;"><strong>Motivo:</strong> ${escapeHtml(motivo)}</p>`}
 <p style="margin:0;color:#555;font-size:0.9em;">Entra a Adrematasa Interno para aprobarla o rechazarla.</p>`,
           tituloBell: "Nueva solicitud de horas extra",
           mensajeBell: `${datosUsuario.nombre} envió una solicitud para tu revisión`,
