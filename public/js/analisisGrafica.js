@@ -13,6 +13,11 @@
 //   - 6 eventos con fecha y hora; cada uno pinta una banda amarilla
 //     (marcatextos) con su etiqueta. Fuera del periodo: avisa y no pinta.
 //   - Exporta PNG (copiar o descargar).
+//   - Imagen: lee el título con OCR (tesseract.js 5.1.1 de jsdelivr, solo
+//     cuando se sube una imagen) para sacar unidad y periodo (2026-11-21).
+//   - "Pegar de Adrematasa": pega el renglón del Adrematasa oficial (con
+//     encabezados) y llena Entrada/Salida patio, Arribo y Descarga importación,
+//     y la unidad (Remolque) (2026-11-21).
 // Horas "naive": la hora capturada es la hora de la gráfica (sin zonas).
 // No lee ni guarda nada en Firestore. Quién la ve: tabla de accesos por área
 // (Configuración › Acceso a Utilidades). Estilo de la app (café/crema).
@@ -27,6 +32,47 @@ const EVENTOS = [
   { etiqueta: "Descarga importación", marca: "DESCARGA IMPORTACION" }
 ];
 const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+const TESSERACT = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+const TESS_IDIOMA = "https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int";
+// Columnas del Adrematasa oficial → evento (índice en EVENTOS).
+const COLUMNAS_ADREMATASA = { "entrada": 2, "salida": 3, "arribo impo": 4, "descarga": 5 };
+const normal = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+
+// Periodo y unidad del título de TracKing: "...vehicle 24040 for period 11/13/2026 7:00 AM to 11/21/2026 9:06 AM".
+function datosDelTitulo(txt) {
+  const veh = /vehicle\s+([A-Za-z0-9-]+)/i.exec(txt || "");
+  const re = /(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{4})\s+(\d{1,2})\s*[:.]\s*(\d{2})\s*([AP])\.?\s*M/gi, m = []; let q;
+  while ((q = re.exec(txt || "")) && m.length < 2) m.push(q);
+  const mk = (x) => { const a = +x[1], bb = +x[2]; const dmy = a > 12; const mo = dmy ? bb : a, da = dmy ? a : bb; let h = +x[4] % 12; if (/P/i.test(x[6])) h += 12; return Date.UTC(+x[3], mo - 1, da, h, +x[5]); };
+  const ini = m.length === 2 ? mk(m[0]) : null, fin = m.length === 2 ? mk(m[1]) : null;
+  return { unidad: veh ? veh[1] : "", ini, fin: fin != null && ini != null && fin > ini ? fin : null };
+}
+// Fecha del Adrematasa oficial: "18/11/2026 07:26 p. m." (día/mes/año; también 24 h).
+function fechaAdrematasa(v) {
+  const m = /(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::\d{2})?\s*(?:([ap])\.?\s*m\.?)?/i.exec(String(v || ""));
+  if (!m) return null;
+  let h = +m[4];
+  if (m[6]) { h = h % 12; if (/p/i.test(m[6])) h += 12; }
+  return Date.UTC(+m[3], +m[2] - 1, +m[1], h, +m[5]);
+}
+// Pegado con encabezados (separado por tabuladores). Regresa [{ remolque, cliente, destino, operador, carro, fechas: {i: ms} }].
+function leerPegadoAdrematasa(texto) {
+  const lineas = String(texto || "").split(/\r?\n/).filter((l) => l.trim());
+  const iEnc = lineas.findIndex((l) => /remolque/i.test(l) && /entrada/i.test(l));
+  if (iEnc < 0) return { error: "No encontré los encabezados (Remolque, Entrada, Salida…). Copia también el renglón de títulos." };
+  const enc = lineas[iEnc].split("\t").map(normal);
+  const col = (nombre) => enc.indexOf(nombre);
+  const filas = lineas.slice(iEnc + 1).map((l) => l.split("\t")).filter((c) => c.some((x) => x.trim()));
+  if (!filas.length) return { error: "Faltan los datos: copia los títulos y al menos un renglón." };
+  const dato = (c, n) => { const i = col(n); return i >= 0 ? String(c[i] || "").trim() : ""; };
+  return {
+    filas: filas.map((c) => {
+      const fechas = {};
+      Object.entries(COLUMNAS_ADREMATASA).forEach(([n, i]) => { const ms = fechaAdrematasa(dato(c, n)); if (ms != null) fechas[i] = ms; });
+      return { remolque: dato(c, "remolque"), cliente: dato(c, "cliente"), destino: dato(c, "destino"), operador: dato(c, "operador 1"), carro: dato(c, "carro1"), despacho: dato(c, "fecha despacho"), fechas };
+    })
+  };
+}
 const FUENTE = "-apple-system,'Segoe UI',Roboto,Arial,sans-serif";
 const HORA = 3600000, DIA = 86400000;
 const DIAS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
@@ -96,6 +142,21 @@ const ESTILOS = `
 .ag-toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ag-cafe);color:#fff;padding:8px 14px;border-radius:10px;font-size:13px;z-index:1000;display:none;max-width:90vw;text-align:center;}
 `;
 
+// tesseract.js se carga solo la primera vez que se sube una imagen; el worker
+// se reutiliza (el idioma queda en caché del navegador).
+let promesaOcr = null;
+function obtenerOcr() {
+  if (!promesaOcr) promesaOcr = new Promise((res, rej) => {
+    const listo = () => window.Tesseract.createWorker("eng", 1, { langPath: TESS_IDIOMA }).then(res, rej);
+    if (window.Tesseract) return listo();
+    const s = document.createElement("script"); s.src = TESSERACT;
+    s.onload = listo;
+    s.onerror = () => rej(new Error("no se pudo cargar el lector de texto"));
+    document.head.appendChild(s);
+  }).catch((e) => { promesaOcr = null; throw e; });
+  return promesaOcr;
+}
+
 function estilosUnaVez() {
   if (document.getElementById("ag-estilos")) return;
   const s = document.createElement("style");
@@ -136,7 +197,7 @@ export function iniciarAnalisisGrafica(contenedor) {
         <div class="ag-lado">
           <div class="ag-caja">
             <h3>Periodo de la lectura</h3>
-            <p class="nota">Viene en el título de la gráfica. Con el PDF se llena solo; con imagen escríbelo y la gráfica se calibra sola.</p>
+            <p class="nota">Se lee solo del título de la gráfica (PDF o imagen) y la gráfica se calibra sola. Revísalo; si no lo lee, escríbelo.</p>
             <div class="ag-uno">
               <label class="ag-campo">Inicio<input type="datetime-local" step="60" data-r="perIni"></label>
               <label class="ag-campo">Fin<input type="datetime-local" step="60" data-r="perFin"></label>
@@ -152,7 +213,8 @@ export function iniciarAnalisisGrafica(contenedor) {
 
           <div class="ag-caja">
             <h3>Eventos del viaje</h3>
-            <p class="nota">Cada fecha pinta una marca amarilla. Con la mira ⌖ tomas la hora con un clic en la gráfica. Los vacíos no se dibujan.</p>
+            <p class="nota">Cada fecha pinta una marca amarilla. Con la mira ⌖ tomas la hora con un clic en la gráfica. Los vacíos no se dibujan. Entrada, salida, arribo y descarga se llenan con “Pegar de Adrematasa”.</p>
+            <div class="ag-fila-btn" style="margin-bottom:8px;"><button type="button" data-r="pegarAdr">📋 Pegar de Adrematasa</button></div>
             <div data-r="eventos"></div>
             <div class="ag-fila-btn" style="margin-top:8px;"><button type="button" class="secundario" data-r="limpiar">Limpiar fechas</button></div>
           </div>
@@ -178,7 +240,7 @@ export function iniciarAnalisisGrafica(contenedor) {
   const raiz = contenedor.querySelector(".ag");
   const $ = (k) => raiz.querySelector(`[data-r="${k}"]`);
   const cv = $("cv"), ctx = cv.getContext("2d");
-  const S = { base: null, unidad: "", pick: null, pdf: null, cal: { a: null, b: null, left: 0, right: 0, top: 0, bottom: 0, modo: "", A: null, B: null, haveV: false } };
+  const S = { base: null, unidad: "", viaje: null, ocrTurno: 0, pick: null, pdf: null, cal: { a: null, b: null, left: 0, right: 0, top: 0, bottom: 0, modo: "", A: null, B: null, haveV: false } };
 
   // ---- Eventos ----
   const cajaEv = $("eventos");
@@ -392,7 +454,9 @@ export function iniciarAnalisisGrafica(contenedor) {
   $("unidad").addEventListener("input", () => { S.unidad = $("unidad").value.trim(); pintarMeta(); });
   function pintarMeta() {
     const s = aMs($("perIni").value), e = aMs($("perFin").value);
-    const partes = [S.unidad ? `Unidad ${S.unidad}` : "", s != null && e != null ? `${fmtLargo(s)} → ${fmtLargo(e)}` : ""].filter(Boolean);
+    const v = S.viaje;
+    const partes = [S.unidad ? `Unidad ${S.unidad}` : "", s != null && e != null ? `${fmtLargo(s)} → ${fmtLargo(e)}` : "",
+      v ? [v.cliente, v.destino].filter(Boolean).join(" → ") : "", v && v.operador ? v.operador : ""].filter(Boolean);
     $("meta").textContent = partes.length ? partes.join(" · ") : "Lectura Thermo King / TracKing · marca los eventos del viaje sobre la gráfica de temperatura.";
   }
 
@@ -413,10 +477,49 @@ export function iniciarAnalisisGrafica(contenedor) {
       const im = await cargarImg(url);
       ponerBase(im, im.naturalWidth, im.naturalHeight); reiniciarCal(); S.pdf = null; $("filaPagina").hidden = true;
       $("perIni").value = $("perFin").value = ""; S.unidad = ""; $("unidad").value = "";
-      mensajeCal("Imagen cargada. Escribe el inicio y el fin del periodo (están en el título de la gráfica).", "av"); $("calDet").open = false;
+      $("calDet").open = false;
       $("barraDer").textContent = `Imagen ${f.name || "pegada"} · ${im.naturalWidth} × ${im.naturalHeight} px`;
       pintarMeta(); refrescar();
+      leerTituloImagen();
     } finally { URL.revokeObjectURL(url); }
+  }
+
+  // OCR del título (solo imágenes). Si no lo lee, se escribe a mano como antes.
+  async function leerTituloImagen() {
+    const turno = ++S.ocrTurno, base = S.base;
+    mensajeCal("Leyendo el título de la gráfica (unidad y periodo)…", "");
+    try {
+      const worker = await obtenerOcr();
+      let datos = { unidad: "", ini: null, fin: null };
+      for (const fraccion of [0.16, 0.32]) {
+        const recorte = recortarTitulo(base, fraccion);
+        const { data } = await worker.recognize(recorte);
+        if (turno !== S.ocrTurno) return; // ya cargaron otro archivo
+        const d = datosDelTitulo(data.text);
+        if (d.unidad && !datos.unidad) datos.unidad = d.unidad;
+        if (d.ini != null) { datos = { ...d, unidad: d.unidad || datos.unidad }; break; }
+      }
+      if (datos.unidad && !$("unidad").value) { S.unidad = datos.unidad; $("unidad").value = datos.unidad; }
+      if (datos.ini != null && !$("perIni").value && !$("perFin").value) {
+        $("perIni").value = aValor(datos.ini); $("perFin").value = aValor(datos.fin);
+        if (autoCalibrar()) mensajeCal($("calEstado").textContent + " Periodo leído del título; revísalo.", "ok");
+      } else if (datos.ini == null && !lista()) {
+        mensajeCal("No pude leer el periodo del título. Escribe el inicio y el fin (vienen en el título de la gráfica).", "av");
+      }
+    } catch (err) {
+      if (turno === S.ocrTurno && !lista()) mensajeCal("No pude leer el título (" + (err.message || "sin conexión") + "). Escribe el inicio y el fin del periodo.", "av");
+    }
+    pintarMeta(); refrescar();
+  }
+  function recortarTitulo(base, fraccion) {
+    const H = Math.max(40, Math.round(base.height * fraccion)), E = Math.max(1, Math.min(4, Math.round(2400 / base.width)));
+    const k = document.createElement("canvas"); k.width = base.width * E; k.height = H * E;
+    const x = k.getContext("2d"); x.imageSmoothingQuality = "high";
+    x.drawImage(base, 0, 0, base.width, H, 0, 0, k.width, k.height);
+    const d = x.getImageData(0, 0, k.width, k.height);
+    for (let i = 0; i < d.data.length; i += 4) { const g = 0.299 * d.data[i] + 0.587 * d.data[i + 1] + 0.114 * d.data[i + 2]; d.data[i] = d.data[i + 1] = d.data[i + 2] = g < 160 ? 0 : 255; }
+    x.putImageData(d, 0, 0);
+    return k;
   }
   let promesaPdfjs = null;
   function cargarPdfjs() {
@@ -449,12 +552,10 @@ export function iniciarAnalisisGrafica(contenedor) {
     const b = document.createElement("canvas"); b.width = c.width; b.height = alto;
     b.getContext("2d").drawImage(c, 0, 0, c.width, alto, 0, 0, c.width, alto);
     S.base = b; mostrarEscena(); reiniciarCal();
-    const veh = /vehicle\s+(\S+)/i.exec(txt); S.unidad = veh ? veh[1] : ""; $("unidad").value = S.unidad;
-    const re = /(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)/gi, m = []; let q;
-    while ((q = re.exec(txt)) && m.length < 2) m.push(q);
-    if (m.length === 2) {
-      const mk = (x) => { const a = +x[1], bb = +x[2]; const dmy = a > 12; const mo = dmy ? bb : a, da = dmy ? a : bb; let h = +x[4] % 12; if (/PM/i.test(x[6])) h += 12; return Date.UTC(+x[3], mo - 1, da, h, +x[5]); };
-      $("perIni").value = aValor(mk(m[0])); $("perFin").value = aValor(mk(m[1]));
+    S.ocrTurno++;
+    const tit = datosDelTitulo(txt); S.unidad = tit.unidad; $("unidad").value = S.unidad;
+    if (tit.ini != null) {
+      $("perIni").value = aValor(tit.ini); $("perFin").value = aValor(tit.fin);
       autoCalibrar();
     } else { $("perIni").value = $("perFin").value = ""; mensajeCal("No encontré el periodo en el título del PDF. Escríbelo arriba.", "av"); }
     $("calDet").open = false;
@@ -530,6 +631,64 @@ export function iniciarAnalisisGrafica(contenedor) {
       }, "image/png");
     });
   });
+
+  // ---- Pegar de Adrematasa ----
+  $("pegarAdr").addEventListener("click", abrirPegadoAdrematasa);
+  function abrirPegadoAdrematasa() {
+    const ov = document.createElement("div");
+    ov.className = "modal-overlay";
+    ov.innerHTML = `<div class="modal-tarjeta ag" style="max-width:760px;width:100%;max-height:92vh;overflow:auto;">
+      <h2 style="margin:0 0 4px;">Pegar de Adrematasa</h2>
+      <p class="nota" style="margin:0 0 10px;">En el Adrematasa oficial selecciona el renglón del viaje <b>con los títulos</b>, cópialo (Ctrl+C) y pégalo aquí. Se llenan Entrada patio, Salida patio, Arribo y Descarga importación, y la unidad.</p>
+      <textarea data-x="texto" rows="5" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;white-space:pre;" placeholder="Pega aquí (Ctrl+V)"></textarea>
+      <div data-x="vista" style="margin-top:10px;"></div>
+      <div class="modal-acciones">
+        <button type="button" class="secundario" data-x="cerrar">Cancelar</button>
+        <button type="button" data-x="aplicar" disabled>Llenar fechas</button>
+      </div></div>`;
+    document.body.appendChild(ov);
+    const q = (k) => ov.querySelector(`[data-x="${k}"]`);
+    const cerrar = () => ov.remove();
+    ov.addEventListener("click", (e) => { if (e.target === ov) cerrar(); });
+    q("cerrar").addEventListener("click", cerrar);
+    let filas = [];
+    const celda = (ms) => ms != null ? esc(fmt(ms)) : `<span style="color:#A32D2D;">—</span>`;
+    q("texto").addEventListener("input", () => {
+      const r = leerPegadoAdrematasa(q("texto").value);
+      if (r.error) { filas = []; q("vista").innerHTML = q("texto").value.trim() ? `<div class="error">${esc(r.error)}</div>` : ""; q("aplicar").disabled = true; return; }
+      filas = r.filas;
+      const unidad = normal(S.unidad);
+      let elegida = Math.max(0, filas.findIndex((f) => unidad && normal(f.remolque) === unidad));
+      q("vista").innerHTML = `<div style="overflow-x:auto;"><table class="tabla" style="font-size:12.5px;">
+        <thead><tr>${filas.length > 1 ? "<th></th>" : ""}<th>Remolque</th><th>Cliente → Destino</th><th>Entrada</th><th>Salida</th><th>Arribo impo</th><th>Descarga</th></tr></thead>
+        <tbody>${filas.map((f, i) => `<tr>${filas.length > 1 ? `<td><input type="radio" name="ag-fila" value="${i}" ${i === elegida ? "checked" : ""}></td>` : ""}
+          <td><b>${esc(f.remolque || "—")}</b></td><td>${esc([f.cliente, f.destino].filter(Boolean).join(" → ") || "—")}</td>
+          <td>${celda(f.fechas[2])}</td><td>${celda(f.fechas[3])}</td><td>${celda(f.fechas[4])}</td><td>${celda(f.fechas[5])}</td></tr>`).join("")}</tbody></table></div>
+        <div data-x="avisoUnidad" class="nota" style="margin-top:6px;"></div>`;
+      const revisar = () => {
+        const f = filas[elegida];
+        const a = ov.querySelector('[data-x="avisoUnidad"]');
+        a.style.color = "";
+        if (!f) { a.textContent = ""; return; }
+        if (S.unidad && f.remolque && normal(f.remolque) !== unidad) { a.style.color = "#7a3e06"; a.textContent = `⚠️ El remolque ${f.remolque} no coincide con la unidad de la lectura (${S.unidad}). Revisa que sea el viaje correcto.`; }
+        else if (!Object.keys(f.fechas).length) { a.style.color = "#7a3e06"; a.textContent = "Ese renglón no trae fechas de entrada, salida, arribo ni descarga."; }
+        else a.textContent = "Las fechas vacías en Adrematasa no cambian lo que ya tengas capturado.";
+      };
+      ov.querySelectorAll('input[name="ag-fila"]').forEach((r) => r.addEventListener("change", () => { elegida = +r.value; revisar(); }));
+      revisar();
+      q("aplicar").disabled = false;
+      q("aplicar").onclick = () => {
+        const f = filas[elegida]; if (!f) return;
+        Object.entries(f.fechas).forEach(([i, ms]) => { $("ev" + i).value = aValor(ms); });
+        if (f.remolque && !S.unidad) { S.unidad = f.remolque; $("unidad").value = f.remolque; }
+        S.viaje = f;
+        cerrar(); pintarMeta(); refrescar();
+        const fuera = Object.keys(f.fechas).filter((i) => lista() && !dentro(t2x(f.fechas[i]))).map((i) => EVENTOS[i].etiqueta);
+        aviso(fuera.length ? `Fechas llenadas. Fuera del periodo de la lectura: ${fuera.join(", ")}.` : "Fechas llenadas desde Adrematasa.");
+      };
+    });
+    setTimeout(() => q("texto").focus(), 50);
+  }
 
   let tAviso;
   function aviso(t, fijo) {
