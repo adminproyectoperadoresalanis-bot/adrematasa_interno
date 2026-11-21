@@ -93,8 +93,8 @@ function fechaCortaConDia(fechaStr) {
   return `${DIAS[d.getDay()]} ${d.getDate()} ${MESES[d.getMonth()]}`;
 }
 
-async function enviarAtaf104({ db, festivo, festivos, listaHoras, mapUsuarios, cfg, hoy, forzado }) {
-  const { personas, pendientes } = personasAtaf104({ listaHoras, mapUsuarios, fecha: festivo.fecha });
+async function enviarAtaf104({ db, festivo, festivos, listaHoras, mapUsuarios, actividades, cfg, hoy, forzado }) {
+  const { personas, pendientes } = personasAtaf104({ listaHoras, mapUsuarios, fecha: festivo.fecha, actividades });
   const refEstado = db.collection("configuracion").doc("ataf104Estado");
   if (personas.length === 0) {
     console.log(`ATAF104 ${festivo.fecha}: no hay solicitudes aprobadas — no se manda.`);
@@ -216,19 +216,24 @@ async function main() {
   }
   if (!porEnviar.length && !porRecordar.length) { console.log("Nada que hacer en este disparo."); return; }
 
-  const [snapHoras, snapUsuarios] = await Promise.all([db.collection("solicitudes").get(), db.collection("usuarios").get()]);
+  const [snapHoras, snapUsuarios, snapActividades] = await Promise.all([
+    db.collection("solicitudes").get(), db.collection("usuarios").get(),
+    db.collection("configuracion").doc("actividadesPuesto").get()
+  ]);
   const listaHoras = snapHoras.docs.map(d => ({ id: d.id, ...d.data() }));
   const mapUsuarios = new Map(snapUsuarios.docs.map(d => [d.id, d.data()]));
+  // Actividades por puesto (2026-11-20): sección 2 del formato.
+  const actividades = snapActividades.exists && Array.isArray(snapActividades.data().lista) ? snapActividades.data().lista : [];
 
   for (const f of porRecordar) {
-    const { personas, pendientes } = personasAtaf104({ listaHoras, mapUsuarios, fecha: f.fecha });
+    const { personas, pendientes, sinActividades } = personasAtaf104({ listaHoras, mapUsuarios, fecha: f.fecha, actividades });
     const envio = fechaEnvioAtaf104(f.fecha, festivos);
     await avisarAIvan(db, "ATAF104 · mañana sale",
-      `${fechaCortaConDia(envio)} 9:00 am sale el ATAF104 de ${f.nombre || f.fecha} · ${personas.length} aprobada${personas.length === 1 ? "" : "s"}${pendientes.length ? ` · ${pendientes.length} pendiente${pendientes.length === 1 ? "" : "s"}` : ""}. Revisa antes de que salga.`);
+      `${fechaCortaConDia(envio)} 9:00 am sale el ATAF104 de ${f.nombre || f.fecha} · ${personas.length} aprobada${personas.length === 1 ? "" : "s"}${pendientes.length ? ` · ${pendientes.length} pendiente${pendientes.length === 1 ? "" : "s"}` : ""}${sinActividades.length ? ` · ${sinActividades.length} sin actividades de puesto (${sinActividades.join(", ")})` : ""}. Revisa antes de que salga.`);
     await db.collection("configuracion").doc("ataf104Estado").set({ [f.fecha]: { recordatorioEn: new Date().toISOString() } }, { merge: true });
   }
   for (const f of porEnviar) {
-    await enviarAtaf104({ db, festivo: f, festivos, listaHoras, mapUsuarios, cfg, hoy: ahora.fechaStr, forzado: forzar });
+    await enviarAtaf104({ db, festivo: f, festivos, listaHoras, mapUsuarios, actividades, cfg, hoy: ahora.fechaStr, forzado: forzar });
   }
 }
 

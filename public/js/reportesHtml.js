@@ -832,9 +832,38 @@ export function responsableAtaf104(mapUsuarios) {
   return "Iván Landa";
 }
 
+// ---- Motivos de horas extra y actividades por puesto (2026-11-20) ----------
+// El motivo ya no es texto libre: se elige de esta lista. Se sigue guardando
+// "motivo" como texto (ej. "Cubrir falta de: Raúl Medina") para que reportes,
+// PDF y correos no cambien; además motivoTipo y cubreA { uid, nombre }.
+export const MOTIVOS_HORAS_EXTRA = [
+  { id: "cubrir_falta", etiqueta: "Cubrir falta de…" },
+  { id: "volumen_cargas", etiqueta: "Volumen de cargas" },
+  { id: "turno_sin_personal", etiqueta: "Turno sin personal asignado" }
+];
+export function textoMotivoHorasExtra(motivoTipo, cubreANombre) {
+  if (motivoTipo === "cubrir_falta") return `Cubrir falta de: ${cubreANombre || ""}`.trim();
+  const m = MOTIVOS_HORAS_EXTRA.find(x => x.id === motivoTipo);
+  return m ? m.etiqueta : "";
+}
+const normalizarArea = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+// Áreas que no salen en "Cubrir falta de" ni en Actividades por puesto.
+export function areaExcluidaHorasExtra(area) {
+  const a = normalizarArea(area);
+  return !a || a.includes("gerencia") || a.includes("direccion") || a.includes("no especificad");
+}
+// Actividades de un puesto (configuracion/actividadesPuesto.lista).
+export function actividadesDePuesto(lista, area, puesto) {
+  const a = normalizarArea(area), p = normalizarArea(puesto);
+  const x = (Array.isArray(lista) ? lista : []).find(y => y && normalizarArea(y.area) === a && normalizarArea(y.puesto) === p);
+  return x && String(x.actividades || "").trim() ? String(x.actividades).trim() : "";
+}
+
 // Personas del festivo: una por empleado (si trae 2 bloques ese día se juntan).
-// Regresa { personas: [{ nombre, puesto, horario, motivo }], pendientes: [solicitudes] }.
-export function personasAtaf104({ listaHoras, mapUsuarios, fecha }) {
+// Regresa { personas: [{ nombre, puesto, horario, motivo }], pendientes: [solicitudes], sinActividades: [nombres] }.
+// actividades (2026-11-20): lista de configuracion/actividadesPuesto. La sección 2
+// del formato usa las actividades del puesto+área; si el puesto no tiene, el motivo.
+export function personasAtaf104({ listaHoras, mapUsuarios, fecha, actividades = [] }) {
   const delDia = listaHoras.filter(s => s.fecha === fecha);
   const pendientes = delDia.filter(s => s.estatus === "pendiente");
   const porEmpleado = new Map();
@@ -847,6 +876,7 @@ export function personasAtaf104({ listaHoras, mapUsuarios, fecha }) {
           nombre: u.nombre || s.empleadoNombre || "",
           area: u.area || "",
           puesto: [u.puesto, u.area].filter(Boolean).join(" · ") || "—",
+          actividades: actividadesDePuesto(actividades, u.area, u.puesto),
           horarios: [], motivos: []
         });
       }
@@ -856,8 +886,9 @@ export function personasAtaf104({ listaHoras, mapUsuarios, fecha }) {
     });
   const personas = [...porEmpleado.values()]
     .sort((a, b) => a.area.localeCompare(b.area, "es") || a.nombre.localeCompare(b.nombre, "es"))
-    .map(p => ({ nombre: p.nombre, puesto: p.puesto, horario: p.horarios.join(" y "), motivo: p.motivos.join("; ") }));
-  return { personas, pendientes };
+    .map(p => ({ nombre: p.nombre, puesto: p.puesto, horario: p.horarios.join(" y "), motivo: p.actividades || p.motivos.join("; "), sinActividades: !p.actividades }));
+  const sinActividades = personas.filter(p => p.sinActividades).map(p => p.nombre);
+  return { personas, pendientes, sinActividades };
 }
 
 // Hoja ATAF104 (carta vertical). conSalto: true cuando va después de otras

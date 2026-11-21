@@ -8,16 +8,21 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 // 2026-11-18 (ATAF104): días festivos. Una fecha futura solo se puede capturar si
 // es día festivo del catálogo (Configuración › Días festivos). En festivo el
-// motivo se vuelve "Justificación" breve (máx. 150) y es lo que sale en la
-// sección 2 del formato ATAF104. La solicitud guarda festivo: { fecha, nombre }.
-const MAX_JUSTIFICACION = 150;
+// La solicitud guarda festivo: { fecha, nombre }.
+// 2026-11-20: el motivo se elige de una lista (Cubrir falta de… / Volumen de
+// cargas / Turno sin personal asignado); ya no hay texto libre ni justificación.
+// En festivo se muestran las actividades del puesto+área (Configuración › RH ›
+// Actividades por puesto); eso es lo que sale en la sección 2 del ATAF104.
 function hoyLocalIso() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 import { avisarNuevaSolicitud } from "./avisoNuevaSolicitud.js";
 // ATAF104 (2026-11-18): fecha límite = cuando sale el formato a nóminas.
-import { fechaEnvioAtaf104, fechaLargaConDia, HORA_ENVIO_ATAF104 } from "./reportesHtml.js";
+import {
+  fechaEnvioAtaf104, fechaLargaConDia, HORA_ENVIO_ATAF104,
+  MOTIVOS_HORAS_EXTRA, textoMotivoHorasExtra, areaExcluidaHorasExtra, actividadesDePuesto
+} from "./reportesHtml.js";
 // 2026-11-20: el empleado ve si su solicitud se corrigió después de nómina.
 import { chipCorregida } from "./correccionesNomina.js";
 
@@ -110,10 +115,19 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
         </div>
         <div id="sol-aviso-festivo"></div>
         <div id="sol-aviso-choque"></div>
-        <label><span id="sol-motivo-etiqueta">Motivo</span>
-          <textarea id="sol-motivo" rows="3" required></textarea>
+        <label>Motivo
+          <select id="sol-motivo" required>
+            <option value="">Elige el motivo…</option>
+            ${MOTIVOS_HORAS_EXTRA.map(m => `<option value="${m.id}">${escapeHtml(m.etiqueta)}</option>`).join("")}
+          </select>
         </label>
-        <div id="sol-motivo-contador" class="nota oculto" style="margin-top:-4px;"></div>
+        <div id="sol-cubre-caja" class="oculto">
+          <label>¿A quién cubres?
+            <select id="sol-cubre-a"><option value="">Elige al compañero…</option></select>
+          </label>
+          <div class="nota" style="margin-top:-4px;">No aparecen Gerencia, Dirección ni empleados sin área.</div>
+        </div>
+        <div id="sol-actividades"></div>
         <div class="acciones-form">
           <button type="submit" id="btn-guardar-solicitud">Enviar solicitud</button>
           <button type="button" id="btn-cancelar-edicion" class="secundario oculto">Cancelar edición</button>
@@ -152,8 +166,6 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
   // ---- Días festivos (2026-11-18, ATAF104) ----
   let festivos = []; // [{ fecha: "yyyy-mm-dd", nombre }]
   const avisoFestivo = contenedor.querySelector("#sol-aviso-festivo");
-  const etiquetaMotivo = contenedor.querySelector("#sol-motivo-etiqueta");
-  const contadorMotivo = contenedor.querySelector("#sol-motivo-contador");
   const festivoDe = (fecha) => festivos.find(f => f.fecha === fecha) || null;
   onSnapshot(doc(db, "configuracion", "diasFestivos"), (snap) => {
     const lista = snap.exists() ? snap.data().festivos : null;
@@ -161,12 +173,53 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
     revisarFormulario();
     if (ultimaLista.length) renderTabla(ultimaLista);
   }, () => { /* sin catálogo: se comporta como antes, sin fechas futuras */ });
-  function pintarContador() {
-    const n = inputMotivo.value.length;
-    contadorMotivo.textContent = `${n} / ${MAX_JUSTIFICACION} caracteres · aparece tal cual en el formato ATAF104`;
-    contadorMotivo.style.color = n > MAX_JUSTIFICACION ? "#8a2318" : "";
+
+  // ---- Motivo en lista + "Cubrir falta de" (2026-11-20) ----
+  const cajaCubre = contenedor.querySelector("#sol-cubre-caja");
+  const selectCubre = contenedor.querySelector("#sol-cubre-a");
+  const cajaActividades = contenedor.querySelector("#sol-actividades");
+  let directorio = [];        // configuracion/directorioEmpleados.lista [{ uid, nombre, area, puesto }]
+  let actividadesPuesto = []; // configuracion/actividadesPuesto.lista [{ area, puesto, actividades }]
+  let cubreAPendiente = null; // al editar, el compañero guardado (si el directorio llega después)
+  function pintarCompaneros() {
+    const elegido = selectCubre.value || (cubreAPendiente && cubreAPendiente.uid) || "";
+    const lista = directorio.filter(e => e && e.uid !== uid && !areaExcluidaHorasExtra(e.area));
+    const porArea = new Map();
+    lista.forEach(e => { if (!porArea.has(e.area)) porArea.set(e.area, []); porArea.get(e.area).push(e); });
+    const areas = [...porArea.keys()].sort((a, b) => a.localeCompare(b, "es"));
+    let html = `<option value="">Elige al compañero…</option>` + areas.map(a => `<optgroup label="${escapeHtml(a)}">${porArea.get(a).sort((x, y) => x.nombre.localeCompare(y.nombre, "es")).map(e => `<option value="${escapeHtml(e.uid)}">${escapeHtml(e.nombre)}</option>`).join("")}</optgroup>`).join("");
+    // Si el compañero guardado ya no está en la lista (dado de baja), se conserva.
+    if (cubreAPendiente && cubreAPendiente.uid && !lista.some(e => e.uid === cubreAPendiente.uid)) {
+      html += `<option value="${escapeHtml(cubreAPendiente.uid)}">${escapeHtml(cubreAPendiente.nombre || "")}</option>`;
+    }
+    selectCubre.innerHTML = html;
+    selectCubre.value = elegido;
   }
-  inputMotivo.addEventListener("input", () => { if (!contadorMotivo.classList.contains("oculto")) pintarContador(); });
+  function pintarMotivo() {
+    const esCubrir = inputMotivo.value === "cubrir_falta";
+    cajaCubre.classList.toggle("oculto", !esCubrir);
+    selectCubre.required = esCubrir;
+  }
+  inputMotivo.addEventListener("change", pintarMotivo);
+  onSnapshot(doc(db, "configuracion", "directorioEmpleados"), (snap) => {
+    directorio = snap.exists() && Array.isArray(snap.data().lista) ? snap.data().lista : [];
+    pintarCompaneros();
+  }, () => { /* sin directorio: la lista queda vacía */ });
+  onSnapshot(doc(db, "configuracion", "actividadesPuesto"), (snap) => {
+    actividadesPuesto = snap.exists() && Array.isArray(snap.data().lista) ? snap.data().lista : [];
+    revisarFestivo();
+  }, () => {});
+  const misActividades = () => actividadesDePuesto(actividadesPuesto, datosUsuario.area, datosUsuario.puesto);
+  function pintarActividades(enFestivo) {
+    if (!enFestivo) { cajaActividades.innerHTML = ""; return; }
+    const act = misActividades();
+    const etiqueta = [datosUsuario.puesto, datosUsuario.area].filter(Boolean).map(escapeHtml).join(" · ") || "Sin puesto asignado";
+    cajaActividades.innerHTML = act
+      ? `<div style="font-weight:600;margin:10px 0 5px;">Actividades que vas a realizar</div>
+         <div style="border:1px solid #cfe0cf;background:#F1F8F1;border-radius:10px;padding:10px 12px;font-size:13.5px;line-height:1.5;"><div style="font-size:12px;font-weight:700;color:#2E7D46;margin-bottom:3px;">SEGÚN TU PUESTO · ${etiqueta}</div>${escapeHtml(act)}</div>
+         <div class="nota" style="margin-top:5px;">Lo define la gerencia en Configuración › RH. Es lo que sale en el formato ATAF104; ya no lo escribes tú.</div>`
+      : `<div style="border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:10px 0;background:#FDECEA;border:1px solid #F3C2BC;color:#8a2318;">Tu puesto (${etiqueta}) todavía no tiene actividades capturadas; en el formato ATAF104 se usará el motivo. Avísale a tu jefe.</div>`;
+  }
   // Pinta el aviso del festivo y regresa "futuro" si la fecha es futura y NO es festivo.
   function revisarFestivo() {
     avisoFestivo.innerHTML = "";
@@ -180,18 +233,11 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
       const limite = yaSalio
         ? `<br><b>El formato de este festivo ya se envió a nóminas (${escapeHtml(fechaLargaConDia(envio))}, ${HORA_ENVIO_ATAF104}:00 am).</b> Esta solicitud ya no entra en la lista que recibe seguridad; avisa a tu jefe.`
         : `<br>Para que entres en la lista que recibe seguridad, <b>captúrala y que te la aprueben antes del ${escapeHtml(fechaLargaConDia(envio))} a las ${HORA_ENVIO_ATAF104}:00 am</b>.`;
-      avisoFestivo.innerHTML = `<div style="border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:10px 0;background:#FFF6E0;border:1px solid #E9C46A;color:#6b4a06;">🎉 <b>Día festivo: ${escapeHtml(f.nombre || "")}.</b> Esta solicitud entra al formato ATAF104 (personal que labora en día festivo). Escribe una justificación breve: qué actividad vas a atender.${limite}</div>`;
-      etiquetaMotivo.textContent = "Justificación (breve, obligatoria en día festivo)";
-      inputMotivo.setAttribute("maxlength", String(MAX_JUSTIFICACION));
-      inputMotivo.placeholder = "Ej. Recepción y despacho de embarques programados.";
-      contadorMotivo.classList.remove("oculto");
-      pintarContador();
+      avisoFestivo.innerHTML = `<div style="border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:10px 0;background:#FFF6E0;border:1px solid #E9C46A;color:#6b4a06;">🎉 <b>Día festivo: ${escapeHtml(f.nombre || "")}.</b> Esta solicitud entra al formato ATAF104 (personal que labora en día festivo).${limite}</div>`;
+      pintarActividades(true);
       return null;
     }
-    etiquetaMotivo.textContent = "Motivo";
-    inputMotivo.removeAttribute("maxlength");
-    inputMotivo.placeholder = "";
-    contadorMotivo.classList.add("oculto");
+    pintarActividades(false);
     if (fecha && fecha > hoyLocalIso()) {
       avisoFestivo.innerHTML = `<div style="border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:10px 0;background:#FDECEA;border:1px solid #F3C2BC;color:#8a2318;"><b>Esa fecha todavía no ocurre.</b><br>Solo se pueden capturar fechas futuras cuando son día festivo.</div>`;
       return "futuro";
@@ -256,7 +302,12 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
     inputFecha.value = s.fecha;
     inputInicio.value = s.horaInicio;
     inputFin.value = s.horaFin;
-    inputMotivo.value = s.motivo;
+    // Solicitudes viejas (motivo en texto libre) no traen motivoTipo: hay que elegirlo.
+    inputMotivo.value = MOTIVOS_HORAS_EXTRA.some(m => m.id === s.motivoTipo) ? s.motivoTipo : "";
+    cubreAPendiente = s.cubreA || null;
+    pintarCompaneros();
+    selectCubre.value = (s.cubreA && s.cubreA.uid) || "";
+    pintarMotivo();
     actualizarHorasPreview();
     tituloForm.textContent = "Editar solicitud";
     btnGuardar.textContent = "Guardar cambios";
@@ -267,7 +318,10 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
 
   function salirModoEdicion() {
     editandoId = null;
+    cubreAPendiente = null;
     form.reset();
+    pintarCompaneros();
+    pintarMotivo();
     horasCalculadas.textContent = "—";
     tituloForm.textContent = "Nueva solicitud de horas extra";
     btnGuardar.textContent = "Enviar solicitud";
@@ -284,17 +338,23 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
     const fecha = inputFecha.value;
     const horaInicio = inputInicio.value;
     const horaFin = inputFin.value;
-    const motivo = inputMotivo.value.trim();
+    const motivoTipo = inputMotivo.value;
+    let cubreA = null;
+    if (motivoTipo === "cubrir_falta") {
+      const opcion = selectCubre.options[selectCubre.selectedIndex];
+      if (!selectCubre.value || !opcion) {
+        errorDiv.textContent = "Elige a qué compañero cubres.";
+        return;
+      }
+      cubreA = { uid: selectCubre.value, nombre: opcion.textContent };
+    }
+    const motivo = textoMotivoHorasExtra(motivoTipo, cubreA && cubreA.nombre);
 
     if (!fecha || !horaInicio || !horaFin || !motivo) {
       errorDiv.textContent = "Completa todos los campos.";
       return;
     }
     const festivo = festivoDe(fecha);
-    if (festivo && motivo.length > MAX_JUSTIFICACION) {
-      errorDiv.textContent = `En día festivo la justificación debe ser breve (máximo ${MAX_JUSTIFICACION} caracteres).`;
-      return;
-    }
     const datoFestivo = festivo ? { fecha: festivo.fecha, nombre: festivo.nombre || "" } : null;
 
     const horas = calcularHoras(horaInicio, horaFin);
@@ -314,6 +374,8 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
           horaFin,
           horas,
           motivo,
+          motivoTipo,
+          cubreA,
           festivo: datoFestivo,
           semanaLaboral: calcularSemanaLaboral(fecha)
         });
@@ -328,6 +390,8 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
           horaFin,
           horas,
           motivo,
+          motivoTipo,
+          cubreA,
           festivo: datoFestivo,
           semanaLaboral: calcularSemanaLaboral(fecha),
           estatus: "pendiente",
@@ -337,6 +401,7 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
           resueltoEn: null
         });
         form.reset();
+        pintarMotivo();
         horasCalculadas.textContent = "—";
         revisarFormulario();
 
@@ -348,7 +413,8 @@ export function iniciarVistaEmpleado(contenedor, datosUsuario, uid) {
           mensaje: `<p style="margin:0 0 12px;">${escapeHtml(datosUsuario.nombre)} envió una nueva solicitud de horas extra:</p>
 <p style="margin:0 0 4px;"><strong>Fecha:</strong> ${fecha}${festivo ? ` (día festivo: ${escapeHtml(festivo.nombre || "")})` : ""}</p>
 <p style="margin:0 0 4px;"><strong>Horario:</strong> ${horaInicio}–${horaFin} (${horas} h)</p>
-<p style="margin:0 0 12px;"><strong>${festivo ? "Justificación" : "Motivo"}:</strong> ${escapeHtml(motivo)}</p>
+<p style="margin:0 0 ${festivo ? 4 : 12}px;"><strong>Motivo:</strong> ${escapeHtml(motivo)}</p>
+${festivo ? `<p style="margin:0 0 12px;"><strong>Actividades (según su puesto):</strong> ${escapeHtml(misActividades() || "Sin actividades capturadas para su puesto")}</p>` : ""}
 <p style="margin:0;color:#555;font-size:0.9em;">Entra a Adrematasa Interno para aprobarla o rechazarla.</p>`,
           tituloBell: "Nueva solicitud de horas extra",
           mensajeBell: `${datosUsuario.nombre} envió una solicitud para tu revisión`,

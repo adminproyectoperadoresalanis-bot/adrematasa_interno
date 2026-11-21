@@ -797,3 +797,6 @@ Object.assign(exports, require("./avisosPushAdrematasa"));
 
 // Correcciones después de nómina: correo a nóminas (2026-11-20)
 Object.assign(exports, require("./correccionNomina"));
+
+// Directorio de empleados para "Cubrir falta de" (2026-11-20)
+Object.assign(exports, require("./directorioEmpleados"));

@@ -220,7 +220,13 @@ function construirVista(contenedor, { esAdmin, uid }) {
     festivos = lista.filter(f => f && f.fecha).sort((a, b) => a.fecha.localeCompare(b.fecha));
     renderTodo();
   }, () => {});
+  // Actividades por puesto (2026-11-20): sección 2 del ATAF104.
+  let actividadesPuesto = [];
   if (verAtaf104) {
+    onSnapshot(doc(db, "configuracion", "actividadesPuesto"), (snap) => {
+      actividadesPuesto = snap.exists() && Array.isArray(snap.data().lista) ? snap.data().lista : [];
+      renderAvisoAtaf104();
+    }, () => {});
     onSnapshot(REF_CFG_FESTIVO(), (snap) => { cfgAtaf104 = snap.exists() ? snap.data() : {}; renderAvisoAtaf104(); }, () => {});
     onSnapshot(REF_ESTADO_FESTIVO(), (snap) => { estadoAtaf104 = snap.exists() ? snap.data() : {}; renderAvisoAtaf104(); }, () => {});
   }
@@ -229,10 +235,10 @@ function construirVista(contenedor, { esAdmin, uid }) {
   function ataf104DeLaSemana() {
     if (!verAtaf104 || !selectSemana.value) return [];
     return festivosParaAtaf104({ festivos, viernes: selectSemana.value }).map(f => {
-      const { personas, pendientes } = personasAtaf104({ listaHoras, mapUsuarios, fecha: f.fecha });
+      const { personas, pendientes, sinActividades } = personasAtaf104({ listaHoras, mapUsuarios, fecha: f.fecha, actividades: actividadesPuesto });
       const envio = fechaEnvioAtaf104(f.fecha, festivos);
       const estado = estadoAtaf104[f.fecha] || {};
-      return { festivo: f, personas, pendientes, envio, estado };
+      return { festivo: f, personas, pendientes, sinActividades, envio, estado };
     }).filter(x => x.personas.length || x.pendientes.length);
   }
 
@@ -246,7 +252,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
     const hoy = hoyLocalStr();
     const chip = (txt, fondo, color) => `<span style="display:inline-block;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;background:${fondo};color:${color};white-space:nowrap;">${txt}</span>`;
     caja.innerHTML = lista.map(x => {
-      const { festivo: f, personas, pendientes, envio, estado } = x;
+      const { festivo: f, personas, pendientes, sinActividades, envio, estado } = x;
       const yaToca = hoy > envio || (hoy === envio && ahora.getHours() >= HORA_ENVIO_ATAF104);
       const estatus = estado.enviadoEn
         ? chip(`Enviado ${new Date(estado.enviadoEn).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`, "#DCEAF7", "#185FA5")
@@ -262,6 +268,7 @@ function construirVista(contenedor, { esAdmin, uid }) {
         <span style="font-size:20px;line-height:1;">🎉</span>
         <div style="flex:1;min-width:0;">
           ${incluye}${pendientes.length ? ` ${chip(`${pendientes.length} pendiente${pendientes.length === 1 ? "" : "s"}`, "#FFF1CC", "#8a5a00")}` : ""}<br>
+          ${sinActividades && sinActividades.length ? `<div style="margin:4px 0;color:#8a2318;">⚠️ Sin actividades capturadas para su puesto: <b>${sinActividades.map(escapeHtmlCompartido).join(", ")}</b>. Saldrá su motivo; captúralas en Configuración › RH › Actividades por puesto.</div>` : ""}
           Sale solo, en su propio correo, el <b>${escapeHtmlCompartido(fechaLargaConDia(envio))} a las ${HORA_ENVIO_ATAF104}:00 am</b> · ${estatus}
           <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
             <button type="button" class="secundario btn-obs-ataf104" data-fecha="${f.fecha}">Observaciones</button>
