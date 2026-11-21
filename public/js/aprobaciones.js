@@ -9,7 +9,7 @@ import {
 import { crearNotificacion } from "./notificaciones.js";
 import { enviarCorreoResultado } from "./correo.js";
 // 2026-11-20: corregir horas extra que ya se mandaron a nómina (solo admin).
-import { abrirCorregirHoras, chipCorregida } from "./correccionesNomina.js";
+import { abrirCorregirHoras } from "./correccionesNomina.js";
 
 const ETIQUETAS_ESTATUS = {
   pendiente: "Pendiente",
@@ -102,14 +102,39 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
 
     <section class="panel" style="margin-top:20px;">
       <h2>Historial de solicitudes</h2>
+      <style>
+        /* Historial compacto (2026-11-20): anchos fijos para que se vean todas las columnas. */
+        .hist-top{display:flex;gap:12px;align-items:center;margin-bottom:12px;}
+        .hist-buscar{flex:1;display:flex;align-items:center;gap:8px;border:1px solid #d9d0c4;border-radius:10px;padding:0 12px;background:#fff;}
+        .hist-buscar input{flex:1;border:none;outline:none;padding:10px 0;font-size:15px;background:transparent;min-width:0;}
+        .hist-limpiar{border:none;background:none;color:#9a8d7e;font-size:16px;cursor:pointer;padding:4px;display:none;}
+        .hist-cont{font-size:13px;color:#6b5f52;white-space:nowrap;}
+        #tabla-historial{table-layout:fixed;width:100%;min-width:0;}
+        #tabla-historial td{vertical-align:top;overflow-wrap:anywhere;white-space:normal;}
+        #tabla-historial .badge{display:inline-block;margin:0 4px 4px 0;white-space:nowrap;}
+        #tabla-historial .hist-sm{font-size:12.5px;color:#6b5f52;margin-top:2px;}
+        #tabla-historial td.acciones-hist button{display:block;width:100%;margin:0 0 5px 0;padding:5px 8px;font-size:12.5px;text-align:left;}
+        #tabla-historial mark{background:#FFE89A;padding:0 1px;border-radius:2px;color:inherit;}
+        .hist-pag{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px;font-size:13.5px;color:#6b5f52;}
+        .hist-pp{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+        .hist-pp button{min-width:34px;height:34px;padding:0 8px;border:1px solid #d9d0c4;border-radius:8px;background:#fff;color:#2b2016;font-size:14px;cursor:pointer;margin:0;}
+        .hist-pp button.on{background:#2b2016;color:#fff;border-color:#2b2016;font-weight:700;}
+        .hist-pp button:disabled{color:#c4b9ab;cursor:default;}
+      </style>
+      <div class="hist-top">
+        <div class="hist-buscar">🔍 <input type="search" id="hist-buscar" placeholder="Buscar por empleado, fecha, motivo, estatus, quién autorizó..." autocomplete="off"><button type="button" class="hist-limpiar" id="hist-limpiar" title="Limpiar búsqueda">✕</button></div>
+        <div class="hist-cont" id="hist-cont"></div>
+      </div>
       <div class="tabla-wrap">
         <table class="tabla" id="tabla-historial">
+          <colgroup><col style="width:16%"><col style="width:12%"><col style="width:9%"><col style="width:5%"><col style="width:15%"><col style="width:15%"><col style="width:15%"><col style="width:13%"></colgroup>
           <thead>
-            <tr><th>Empleado</th><th>Fecha</th><th>Horario</th><th>Horas</th><th>Motivo</th><th>Estatus</th><th>Comentario</th><th>Autorizó</th><th>Correo</th></tr>
+            <tr><th>Empleado</th><th>Fecha</th><th>Horario</th><th>Hrs</th><th>Motivo</th><th>Estatus</th><th>Revisión</th><th>Acciones</th></tr>
           </thead>
-          <tbody id="tbody-historial"><tr><td colspan="9">Cargando...</td></tr></tbody>
+          <tbody id="tbody-historial"><tr><td colspan="8">Cargando...</td></tr></tbody>
         </table>
       </div>
+      <div class="hist-pag"><div id="hist-rango"></div><div class="hist-pp" id="hist-paginas"></div></div>
     </section>
   `;
 
@@ -117,6 +142,24 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
   const tbodyPendientes = contenedor.querySelector("#tbody-pendientes");
   const tbodyHistorial = contenedor.querySelector("#tbody-historial");
   const tbodyAjustes = contenedor.querySelector("#tbody-ajustes-pendientes");
+
+  // Historial: búsqueda tipo LIKE + paginación fija de 5 (2026-11-20).
+  const POR_PAGINA_HIST = 5;
+  let paginaHist = 1;
+  let textoBusquedaHist = "";
+  const inputBuscarHist = contenedor.querySelector("#hist-buscar");
+  const btnLimpiarHist = contenedor.querySelector("#hist-limpiar");
+  inputBuscarHist.addEventListener("input", () => {
+    textoBusquedaHist = inputBuscarHist.value;
+    btnLimpiarHist.style.display = textoBusquedaHist ? "inline" : "none";
+    paginaHist = 1;
+    renderHistorial();
+  });
+  btnLimpiarHist.addEventListener("click", () => {
+    inputBuscarHist.value = "";
+    inputBuscarHist.dispatchEvent(new Event("input"));
+    inputBuscarHist.focus();
+  });
 
   let ultimoHistorial = [];
   let ultimasTodas = []; // todas las solicitudes cargadas (para "Mismo día" / "Se empalma")
@@ -255,26 +298,92 @@ function construirVista(contenedor, uidRevisor, nombreRevisor, queryBase, queryU
     return "";
   }
 
+  // Texto en el que busca cada registro (incluye lo que muestran los badges).
+  function textoBusquedaDe(s) {
+    const a = s.ajusteSolicitud;
+    const n = Array.isArray(s.correcciones) ? s.correcciones.length : 0;
+    return [
+      s.empleadoNombre, s.fecha, fechaCorta(s.fecha), `${s.horaInicio}–${s.horaFin}`, `${s.horaInicio}-${s.horaFin}`,
+      s.horas, s.motivo, ETIQUETAS_ESTATUS[s.estatus] || s.estatus,
+      s.festivo ? `festivo ${s.festivo.nombre || ""}` : "",
+      s.enviadoANominaEn ? `nomina ${fechaCortaIso(s.enviadoANominaEn)}` : "",
+      n ? "corregida" : "",
+      a && a.estatus === "pendiente" ? "ajuste en revision" : "",
+      a && a.estatus === "rechazada" ? "ajuste rechazado" : "",
+      s.revisadoPorNombre, s.comentarioRevisor
+    ].filter(Boolean).join(" ");
+  }
+
+  // Badge corto de corrección (el largo de correccionesNomina.js no cabe aquí).
+  function chipCorregidaCorta(s) {
+    const n = Array.isArray(s.correcciones) ? s.correcciones.length : 0;
+    if (!n) return "";
+    const ult = s.correcciones[n - 1] || {};
+    return `<span class="badge" style="background:#EEE6F7;color:#6B3FA0;" title="${escapeHtml(ult.motivo || "")}">Corregida${ult.informadaEn ? "" : " · sin informar"}</span>`;
+  }
+
+  // Números de página: 1 … (actual ±2) … última.
+  function paginasVisibles(actual, total) {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+    const set = new Set([1, total]);
+    let desde = Math.max(1, actual - 2), hasta = Math.min(total, actual + 2);
+    if (actual <= 3) { desde = 1; hasta = 5; }
+    if (actual >= total - 2) { desde = total - 4; hasta = total; }
+    for (let i = desde; i <= hasta; i++) set.add(i);
+    const lista = [...set].sort((x, y) => x - y);
+    const res = [];
+    lista.forEach((p, i) => { if (i && p - lista[i - 1] > 1) res.push("…"); res.push(p); });
+    return res;
+  }
+
   function renderHistorial() {
+    const cont = contenedor.querySelector("#hist-cont");
+    const rango = contenedor.querySelector("#hist-rango");
+    const cajaPaginas = contenedor.querySelector("#hist-paginas");
+    const palabras = palabrasBusqueda(textoBusquedaHist);
+    const filtradas = palabras.length
+      ? ultimoHistorial.filter(s => { const t = normalizarBusqueda(textoBusquedaDe(s)); return palabras.every(p => t.includes(p)); })
+      : ultimoHistorial;
+
+    cont.textContent = palabras.length ? `${filtradas.length} de ${ultimoHistorial.length} registros` : `${ultimoHistorial.length} registros`;
+    const totalPaginas = Math.max(1, Math.ceil(filtradas.length / POR_PAGINA_HIST));
+    if (paginaHist > totalPaginas) paginaHist = totalPaginas;
+    const ini = (paginaHist - 1) * POR_PAGINA_HIST;
+    const visibles = filtradas.slice(ini, ini + POR_PAGINA_HIST);
+
+    rango.textContent = filtradas.length ? `Mostrando ${ini + 1}–${ini + visibles.length} de ${filtradas.length}` : "";
+    cajaPaginas.innerHTML = !filtradas.length ? ""
+      : `<button type="button" data-pag="${paginaHist - 1}" ${paginaHist === 1 ? "disabled" : ""}>‹</button>` +
+        paginasVisibles(paginaHist, totalPaginas).map(p => p === "…" ? `<span>…</span>` : `<button type="button" data-pag="${p}" class="${p === paginaHist ? "on" : ""}">${p}</button>`).join("") +
+        `<button type="button" data-pag="${paginaHist + 1}" ${paginaHist === totalPaginas ? "disabled" : ""}>›</button>`;
+    cajaPaginas.querySelectorAll("button[data-pag]").forEach(b => b.addEventListener("click", () => {
+      const p = Number(b.dataset.pag);
+      if (p >= 1 && p <= totalPaginas && p !== paginaHist) { paginaHist = p; renderHistorial(); }
+    }));
+
     if (ultimoHistorial.length === 0) {
-      tbodyHistorial.innerHTML = `<tr><td colspan="9">Todavía no hay historial.</td></tr>`;
+      tbodyHistorial.innerHTML = `<tr><td colspan="8">Todavía no hay historial.</td></tr>`;
       return;
     }
-    tbodyHistorial.innerHTML = ultimoHistorial.map(s => `
+    if (filtradas.length === 0) {
+      tbodyHistorial.innerHTML = `<tr><td colspan="8">Ningún registro coincide con “${escapeHtml(textoBusquedaHist.trim())}”.</td></tr>`;
+      return;
+    }
+    const r = (t) => resaltarBusqueda(t, palabras);
+    tbodyHistorial.innerHTML = visibles.map(s => `
         <tr data-id-correo="${s.id}">
-          <td>${escapeHtml(s.empleadoNombre || "")}</td>
-          <td>${s.fecha}${chipFestivo(s)}</td>
-          <td>${s.horaInicio}–${s.horaFin}</td>
-          <td>${s.horas}</td>
-          <td>${escapeHtml(s.motivo)}</td>
-          <td><span class="badge badge-${s.estatus}">${ETIQUETAS_ESTATUS[s.estatus] || s.estatus}</span>${badgeAjuste(s)}${s.enviadoANominaEn ? ` <span class="badge" style="background:#DCEAF7;color:#185FA5;">Enviada a nómina ${fechaCortaIso(s.enviadoANominaEn)}</span>` : ""}${chipCorregida(s)}</td>
-          <td>${s.comentarioRevisor ? escapeHtml(s.comentarioRevisor) : "—"}</td>
-          <td>${s.revisadoPorNombre ? escapeHtml(s.revisadoPorNombre) : "—"}</td>
-          <td>
-            <button type="button" class="secundario btn-enviar-correo">Enviar correo</button>
-            ${permiteRevertir && !s.enviadoANominaEn ? `<button type="button" class="secundario btn-revertir-solicitud">Revertir a pendiente</button>` : ""}
+          <td>${r(s.empleadoNombre || "")}</td>
+          <td>${r(s.fecha)}${chipFestivo(s)}</td>
+          <td>${r(`${s.horaInicio}–${s.horaFin}`)}</td>
+          <td>${r(s.horas)}</td>
+          <td>${r(s.motivo)}</td>
+          <td><span class="badge badge-${s.estatus}">${ETIQUETAS_ESTATUS[s.estatus] || s.estatus}</span>${badgeAjuste(s)}${s.enviadoANominaEn ? `<span class="badge" style="background:#DCEAF7;color:#185FA5;" title="Enviada a nómina">Nómina ${fechaCortaIso(s.enviadoANominaEn)}</span>` : ""}${chipCorregidaCorta(s)}</td>
+          <td>${s.revisadoPorNombre ? r(s.revisadoPorNombre) : "—"}<div class="hist-sm">${s.comentarioRevisor ? r(s.comentarioRevisor) : "—"}</div></td>
+          <td class="acciones-hist">
+            <button type="button" class="secundario btn-enviar-correo">✉️ Correo</button>
+            ${permiteRevertir && !s.enviadoANominaEn ? `<button type="button" class="secundario btn-revertir-solicitud" title="Revertir a pendiente">↩️ Revertir</button>` : ""}
             ${permiteRevertir && s.enviadoANominaEn ? `<button type="button" class="secundario btn-corregir-nomina">✏️ Corregir</button>` : ""}
-            <div class="nota-correo"></div>
+            <div class="nota-correo hist-sm"></div>
           </td>
         </tr>
       `).join("");
@@ -491,4 +600,35 @@ function escapeHtml(texto) {
   const div = document.createElement("div");
   div.textContent = texto || "";
   return div.innerHTML;
+}
+// ---- Búsqueda tipo LIKE del historial (2026-11-20) ---------------------------
+// Sin mayúsculas ni acentos ("raul" encuentra "Raúl"). Varias palabras = todas
+// deben aparecer ("litzy nov").
+function normalizarBusqueda(t) {
+  return String(t ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+}
+function palabrasBusqueda(t) {
+  return normalizarBusqueda(t).split(/\s+/).filter(Boolean);
+}
+// Escapa el texto y marca en amarillo cada palabra buscada.
+function resaltarBusqueda(texto, palabras) {
+  const chars = Array.from(String(texto ?? ""));
+  if (!palabras || !palabras.length) return escapeHtml(chars.join(""));
+  const norm = chars.map(c => normalizarBusqueda(c).charAt(0) || c);
+  const marca = new Array(chars.length).fill(false);
+  palabras.forEach(p => {
+    const q = Array.from(p);
+    for (let i = 0; i + q.length <= norm.length; i++) {
+      let ok = true;
+      for (let j = 0; j < q.length; j++) if (norm[i + j] !== q[j]) { ok = false; break; }
+      if (ok) for (let j = 0; j < q.length; j++) marca[i + j] = true;
+    }
+  });
+  let html = "", abierto = false;
+  chars.forEach((c, i) => {
+    if (marca[i] && !abierto) { html += "<mark>"; abierto = true; }
+    if (!marca[i] && abierto) { html += "</mark>"; abierto = false; }
+    html += escapeHtml(c);
+  });
+  return html + (abierto ? "</mark>" : "");
 }
