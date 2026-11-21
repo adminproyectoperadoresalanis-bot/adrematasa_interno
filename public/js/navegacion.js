@@ -57,7 +57,8 @@ export const OPCIONES_UTILIDADES = [
   { id: "inventario", etiqueta: "Inventario" },
   { id: "mantenimiento", etiqueta: "Mantenimiento" },
   { id: "comercial", etiqueta: "Comercial" },
-  { id: "analisisOperaciones", etiqueta: "Análisis de operaciones" }
+  { id: "analisisOperaciones", etiqueta: "Análisis de operaciones" },
+  { id: "analisisGrafica", etiqueta: "Análisis de gráfica" }
 ];
 
 const SVG = (contenido) =>
@@ -78,6 +79,7 @@ const ICONOS = {
   comercial: SVG(`<path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><path d="M2 13h20"/>`),
   rentabilidad: SVG(`<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-6"/><path d="M16 8h4v4"/>`),
   analisisOperaciones: SVG(`<path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="5"/><rect x="12" y="8" width="3" height="9"/><rect x="17" y="5" width="3" height="12"/>`),
+  analisisGrafica: SVG(`<path d="M3 3v18h18"/><polyline points="6 15 10 11 13 13 20 6"/><line x1="15" y1="4" x2="15" y2="18" stroke-dasharray="2 2"/>`),
   trafico: SVG(`<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>`),
   validacionQR: SVG(`<path d="M3 7V4a1 1 0 0 1 1-1h3"/><path d="M17 3h3a1 1 0 0 1 1 1v3"/><path d="M21 17v3a1 1 0 0 1-1 1h-3"/><path d="M7 21H4a1 1 0 0 1-1-1v-3"/><rect x="7" y="7" width="10" height="10" rx="1"/>`),
   // Renglones de la lista de RH
@@ -223,6 +225,14 @@ const OPCION_ANALISIS = {
   pantalla: "analisisOperaciones"
 };
 
+// Análisis de gráfica (2026-11-21): marcador de eventos en lecturas Thermo King (analisisGrafica.js).
+const OPCION_GRAFICA = {
+  id: "analisisGrafica",
+  etiqueta: "Análisis de gráfica",
+  descripcion: "Thermo King · Marcar eventos",
+  pantalla: "analisisGrafica"
+};
+
 // Rentabilidad (2026-10-28): solo la cuenta de Ivan (soloCorreo).
 const CORREO_RENTABILIDAD = "ilanda@alanis.com.mx";
 const OPCION_RENTABILIDAD = {
@@ -258,15 +268,15 @@ const TABS_POR_ROL = {
   // no aporta nada, así que se oculta y entra directo a las tarjetas.
   empleado: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO, OPCION_COMERCIAL, OPCION_ANALISIS] }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [RH_EMPLEADO, OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO, OPCION_COMERCIAL, OPCION_ANALISIS, OPCION_GRAFICA] }
   ],
   supervisor: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES, CONSULTA_SUPERVISOR), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO, OPCION_COMERCIAL, OPCION_ANALISIS] }
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES, CONSULTA_SUPERVISOR), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO, OPCION_COMERCIAL, OPCION_ANALISIS, OPCION_GRAFICA] }
   ],
   admin: [
     { id: "panel", etiqueta: "Panel" },
-    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO, OPCION_COMERCIAL, OPCION_ANALISIS, OPCION_RENTABILIDAD] },
+    { id: "utilidades", etiqueta: "Utilidades", opciones: [rhConGrupos(SOLICITUDES_ADMIN, CONSULTA_ADMIN), OPCION_QR, OPCION_OPERADORES, OPCION_TRAFICO, OPCION_INVENTARIO, OPCION_MANTENIMIENTO, OPCION_COMERCIAL, OPCION_ANALISIS, OPCION_GRAFICA, OPCION_RENTABILIDAD] },
     { id: "configuracion", etiqueta: "Configuración" }
   ]
 };
