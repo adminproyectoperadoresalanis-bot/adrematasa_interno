@@ -25,7 +25,7 @@
 
 const EVENTOS = [
   { etiqueta: "Carga en planta", marca: "CARGA EN PLANTA" },
-  { etiqueta: "Entrega AA", marca: "ENTREGA AA" },
+  { etiqueta: "Entrega AA/Transbordo", marca: "ENTREGA AA/TRANSBORDO" },
   { etiqueta: "Entrada patio", marca: "ENTRADA PATIO" },
   { etiqueta: "Salida patio", marca: "SALIDA PATIO" },
   { etiqueta: "Arribo importación", marca: "ARRIBO IMPORTACION" },
@@ -351,43 +351,82 @@ export function iniciarAnalisisGrafica(contenedor) {
 
   // ---- Dibujo ----
   function rr(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
+  // Dibujo (2026-11-23): banda amarilla por evento y etiqueta tipo marcatextos
+  // (amarillo translúcido, sin recuadro, letra chica) DEBAJO de las horas del
+  // eje. Para no taparlas ni encimarse con "Time"/leyenda, se abre una franja
+  // blanca justo debajo de las horas y lo de abajo se recorre.
+  function finDeHorasDelEje() {
+    // Primer renglón sin tinta después de los números del eje (dentro del área de la gráfica).
+    const W = S.base.width, H = S.base.height;
+    const x0 = Math.max(0, Math.round(S.cal.left)), x1 = Math.min(W - 1, Math.round(S.cal.right));
+    if (x1 <= x0) return Math.min(H, Math.round(S.cal.bottom + H * 0.05));
+    const d = S.base.getContext("2d").getImageData(x0, 0, x1 - x0 + 1, H).data, ancho = x1 - x0 + 1;
+    const tinta = (y) => { let k = 0; for (let x = 0, i = y * ancho * 4; x < ancho; x++, i += 4) if (d[i] < 230 && d[i + 1] < 230 && d[i + 2] < 230) k++; return k; };
+    // Bloques de tinta debajo del eje: marcas de las rayitas, números de las horas, "Time"…
+    // Las horas son el bloque con más tinta; se corta justo al terminar ese bloque.
+    const limite = Math.min(H - 1, Math.round(S.cal.bottom + H * 0.1));
+    const bloques = []; let actual = null;
+    for (let y = Math.round(S.cal.bottom) + 2; y <= limite; y++) {
+      const k = tinta(y);
+      if (k > 2) { if (!actual) actual = { ini: y, fin: y, total: 0 }; actual.fin = y; actual.total += k; }
+      else if (actual) { bloques.push(actual); actual = null; }
+    }
+    if (actual) bloques.push(actual);
+    const horas = bloques.sort((a, b) => b.total - a.total)[0];
+    if (horas) {
+      // Avanza hasta un renglón limpio (sin el halo gris que deja el JPEG bajo los números).
+      const sucio = (y) => { for (let x = 0, i = y * ancho * 4; x < ancho; x++, i += 4) if (d[i] < 245 || d[i + 1] < 245 || d[i + 2] < 245) return true; return false; };
+      let y = horas.fin + 2;
+      while (y < Math.min(H - 1, horas.fin + 20) && sucio(y)) y++;
+      return Math.min(H, y + 1);
+    }
+    return Math.min(H, Math.round(S.cal.bottom + H * 0.05));
+  }
   function dibujar() {
     if (!S.base) return;
     const W = S.base.width, H = S.base.height;
-    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
-    ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
-    ctx.drawImage(S.base, 0, 0);
-    if (!lista()) return;
     const items = [];
-    EVENTOS.forEach((e, i) => { const t = evMs(i); if (t == null) return; const x = t2x(t); if (dentro(x)) items.push({ n: e.marca, t, x }); });
+    if (lista()) EVENTOS.forEach((e, i) => { const t = evMs(i); if (t == null) return; const x = t2x(t); if (dentro(x)) items.push({ n: e.marca, t, x }); });
     items.sort((p, q) => p.x - q.x);
+
+    // Acomodo de etiquetas en renglones (sin encimarse).
+    const fs = Math.max(11, Math.round(W / 110)), padx = fs * 0.35, lh = fs * 1.15, sep = fs * 0.5;
+    ctx.font = `700 ${fs}px ${FUENTE}`;
+    const renglones = [];
+    items.forEach((o) => {
+      ctx.font = `700 ${fs}px ${FUENTE}`; const w1 = ctx.measureText(o.n).width;
+      ctx.font = `500 ${fs * 0.9}px ${FUENTE}`; const w2 = ctx.measureText(fmt(o.t)).width;
+      o.w = Math.max(w1, w2) + padx * 2; o.h = lh * 2;
+      o.lx = Math.min(Math.max(2, o.x - o.w / 2), W - o.w - 2); // centrada en su línea
+      let r = 0;
+      while (renglones[r] && renglones[r].some((p) => o.lx < p.lx + p.w + sep && o.lx + o.w + sep > p.lx)) r++;
+      (renglones[r] = renglones[r] || []).push(o); o.r = r;
+    });
+    const corte = items.length ? finDeHorasDelEje() : H;
+    const franja = items.length ? Math.round(renglones.length * (lh * 2 + fs * 0.5) + fs * 0.6) : 0;
+    if (cv.width !== W || cv.height !== H + franja) { cv.width = W; cv.height = H + franja; }
+    ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H + franja);
+    ctx.drawImage(S.base, 0, 0, W, corte, 0, 0, W, corte);
+    if (franja) ctx.drawImage(S.base, 0, corte, W, H - corte, 0, corte + franja, W, H - corte);
+    if (!items.length) return;
+
     const top = S.cal.top, bot = S.cal.bottom, bw = Math.max(10, W * 0.0075);
     ctx.save(); ctx.globalCompositeOperation = "multiply"; ctx.fillStyle = "rgba(255,230,0,.62)";
     items.forEach((o) => ctx.fillRect(o.x - bw / 2, top, bw, bot - top)); ctx.restore();
     ctx.save(); ctx.strokeStyle = "rgba(196,150,0,.95)"; ctx.lineWidth = Math.max(1.5, W / 900);
     items.forEach((o) => { ctx.beginPath(); ctx.moveTo(o.x, top); ctx.lineTo(o.x, bot); ctx.stroke(); }); ctx.restore();
-    const fs = Math.round(W / 96), padx = fs * 0.5, pady = fs * 0.35, lh = fs * 1.2;
-    const puestos = [];
+
+    // Etiquetas en la franja: guía punteada desde el eje y texto con marcatextos.
     items.forEach((o) => {
-      ctx.font = `700 ${fs}px ${FUENTE}`; const w1 = ctx.measureText(o.n).width;
-      ctx.font = `500 ${fs * 0.92}px ${FUENTE}`; const w2 = ctx.measureText(fmt(o.t)).width;
-      o.w = Math.max(w1, w2) + padx * 2; o.h = lh * 2 + pady * 2 - fs * 0.2;
-      const gap = bw / 2 + 4; let lugar = null;
-      for (let r = 0; r < 12 && !lugar; r++) {
-        const y = top + 6 + r * (o.h + 5); if (y + o.h > bot) break;
-        for (const lado of [1, -1]) {
-          const x = lado > 0 ? o.x + gap : o.x - gap - o.w;
-          if (x < 2 || x + o.w > W - 2) continue;
-          if (!puestos.some((p) => x < p.x + p.w + 4 && x + o.w + 4 > p.x && y < p.y + p.h + 3 && y + o.h + 3 > p.y)) { lugar = { x, y }; break; }
-        }
-      }
-      if (!lugar) lugar = { x: Math.min(Math.max(2, o.x + gap), W - o.w - 2), y: top + 6 };
-      puestos.push({ ...lugar, w: o.w, h: o.h });
-      ctx.save(); ctx.globalAlpha = 0.96; ctx.fillStyle = "#ffe600"; ctx.strokeStyle = "#b89b00"; ctx.lineWidth = 1;
-      rr(ctx, lugar.x, lugar.y, o.w, o.h, 3); ctx.fill(); ctx.stroke(); ctx.restore();
+      const y = corte + fs * 0.4 + o.r * (lh * 2 + fs * 0.5);
+      ctx.save(); ctx.strokeStyle = "rgba(196,150,0,.8)"; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(o.x, bot); ctx.lineTo(o.x, y); ctx.stroke(); ctx.restore();
+      ctx.save(); ctx.globalCompositeOperation = "multiply"; ctx.fillStyle = "rgba(255,230,0,.55)";
+      rr(ctx, o.lx, y, o.w, o.h, 2); ctx.fill(); ctx.restore();
       ctx.fillStyle = "#2b2400"; ctx.textBaseline = "top";
-      ctx.font = `700 ${fs}px ${FUENTE}`; ctx.fillText(o.n, lugar.x + padx, lugar.y + pady);
-      ctx.font = `500 ${fs * 0.92}px ${FUENTE}`; ctx.fillText(fmt(o.t), lugar.x + padx, lugar.y + pady + lh);
+      ctx.font = `700 ${fs}px ${FUENTE}`; ctx.fillText(o.n, o.lx + padx, y + fs * 0.1);
+      ctx.font = `500 ${fs * 0.9}px ${FUENTE}`; ctx.fillText(fmt(o.t), o.lx + padx, y + lh + fs * 0.05);
     });
   }
   function refrescar() {
