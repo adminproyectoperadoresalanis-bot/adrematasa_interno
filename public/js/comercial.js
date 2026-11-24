@@ -205,6 +205,33 @@ function refrescarDemoras(conds, ajustes) {
   const pos = i >= 0 ? conds.slice(0, i).filter(x => x.tipo !== "demora").length : resto.filter(x => x.tipo === "cat").length;
   return [...resto.slice(0, pos), ...dem, ...resto.slice(pos)];
 }
+// Condiciones del catálogo que la cotización no tiene (2026-11-24, al Duplicar o
+// abrir un borrador). Se reconocen por id o, en las viejas sin id, por el texto.
+// Con id y texto distinto (se corrigió la redacción): se actualiza el texto.
+// Las que faltan entran encendidas y marcadas _nueva, en su lugar del catálogo.
+// Regresa { conds, nuevas }.
+const textoNormal = (s) => String(s || "").trim().replace(/\s+/g, " ").toLowerCase();
+function completarConCatalogo(conds, ajustes) {
+  const lista = conds.map(c => ({ ...c }));
+  let nuevas = 0, ultimoCat = -1;
+  catalogoCondiciones(ajustes).forEach(cat => {
+    let i = lista.findIndex(c => c.tipo === "cat" && c.id && c.id === cat.id);
+    if (i < 0) i = lista.findIndex(c => c.tipo === "cat" && textoNormal(c.texto) === textoNormal(cat.texto));
+    if (i >= 0) {
+      lista[i].id = cat.id; lista[i].texto = cat.texto;
+      ultimoCat = Math.max(ultimoCat, i);
+      return;
+    }
+    const pos = ultimoCat >= 0 ? ultimoCat + 1 : lista.filter(c => c.tipo === "cat").length;
+    lista.splice(pos, 0, { id: cat.id, texto: cat.texto, tipo: "cat", on: true, _nueva: true });
+    ultimoCat = pos; nuevas++;
+  });
+  return { conds: lista, nuevas };
+}
+// Cuántas condiciones del catálogo le faltan a una cotización (para el aviso en las ya enviadas).
+function faltantesDelCatalogo(cot, ajustes) {
+  return completarConCatalogo(condicionesDeCot(cot, ajustes), ajustes).nuevas;
+}
 // La demora en aduana solo aplica cuando la cotización incluye cruce.
 const demoraAplica = (c, incluyeCruce) => !(c.tipo === "demora" && (c.id === "aduana" || /^Demoras en aduana:/.test(c.texto)) && !incluyeCruce);
 // Condición automática del cruce de la cotización (null = no lleva: Nacional o cotización vieja).
@@ -235,7 +262,13 @@ const ESTADOS = {
   aceptada: { txt: "ACEPTADA", clase: "co-verde" },
   rechazada: { txt: "RECHAZADA", clase: "co-rojo" },
   vencida: { txt: "VENCIDA", clase: "co-gris" },
+  cancelada: { txt: "CANCELADA", clase: "co-cancel" }, // 2026-11-24: la anulamos nosotros (no el cliente)
 };
+// Cancelar cotización (2026-11-24): conserva folio, pide motivo, no cuenta en
+// indicadores y se oculta de "Todas". Datos: estado "cancelada" + cancelacion
+// { motivo, detalle, reemplazadaPor, estadoAnterior, porUid, porNombre, enMs }.
+const MOTIVOS_CANCELACION = ["Error de captura", "Cotización duplicada", "Cliente equivocado", "La reemplaza otra cotización", "El cliente ya no la requiere", "Otro"];
+const activa = (c) => c && c.estado !== "cancelada";
 const CARGAS = { refrigerada: "Refrigerada", seca: "Seca" };
 const SERVICIOS = { nacional: "Nacional", importacion: "Importación", exportacion: "Exportación" };
 const DIA = 864e5;
@@ -322,7 +355,7 @@ function inyectarEstilos() {
     .co-seg button:first-child { border-left:0; } .co-seg button.activo { background:#2c1e0f; color:#fff; font-weight:700; }
     .co-chip { display:inline-block; font-size:10px; font-weight:800; padding:2px 8px; border-radius:9px; letter-spacing:.3px; white-space:nowrap; }
     .co-gris { background:#ECE9E4; color:#5c5045; } .co-azul { background:#E6F1FB; color:#185FA5; } .co-verde { background:#EAF3DE; color:#3B7A1E; }
-    .co-rojo { background:#FBE4E1; color:#A32D2D; } .co-ambar { background:#FBE3A8; color:#7a3e06; }
+    .co-rojo { background:#FBE4E1; color:#A32D2D; } .co-cancel { background:#ECE9E4; color:#5c5045; text-decoration:line-through; } .co-ambar { background:#FBE3A8; color:#7a3e06; }
     .co-seca { background:#F3E9D7; color:#7a4a12; } .co-refri { background:#DDEEFB; color:#0C447C; }
     .co-sem { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; vertical-align:1px; }
     .co-s-v { background:#3B7A1E; } .co-s-a { background:#D99A1E; } .co-s-r { background:#C0392B; } .co-s-n { background:#cfc8bf; }
@@ -475,8 +508,9 @@ export function condicionesDeCot(cot, ajustes) {
   return [...lineas(ajustes.condiciones).map(texto => ({ texto, tipo: "cat", on: true })), ...lineas(cot.notas).map(texto => ({ texto, tipo: "propia", on: true }))];
 }
 // Condiciones de una cotización nueva: catálogo + demoras, todas marcadas.
+// 2026-11-24: cada condición del catálogo guarda su id (para reconocerla aunque se corrija la redacción).
 function condicionesNuevas(ajustes) {
-  return [...catalogoCondiciones(ajustes).map(c => ({ texto: c.texto, tipo: "cat", on: true })),
+  return [...catalogoCondiciones(ajustes).map(c => ({ id: c.id, texto: c.texto, tipo: "cat", on: true })),
     ...demorasComoCondiciones(ajustes)];
 }
 
@@ -572,7 +606,16 @@ export async function generarPdf(cot, cliente, ajustes, firma, opciones = {}) {
   // Pie
   const paginas = pdf.getNumberOfPages();
   for (let p = 1; p <= paginas; p++) {
-    pdf.setPage(p); pdf.setFontSize(7.5); pdf.setTextColor(...GRIS);
+    pdf.setPage(p);
+    if (cot.estado === "cancelada") { // leyenda de agua (2026-11-24)
+      pdf.saveGraphicsState();
+      if (pdf.GState) pdf.setGState(new pdf.GState({ opacity: 0.16 }));
+      pdf.setFont("helvetica", "bold"); pdf.setFontSize(78); pdf.setTextColor(163, 45, 45);
+      pdf.text("CANCELADA", 42, 205, { angle: 40 });
+      pdf.restoreGraphicsState();
+      pdf.setFont("helvetica", "normal");
+    }
+    pdf.setFontSize(7.5); pdf.setTextColor(...GRIS);
     pdf.text("Autotransportes Alanis · Carretera Aeropuerto Km 2.75, Col. América 4, Nuevo Laredo, Tamps., C.P. 88299 · (867) 711 6565", 108, 272, { align: "center" });
     if (paginas > 1) pdf.text(`${p} / ${paginas}`, X1, 272, { align: "right" });
   }
@@ -1583,7 +1626,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
   function renderFicha() {
     const c = clientes.get(fichaId);
     if (!c) { fichaId = null; return render(); }
-    const cs = cotDeCliente(c.id), ahora = Date.now();
+    const cs = cotDeCliente(c.id).filter(activa), ahora = Date.now();
     const vig = cs.filter(x => ["borrador", "enviada", "aceptada"].includes(estadoDe(x, ahora)) && sigueVigente(x, ahora)).length;
     const ings = cs.flatMap(x => (x.rutas || []).map(r => ingresoKm(r, x.moneda, x.tipoCambio, x.tipoServicio))).filter(v => v != null);
     const dom = c.domicilio || {};
@@ -1623,11 +1666,12 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
   // ============================================================================
   function renderCotizaciones() {
     const ahora = Date.now(), q = normTxt(fq.q);
-    const todas = listaCot();
-    const cs = todas.filter(c => (!fq.estado || estadoDe(c, ahora) === fq.estado) &&
+    const todasConCanceladas = listaCot();
+    const todas = todasConCanceladas.filter(activa); // "Todas" no muestra las canceladas
+    const cs = (fq.estado === "cancelada" ? todasConCanceladas : todas).filter(c => (!fq.estado || estadoDe(c, ahora) === fq.estado) &&
       (!q || normTxt(c.folio).includes(q) || normTxt(c.clienteNombre).includes(q) || (c.rutas || []).some(r => normTxt(r.origen + " " + r.destino).includes(q))));
     const porVencer = todas.filter(c => ["borrador", "enviada"].includes(estadoDe(c, ahora)) && c.vencimientoMs && c.vencimientoMs - ahora <= 7 * DIA);
-    const cuenta = (e) => todas.filter(c => estadoDe(c, ahora) === e).length;
+    const cuenta = (e) => todasConCanceladas.filter(c => estadoDe(c, ahora) === e).length;
     $("#co-cuerpo").innerHTML = `
       ${porVencer.length ? `<div class="co-indicador" style="margin-bottom:12px;"><b>Vencen en los próximos 7 días:</b> ${porVencer.map(c => `<button type="button" class="co-link" data-abrir="${esc(c.id)}">${esc(c.folio)}</button> <small class="nota">${esc(c.clienteNombre)} · ${fecha(c.vencimientoMs)}</small>`).join(" · ")}</div>` : ""}
       <div class="co-filtros">
@@ -1660,6 +1704,8 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
           .flatMap(x => x.texto.trim() === COND_VIEJA ? CONDICIONES_BASE.slice(0, 2).map(texto => ({ texto, tipo: "cat", on: x.on })) : [x])
           .filter(x => !(x.tipo === "demora" && /^Demoras por rojo/.test(x.texto)));
         editor.condiciones = refrescarDemoras(editor.condiciones, ajustes);
+        const r = completarConCatalogo(editor.condiciones, ajustes);
+        editor.condiciones = r.conds; editor._nuevasCat = r.nuevas;
       }
     } else {
       editor = {
@@ -1671,6 +1717,56 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     }
     render();
   }
+  // ---- Cancelar / reactivar (2026-11-24) ----
+  function abrirCancelar(c) {
+    const otras = listaCot().filter(x => x.id !== c.id && x.clienteId === c.clienteId && activa(x));
+    const ov = document.createElement("div");
+    ov.className = "modal-overlay";
+    ov.innerHTML = `<div class="modal-tarjeta" style="max-width:520px;width:100%;">
+      <h2 style="margin:0 0 4px;font-size:17px;">Cancelar ${esc(c.folio)}</h2>
+      <p class="nota" style="margin:0 0 12px;">${esc(c.clienteNombre || "")}. El folio se conserva, deja de contar en los indicadores y el PDF sale con la leyenda CANCELADA. Si fue el cliente quien dijo que no, mejor márcala como <b>Rechazada</b>.</p>
+      <label style="display:block;font-weight:600;margin-bottom:4px;">Motivo</label>
+      <select id="cx-motivo" style="width:100%;"><option value="">Elige el motivo…</option>${MOTIVOS_CANCELACION.map(m => `<option>${esc(m)}</option>`).join("")}</select>
+      <div id="cx-reemplazo" class="oculto" style="margin-top:10px;"><label style="display:block;font-weight:600;margin-bottom:4px;">¿Cuál la reemplaza?</label>
+        <select id="cx-folio" style="width:100%;"><option value="">${otras.length ? "Elige el folio…" : "No hay otras cotizaciones de este cliente"}</option>${otras.map(x => `<option value="${esc(x.id)}">${esc(x.folio)} · ${esc(fecha(x.emisionMs))} · ${esc(ESTADOS[estadoDe(x)].txt.toLowerCase())}</option>`).join("")}</select></div>
+      <label style="display:block;font-weight:600;margin:10px 0 4px;">Detalle <span class="nota" style="font-weight:400;">(opcional)</span></label>
+      <textarea id="cx-detalle" rows="2" maxlength="300" style="width:100%;box-sizing:border-box;"></textarea>
+      <div class="error" id="cx-err"></div>
+      <div class="modal-acciones"><button type="button" class="secundario" data-cerrar>No, regresar</button><button type="button" id="cx-ok" style="background:#A32D2D;border-color:#A32D2D;">Cancelar cotización</button></div></div>`;
+    document.body.appendChild(ov);
+    const cerrar = () => ov.remove();
+    ov.querySelectorAll("[data-cerrar]").forEach(b => b.addEventListener("click", cerrar));
+    ov.addEventListener("click", (ev) => { if (ev.target === ov) cerrar(); });
+    const selM = ov.querySelector("#cx-motivo");
+    selM.addEventListener("change", () => ov.querySelector("#cx-reemplazo").classList.toggle("oculto", selM.value !== "La reemplaza otra cotización"));
+    ov.querySelector("#cx-ok").addEventListener("click", async () => {
+      const motivo = selM.value, detalle = ov.querySelector("#cx-detalle").value.trim();
+      const reemplazadaPor = motivo === "La reemplaza otra cotización" ? ov.querySelector("#cx-folio").value : "";
+      const err = ov.querySelector("#cx-err");
+      if (!motivo) { err.textContent = "Elige el motivo."; return; }
+      if (motivo === "Otro" && !detalle) { err.textContent = "Escribe el detalle del motivo."; return; }
+      if (motivo === "La reemplaza otra cotización" && !reemplazadaPor && otras.length) { err.textContent = "Elige el folio que la reemplaza."; return; }
+      const b = ov.querySelector("#cx-ok"); b.disabled = true;
+      try {
+        const ahora = Date.now();
+        await updateDoc(doc(db, COL_COT, c.id), {
+          estado: "cancelada", actualizadoMs: ahora, actualizadoPor: { uid, nombre: yo.nombre },
+          cancelacion: { motivo, detalle: detalle || null, reemplazadaPor: reemplazadaPor || null, estadoAnterior: c.estado || "borrador", porUid: uid, porNombre: yo.nombre, enMs: ahora },
+        });
+        cerrar(); editor = null; avisar(`${c.folio} cancelada.`); render();
+      } catch (x) { err.textContent = "No se pudo cancelar: " + x.message; b.disabled = false; }
+    });
+  }
+  async function reactivar(c) {
+    const antes = (c.cancelacion && c.cancelacion.estadoAnterior) || "borrador";
+    if (!confirm(`¿Reactivar ${c.folio}? Regresa a ${ESTADOS[antes] ? ESTADOS[antes].txt.toLowerCase() : antes}.`)) return;
+    try {
+      await updateDoc(doc(db, COL_COT, c.id), { estado: antes, actualizadoMs: Date.now(), actualizadoPor: { uid, nombre: yo.nombre },
+        cancelacionAnterior: { ...(c.cancelacion || {}), reactivadaMs: Date.now(), reactivadaPor: yo.nombre }, cancelacion: null });
+      editor = null; avisar(`${c.folio} reactivada.`); render();
+    } catch (x) { error("No se pudo reactivar: " + x.message); }
+  }
+
   function duplicar(id) {
     const c = cotizaciones.get(id);
     if (!c) return;
@@ -1678,7 +1774,8 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     Object.assign(editor, {
       contacto: c.contacto || null, moneda: c.moneda, tipoCambio: c.moneda === "USD" ? ajustes.tipoCambio : c.tipoCambio,
       vigenciaDias: c.vigenciaDias, tipoCarga: c.tipoCarga, tipoServicio: c.tipoServicio,
-      condiciones: refrescarDemoras(condicionesDeCot(c, ajustes), ajustes), ...cruceEditor(c),
+      ...(() => { const r = completarConCatalogo(refrescarDemoras(condicionesDeCot(c, ajustes), ajustes), ajustes); return { condiciones: r.conds, _nuevasCat: r.nuevas }; })(),
+      ...cruceEditor(c),
       rutas: (c.rutas || []).map(r => ({ origen: r.origen, destino: r.destino, km: r.km, importe: r.importe, origenCoord: r.origenCoord || undefined, destinoCoord: r.destinoCoord || undefined, vias: r.vias || undefined, kmOrs: r.kmOrs || undefined })),
     });
     avisar(`Copia de ${c.folio}: revisa y guarda para darle folio nuevo.`);
@@ -1717,7 +1814,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
       const on = cs.filter(c => c.on).map(c => conMoneda(c.texto, e.moneda));
       if (tCruce) on.splice(cs.filter(c => c.on && c.tipo === "cat").length, 0, tCruce);
       return `<div class="co-conds-ro">${on.length ? on.map(t => `<div>• ${esc(t)}</div>`).join("") : `<p class="nota">Sin condiciones.</p>`}
-        <p class="nota" style="margin:8px 0 0;">Ya enviada: las condiciones no cambian. Para cambiarlas, usa "Duplicar".</p></div>`;
+        <p class="nota" style="margin:8px 0 0;">Ya enviada: las condiciones no cambian.${(() => { const n = original ? faltantesDelCatalogo(original, ajustes) : 0; return n ? ` <b>Hay ${n} condici${n === 1 ? "ón nueva" : "ones nuevas"} en el catálogo</b>; para incluirla${n === 1 ? "" : "s"} usa "Duplicar".` : ` Para cambiarlas, usa "Duplicar".`; })()}</p></div>`;
     }
     if (!e._pleg) { const cel = window.innerWidth <= 700; e._pleg = { cat: cel, demora: cel, propia: false, cruce: false }; }
     const de = (tipo) => cs.map((c, k) => [c, k]).filter(([c]) => c.tipo === tipo);
@@ -1729,7 +1826,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const incluye = !!(cruceDelEditor(e) || {}).incluye;
     const cat = de("cat"), dem = de("demora").filter(([c]) => demoraAplica(c, incluye)), pro = de("propia");
     let html = grupo("cat", "Generales", cuenta(cat),
-      cat.map(([c, k]) => `<div class="co-cf${c.on ? "" : " off"}"><span class="co-cf-t">${esc(conMoneda(c.texto, e.moneda))}</span>${sw(c, k)}</div>`).join(""));
+      cat.map(([c, k]) => `<div class="co-cf${c.on ? "" : " off"}"${c._nueva ? ' style="background:#FFFBEA;"' : ""}><span class="co-cf-t">${c._nueva ? '<span style="font-size:10px;font-weight:800;padding:2px 7px;border-radius:9px;background:#FBE3A8;color:#7a3e06;margin-right:6px;vertical-align:1px;">NUEVA</span>' : ""}${esc(conMoneda(c.texto, e.moneda))}</span>${sw(c, k)}</div>`).join(""));
     if (tCruce) html += grupo("cruce", "Cruce", `<span class="co-auto">AUTOMÁTICA</span>`,
       `<div class="co-cf"><span class="co-cf-t">${esc(tCruce)}</span></div>`);
     if (dem.length) html += grupo("demora", "Demoras", cuenta(dem),
@@ -1737,14 +1834,17 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     html += grupo("propia", "Solo para esta cotización", String(pro.length),
       pro.map(([c, k]) => `<div class="co-cf${c.on ? "" : " off"}"><input type="text" data-cond-txt="${k}" value="${esc(c.texto)}" placeholder="Escribe la condición…">${sw(c, k)}<button type="button" class="co-x" data-cond-x="${k}" title="Quitar">✕</button></div>`).join("")
       + `<div class="co-cf"><button type="button" class="co-link" id="co-cond-mas" style="font-size:13px;">+ Agregar condición</button></div>`);
-    return `<div class="co-conds">${html}</div><p class="nota" style="margin:6px 0 0;">Toca el interruptor para quitar o poner una condición. La vigencia se agrega sola al final.</p>`;
+    const avisoNuevas = e._nuevasCat ? `<div style="background:#EAF1FB;border:1px solid #c9dcf3;color:#185FA5;border-radius:10px;padding:9px 12px;font-size:13px;line-height:1.45;margin-bottom:10px;">ℹ️ Se agreg${e._nuevasCat === 1 ? "ó <b>1 condición nueva</b>" : `aron <b>${e._nuevasCat} condiciones nuevas</b>`} del catálogo que esta cotización no tenía. Apágala${e._nuevasCat === 1 ? "" : "s"} si no aplica${e._nuevasCat === 1 ? "" : "n"} para este cliente.</div>` : "";
+    return `${avisoNuevas}<div class="co-conds">${html}</div><p class="nota" style="margin:6px 0 0;">Toca el interruptor para quitar o poner una condición. La vigencia se agrega sola al final.</p>`;
   }
 
   function renderEditor() {
     const e = editor;
     const original = e._id ? cotizaciones.get(e._id) : null;
-    const puedeEditar = !original || esAdmin || original.creadoPorUid === uid;
-    const vigente = !original || estadoDe(original) !== "vencida";
+    const cancelada = !!original && original.estado === "cancelada";
+    const puedeEditar = (!original || esAdmin || original.creadoPorUid === uid) && !cancelada;
+    const puedeCancelar = !!original && !cancelada && (esAdmin || original.creadoPorUid === uid) && (original.estado !== "aceptada" || esAdmin);
+    const vigente = !original || (estadoDe(original) !== "vencida" && !cancelada);
     const bloqueada = !!original && original.estado !== "borrador"; // enviada o después: solo se agregan rutas y se cambia estado/notas
     const cli = clientes.get(e.clienteId);
     const lugares = [...new Set([...rutas.values()].flatMap(r => [r.origen, r.destino]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
@@ -1757,6 +1857,9 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
         <h2 style="margin:0;">${original ? esc(original.folio) : "Nueva cotización"} ${original ? chipEstado(original) : `<span class="nota" style="font-weight:400;font-size:13px;">· el folio se asigna al guardar</span>`}</h2>
         ${original ? `<span class="nota">Emitida ${fecha(original.emisionMs)} · ${original.vencimientoMs ? "vence " + fecha(original.vencimientoMs) : "único evento"} · por ${esc((original.creadoPor || {}).nombre || "")}</span>` : ""}
       </div>
+      ${cancelada ? (() => { const k = original.cancelacion || {}; return `<div style="background:#FBE4E1;border:1px solid #F3C2BC;color:#8a2318;border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin-top:12px;">
+        <b>Cancelada</b> el ${esc(fechaHoraTxt(k.enMs))} por ${esc(k.porNombre || "")} · Motivo: <b>${esc(k.motivo || "—")}</b>${k.reemplazadaPor ? ` · Reemplazada por <button type="button" class="co-link" data-abrir="${esc(k.reemplazadaPor)}">${esc(k.reemplazadaPor)}</button>` : ""}${k.detalle ? `<br>${esc(k.detalle)}` : ""}
+        <br><span style="color:#6b5f52;">No se puede editar ni enviar; no cuenta en los indicadores. El folio se conserva.</span></div>`; })() : ""}
       <div class="co-grid" style="margin-top:14px;">
         <div><label>Cliente</label><select id="co-e-cli"${bloqueada ? " disabled" : ""}><option value="">Elige un cliente…</option>${[...clientes.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, "es")).map(c => `<option value="${esc(c.id)}"${c.id === e.clienteId ? " selected" : ""}>${esc(c.nombre)}</option>`).join("")}</select>
           ${bloqueada ? "" : `<button type="button" class="co-link" id="co-e-cli-nuevo" style="font-size:12px;margin-top:4px;">+ Cliente nuevo</button>`}</div>
@@ -1798,7 +1901,7 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
         <div class="co-campo" style="grid-column:1/-1;"><label>Condiciones de esta cotización (salen en el PDF)</label>${bloqueCondiciones(bloqueada, original)}</div>
         <div>
           ${e.moneda === "USD" ? `<div class="nota" style="margin:0 0 8px;">El ingreso por km se calcula en MXN con el tipo de cambio de esta cotización.</div>` : ""}
-          ${original ? `<div><label>Estado</label><span class="co-seg co-seg-estado">${["borrador", "enviada", "aceptada", "rechazada"].map(k => `<button type="button" class="${e.estado === k ? "activo" : ""}" data-estado="${k}"${puedeEditar ? "" : " disabled"}>${ESTADOS[k].txt.charAt(0) + ESTADOS[k].txt.slice(1).toLowerCase()}</button>`).join("")}</span>
+          ${original && !cancelada ? `<div><label>Estado</label><span class="co-seg co-seg-estado">${["borrador", "enviada", "aceptada", "rechazada"].map(k => `<button type="button" class="${e.estado === k ? "activo" : ""}" data-estado="${k}"${puedeEditar ? "" : " disabled"}>${ESTADOS[k].txt.charAt(0) + ESTADOS[k].txt.slice(1).toLowerCase()}</button>`).join("")}</span>
             ${estadoDe(original) === "vencida" ? `<div class="nota" style="margin:6px 0 0;">Vencida por fecha. Usa "Duplicar" para renovarla con folio nuevo.</div>` : ""}</div>` : ""}
         </div>
       </div>
@@ -1809,6 +1912,8 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
         ${puedeEditar && !original ? `<button type="button" id="co-e-guardar-pdf">Guardar y ver PDF</button>` : ""}
         ${original && puedeEditar && esCelular() ? `<button type="button" class="secundario" id="co-e-wa">WhatsApp</button>` : ""}
         ${original && puedeEditar ? `<button type="button" id="co-e-correo">✉ Enviar por correo</button>` : ""}
+        ${puedeCancelar ? `<button type="button" class="secundario" id="co-e-cancelar" style="color:#A32D2D;border-color:#F3C2BC;">Cancelar cotización</button>` : ""}
+        ${cancelada && esAdmin ? `<button type="button" class="secundario" id="co-e-reactivar">Reactivar</button>` : ""}
       </div>
       ${original && (original.envios || []).length ? `<div class="co-h3">Envíos</div><div class="tabla-wrap"><table class="tabla co-tabla">
         <thead><tr><th>Fecha</th><th>Por</th><th>Para</th><th>CC</th><th>Quién</th></tr></thead>
@@ -1888,6 +1993,9 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     const ec = $("#co-e-correo"); if (ec) ec.addEventListener("click", () => abrirEnvio(original.id));
     const wa = $("#co-e-wa"); if (wa) wa.addEventListener("click", () => compartirWhatsApp(original.id));
     const d = $("#co-e-dup"); if (d) d.addEventListener("click", () => duplicar(original.id));
+    const xc = $("#co-e-cancelar"); if (xc) xc.addEventListener("click", () => abrirCancelar(original));
+    const xr = $("#co-e-reactivar"); if (xr) xr.addEventListener("click", () => reactivar(original));
+    $("#co-cuerpo").querySelectorAll(".co-link[data-abrir]").forEach(b => b.addEventListener("click", () => { if (cotizaciones.get(b.dataset.abrir)) abrirEditor(b.dataset.abrir); }));
     pintarIngresos();
   }
   // ---- Km: catálogo, ORS y mapa ----
