@@ -115,7 +115,9 @@ const URL_LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/lea
 const URL_HTML2CANVAS = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"; // 2026-11-17: copiar la vuelta como imagen
 const esCelularUA = () => /iphone|ipad|ipod|android|mobi/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const URL_LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
-const ORS = "https://api.openrouteservice.org";
+// 2026-11-27: api.openrouteservice.org se apagó (responde 410). Misma clave, nuevo dominio.
+const ORS_GEOCODE = "https://api.heigit.org/pelias/v1/search";
+const ORS_DIRECCIONES = "https://api.heigit.org/openrouteservice/v2/directions/driving-hgv/geojson";
 const KM_RUTA_CORTA = 350; // como el CRM: RC = 350 km o menos; RL = 351 o más
 const SERV_UMBRAL = { exportacion: "expo", importacion: "impo", nacional: "dom" };
 const UMBRALES_BASE = { // valores del CRM (nacional = importación hasta que se ajuste)
@@ -316,20 +318,26 @@ function cargarScript(url, global) {
 }
 
 // ---- OpenRouteService -----------------------------------------------------------
+function mensajeOrs(status) {
+  if (status === 401 || status === 403) return "La clave de ORS no es válida (revisa Ajustes).";
+  if (status === 429) return "Se acabó la cuota de ORS de hoy.";
+  if (status === 410) return "El servicio de ciudades cambió de dirección; avisa al administrador.";
+  return `El servicio de ciudades respondió ${status}.`;
+}
 async function orsBuscar(texto, clave) {
-  const url = `${ORS}/geocode/search?api_key=${encodeURIComponent(clave)}&text=${encodeURIComponent(texto)}&boundary.country=MX,US&size=6&lang=es`;
+  const url = `${ORS_GEOCODE}?api_key=${encodeURIComponent(clave)}&text=${encodeURIComponent(texto)}&boundary.country=MX,US&size=6&lang=es`;
   const r = await fetch(url);
-  if (!r.ok) throw new Error(r.status === 403 || r.status === 401 ? "La clave de ORS no es válida (revisa Ajustes)." : `ORS respondió ${r.status}.`);
+  if (!r.ok) throw new Error(mensajeOrs(r.status));
   const d = await r.json();
   return (d.features || []).map(f => ({ label: (f.properties && f.properties.label) || "", lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }));
 }
 // puntos: [{lng, lat}] (origen, vías…, destino) → { km, linea: [[lat, lng]] }
 async function orsRuta(puntos, clave) {
-  const r = await fetch(`${ORS}/v2/directions/driving-hgv/geojson`, {
+  const r = await fetch(ORS_DIRECCIONES, {
     method: "POST", headers: { "Authorization": clave, "Content-Type": "application/json" },
     body: JSON.stringify({ coordinates: puntos.map(p => [p.lng, p.lat]) }),
   });
-  if (!r.ok) throw new Error(r.status === 403 || r.status === 401 ? "La clave de ORS no es válida (revisa Ajustes)." : r.status === 429 ? "Se acabó la cuota de ORS de hoy." : `ORS respondió ${r.status}.`);
+  if (!r.ok) throw new Error(mensajeOrs(r.status));
   const d = await r.json();
   const f = d.features && d.features[0];
   if (!f) throw new Error("ORS no encontró ruta.");
@@ -2060,8 +2068,19 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     } catch (x) { hint(i, x.message || "No se pudo calcular la ruta."); return null; }
   }
   // Lista de sugerencias de ORS debajo de un campo (sin redibujar la pantalla).
+  // Lugares del catálogo de rutas (2026-11-27): se sugieren siempre arriba y
+  // sirven aunque el servicio de ciudades (ORS) no responda.
+  function lugaresCatalogo() {
+    const m = new Map();
+    rutas.forEach(r => [[r.origen, r.origenCoord], [r.destino, r.destinoCoord]].forEach(([label, co]) => {
+      if (!label) return;
+      const k = normTxt(label), prev = m.get(k);
+      if (!prev || (!prev.lng && co)) m.set(k, { label, lng: co ? co.lng : null, lat: co ? co.lat : null, catalogo: true });
+    }));
+    return [...m.values()];
+  }
   function autocompletar(inp, alElegir) {
-    let lista = null, timer = null, ops = [], sel = -1;
+    let lista = null, timer = null, ops = [], sel = -1, aviso = "", silencio = false;
     const cerrar = () => { if (lista) { lista.remove(); lista = null; } sel = -1; };
     // La lista flota sobre la página (position:fixed en <body>): la tabla de rutas tiene su
     // propio desplazamiento y la recortaba.
@@ -2076,20 +2095,38 @@ export function iniciarComercial(contenedor, datosUsuario, uid, correo) {
     window.addEventListener("scroll", ubicar, true);
     window.addEventListener("resize", ubicar);
     const pintar = () => {
-      if (!ops.length) return cerrar();
+      if (!ops.length && !aviso) return cerrar();
       if (!lista) { lista = document.createElement("div"); lista.className = "co-ac-lista"; document.body.appendChild(lista); }
       ubicar();
-      lista.innerHTML = ops.map((o, k) => `<div data-k="${k}" class="${k === sel ? "activo" : ""}">${esc(o.label)}</div>`).join("");
+      lista.innerHTML = (aviso ? `<div style="cursor:default;background:#FFF6E0;color:#6b4a06;font-size:12px;">${esc(aviso)}</div>` : "") +
+        ops.map((o, k) => `<div data-k="${k}" class="${k === sel ? "activo" : ""}">${o.manual ? `✏️ Usar “${esc(o.label)}” tal cual <small class="nota">(km a mano)</small>` : esc(o.label)}${o.catalogo ? ` <small class="nota">· catálogo</small>` : ""}</div>`).join("");
       lista.querySelectorAll("[data-k]").forEach(d => d.addEventListener("mousedown", (ev) => { ev.preventDefault(); elegir(Number(d.dataset.k)); }));
     };
-    const elegir = (k) => { const o = ops[k]; if (!o) return; inp.value = o.label; cerrar(); alElegir(o); };
+    const elegir = (k) => {
+      const o = ops[k]; if (!o) return;
+      inp.value = o.label; cerrar();
+      if (o.lng != null && o.lat != null) { alElegir(o); return; }
+      // Sin coordenadas (catálogo viejo o escrito a mano): se trata como texto escrito.
+      silencio = true; inp.dispatchEvent(new Event("input", { bubbles: true })); silencio = false;
+    };
     inp.addEventListener("input", () => {
+      if (silencio) return;
       clearTimeout(timer);
-      const t = inp.value.trim();
-      if (t.length < 3) { ops = []; return cerrar(); }
+      const t = inp.value.trim(), q = normTxt(t);
+      if (t.length < 2) { ops = []; aviso = ""; return cerrar(); }
+      const delCat = lugaresCatalogo().filter(l => normTxt(l.label).includes(q)).slice(0, 5);
+      ops = delCat; aviso = ""; sel = -1;
+      if (document.activeElement === inp) pintar();
+      if (t.length < 3 || !ajustes.orsKey) return;
       timer = setTimeout(async () => {
-        try { ops = await orsBuscar(t, ajustes.orsKey); sel = -1; if (document.activeElement === inp) pintar(); }
-        catch (x) { ops = []; cerrar(); error(x.message); }
+        try {
+          const deOrs = (await orsBuscar(t, ajustes.orsKey)).filter(o => !delCat.some(c => normTxt(c.label) === normTxt(o.label)));
+          ops = [...delCat, ...deOrs]; aviso = "";
+        } catch (x) {
+          aviso = `Servicio de ciudades no disponible (${x.message === "Failed to fetch" ? "sin conexión" : x.message}). Elige del catálogo o usa el texto tal cual y escribe los km.`;
+          ops = [...delCat, { label: t, manual: true }];
+        }
+        sel = -1; if (document.activeElement === inp) pintar();
       }, 350);
     });
     inp.addEventListener("keydown", (ev) => {
